@@ -1,42 +1,59 @@
 # Pi Patrick
 
-A small personal-agent demo built with the Pi Coding Agent SDK, a Node.js server, and React.
+An atomic personal-agent library built on the Pi Coding Agent SDK.
 
-## Run it
+The core is independent of HTTP, browsers, React, and other user interfaces. It supports OpenAI-compatible Chat Completions models such as Qwen on Bailian and DeepSeek V4.
 
-Requires Node.js 22.19 or newer.
+## Configuration
 
 ```bash
-npm install
 cp .env.example .env
 ```
 
-Add an API key to `.env`, then start both the server and the React development app:
+Set the three required values:
 
-```bash
-npm run dev
+```env
+API_KEY=your-key
+BASE_URL=https://api.deepseek.com
+MODEL_ID=deepseek-v4-pro
 ```
 
-Open <http://127.0.0.1:5173>. The server runs at <http://127.0.0.1:3001>.
+Pi Patrick always uses the `openai-completions` protocol. `BASE_URL` must not include `/chat/completions`.
 
-Pi also supports credentials stored by its own login flow. By default this app reads Pi's global configuration from `~/.pi/agent` while keeping its sessions under `.data/sessions`.
+## Usage
 
-## Production-style local run
+```ts
+import { createPatrickRuntime } from "pi-patrick";
 
-```bash
-npm run build
-npm start
+const runtime = await createPatrickRuntime();
+const session = await runtime.createSession();
+
+session.subscribe((event) => {
+  if (event.type === "assistant_delta") process.stdout.write(event.text);
+});
+
+await session.prompt("Hello");
+session.dispose();
 ```
 
-Open <http://127.0.0.1:3001>.
+Each call to `runtime.createSession()` creates an isolated Pi `AgentSession` with its own session ID and JSONL session file. A single `PatrickRuntime` shares model configuration while allowing multiple conversations to run independently.
+
+To resume the most recent conversation:
+
+```ts
+const session = await runtime.createSession({
+  target: { type: "continue-recent" },
+});
+```
 
 ## Structure
 
-- `src/agent`: Pi SDK setup, application session wrapper, and event translation.
-- `src/extensions`: the thin composition layer for tools, commands, and hooks.
+- `src/agent`: runtime, isolated sessions, Pi resource assembly, and event translation.
+- `src/prompts`: prompt loading and composition logic.
+- `resources/prompts`: prompt content stored as Markdown.
+- `src/extensions`: the composition layer for tools, commands, and hooks.
 - `src/tools`, `src/commands`, `src/hooks`: intentionally empty registration points.
-- `src/server`: HTTP API, SSE event stream, and production static-file hosting.
-- `resources`: system prompt, prompt templates, and skills.
-- `web`: React and Vite client.
+- `src/integrations`: protocol and external-service adapters such as MCP.
+- `src/memory`: long-term memory boundary.
 
-The current demo has one active session per server process. It restores the most recent session on startup and supports sending messages, queued follow-ups, cancellation, and starting a new session.
+The optional HTTP server and React UI live on the `web` branch.

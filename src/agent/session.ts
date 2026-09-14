@@ -1,12 +1,12 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
-  type AppEvent,
-  type AppMessage,
-  type SessionState,
+  type PatrickEvent,
+  type PatrickMessage,
+  type PatrickSessionState,
   translateAgentEvent,
 } from "./events.js";
 
-export type AppEventListener = (event: AppEvent) => void;
+export type PatrickEventListener = (event: PatrickEvent) => void;
 
 function textFromContent(content: unknown): string {
   if (typeof content === "string") return content;
@@ -26,7 +26,7 @@ function textFromContent(content: unknown): string {
     .join("");
 }
 
-function toAppMessages(messages: AgentSession["messages"]): AppMessage[] {
+function toPatrickMessages(messages: AgentSession["messages"]): PatrickMessage[] {
   return messages.flatMap((message, index) => {
     if (message.role !== "user" && message.role !== "assistant") return [];
     const text = textFromContent(message.content);
@@ -36,7 +36,7 @@ function toAppMessages(messages: AgentSession["messages"]): AppMessage[] {
 }
 
 export class PatrickSession {
-  private readonly listeners = new Set<AppEventListener>();
+  private readonly listeners = new Set<PatrickEventListener>();
   private unsubscribe?: () => void;
 
   constructor(readonly session: AgentSession) {
@@ -50,19 +50,19 @@ export class PatrickSession {
     });
   }
 
-  subscribe(listener: AppEventListener): () => void {
+  subscribe(listener: PatrickEventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  getState(): SessionState {
+  getState(): PatrickSessionState {
     const model = this.session.model;
     const hasModel = model && model.provider !== "unknown" && model.id !== "unknown";
     return {
       sessionId: this.session.sessionId,
       model: hasModel ? `${model.provider}/${model.id}` : null,
       isStreaming: this.session.isStreaming,
-      messages: toAppMessages(this.session.messages),
+      messages: toPatrickMessages(this.session.messages),
     };
   }
 
@@ -84,7 +84,7 @@ export class PatrickSession {
     this.session.dispose();
   }
 
-  private emit(event: AppEvent): void {
+  private emit(event: PatrickEvent): void {
     for (const listener of this.listeners) listener(event);
   }
 }

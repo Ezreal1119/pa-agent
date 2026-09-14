@@ -1,3 +1,13 @@
-export { PatrickRuntime } from "./runtime.js";
-export type { AppEvent, AppMessage, SessionState } from "./events.js";
-
+export {
+  createPatrickAgent,
+  createPatrickRuntime,
+  PatrickRuntime,
+  type CreatePatrickSessionOptions,
+  type SessionTarget,
+} from "./runtime.js";
+export { PatrickSession, type PatrickEventListener } from "./session.js";
+export type {
+  PatrickEvent,
+  PatrickMessage,
+  PatrickSessionState,
+} from "./events.js";

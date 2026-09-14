@@ -1,28 +1,24 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   DefaultResourceLoader,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { config, paths } from "../config.js";
+import type { PatrickConfig } from "../config.js";
 import { patrickExtension } from "../extensions/index.js";
+import { loadPromptResources } from "../prompts/index.js";
 
-export async function createResources(): Promise<ResourceLoader> {
-  const systemPrompt = await fs.readFile(
-    path.join(paths.resources, "prompts", "system.md"),
-    "utf8",
-  );
+export async function createResources(config: PatrickConfig): Promise<ResourceLoader> {
+  const prompts = await loadPromptResources(config.resourcesDir);
 
   const loader = new DefaultResourceLoader({
     cwd: config.cwd,
     agentDir: config.agentDir,
-    systemPrompt,
+    systemPrompt: prompts.systemPrompt,
     extensionFactories: [{ name: "pi-patrick", factory: patrickExtension }],
-    additionalPromptTemplatePaths: [path.join(paths.resources, "prompts", "templates")],
-    additionalSkillPaths: [path.join(paths.resources, "skills")],
+    additionalPromptTemplatePaths: prompts.templatePaths,
+    additionalSkillPaths: [path.join(config.resourcesDir, "skills")],
   });
 
   await loader.reload();
   return loader;
 }
-

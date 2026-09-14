@@ -1,98 +1,115 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   createAgentSession,
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { config, paths } from "../config.js";
-import { userFacingError } from "../utils/index.js";
+import {
+  resolvePatrickConfig,
+  type PatrickConfig,
+  type PatrickConfigOptions,
+} from "../config.js";
 import { createResources } from "./resources.js";
-import { type AppEvent, type SessionState } from "./events.js";
-import { PatrickSession, type AppEventListener } from "./session.js";
+import { PatrickSession } from "./session.js";
+
+const PROVIDER_ID = "patrick-openai-compatible";
+
+export type SessionTarget =
+  | { type: "new" }
+  | { type: "continue-recent" }
+  | { type: "open"; path: string };
+
+export interface CreatePatrickSessionOptions {
+  target?: SessionTarget;
+}
 
 export class PatrickRuntime {
-  private current?: PatrickSession;
-  private modelRuntime?: ModelRuntime;
-  private initializing?: Promise<PatrickSession>;
-  private readonly listeners = new Set<AppEventListener>();
+  private constructor(
+    readonly config: PatrickConfig,
+    private readonly modelRuntime: ModelRuntime,
+  ) {}
 
-  async initialize(): Promise<PatrickSession> {
-    if (this.current) return this.current;
-    if (this.initializing) return this.initializing;
+  static async create(options: PatrickConfigOptions = {}): Promise<PatrickRuntime> {
+    const config = resolvePatrickConfig(options);
+    await fs.mkdir(config.sessionsDir, { recursive: true });
+    await fs.mkdir(config.agentDir, { recursive: true });
 
-    this.initializing = this.createSession(true);
-    try {
-      this.current = await this.initializing;
-      return this.current;
-    } finally {
-      this.initializing = undefined;
-    }
+    const modelRuntime = await ModelRuntime.create({
+      authPath: path.join(config.agentDir, "auth.json"),
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+
+    modelRuntime.registerProvider(PROVIDER_ID, {
+      name: "Patrick OpenAI Compatible",
+      baseUrl: config.model.baseUrl,
+      api: "openai-completions",
+      authHeader: true,
+      models: [
+        {
+          id: config.model.modelId,
+          name: config.model.modelId,
+          reasoning: true,
+          input: ["text"],
+          contextWindow: config.model.contextWindow,
+          maxTokens: config.model.maxTokens,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          compat: {
+            supportsDeveloperRole: false,
+            supportsReasoningEffort: false,
+          },
+        },
+      ],
+    });
+    await modelRuntime.setRuntimeApiKey(PROVIDER_ID, config.model.apiKey);
+
+    return new PatrickRuntime(config, modelRuntime);
   }
 
-  subscribe(listener: AppEventListener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  async createSession(options: CreatePatrickSessionOptions = {}): Promise<PatrickSession> {
+    const target = options.target ?? { type: "new" };
+    const sessionManager = this.createSessionManager(target);
+    const model = this.modelRuntime.getModel(PROVIDER_ID, this.config.model.modelId);
+    if (!model) throw new Error(`Model ${this.config.model.modelId} was not registered`);
 
-  async getState(): Promise<SessionState> {
-    return (await this.initialize()).getState();
-  }
-
-  async prompt(text: string): Promise<void> {
-    const session = await this.initialize();
-    await session.prompt(text);
-  }
-
-  async abort(): Promise<void> {
-    if (this.current) await this.current.abort();
-  }
-
-  async newSession(): Promise<SessionState> {
-    this.current?.dispose();
-    this.current = await this.createSession(false);
-    const state = this.current.getState();
-    this.emit({ type: "state", state });
-    return state;
-  }
-
-  private async createSession(
-    continueRecent: boolean,
-  ): Promise<PatrickSession> {
-    // To create file storage path if not exists
-    await fs.mkdir(paths.sessions, { recursive: true });
-
-    this.modelRuntime ??= await ModelRuntime.create();
-
-    const sessionManager = continueRecent
-      ? SessionManager.continueRecent(config.cwd, paths.sessions)
-      : SessionManager.create(config.cwd, paths.sessions);
-
-    const { session, modelFallbackMessage } = await createAgentSession({
-      cwd: config.cwd,
-      agentDir: config.agentDir,
+    const { session } = await createAgentSession({
+      cwd: this.config.cwd,
+      agentDir: this.config.agentDir,
+      model,
       modelRuntime: this.modelRuntime,
-      resourceLoader: await createResources(),
+      resourceLoader: await createResources(this.config),
       sessionManager,
     });
 
-    const wrapped = new PatrickSession(session);
-    wrapped.subscribe((event) => this.emit(event));
+    return new PatrickSession(session);
+  }
 
-    if (modelFallbackMessage) {
-      this.emit({
-        type: "error",
-        message: userFacingError(modelFallbackMessage),
-      });
+  private createSessionManager(target: SessionTarget): SessionManager {
+    if (target.type === "continue-recent") {
+      return SessionManager.continueRecent(this.config.cwd, this.config.sessionsDir);
     }
-
-    return wrapped;
+    if (target.type === "open") {
+      return SessionManager.open(target.path, this.config.sessionsDir, this.config.cwd);
+    }
+    return SessionManager.create(this.config.cwd, this.config.sessionsDir);
   }
+}
 
-  private emit(event: AppEvent): void {
-    for (const listener of this.listeners) listener(event);
-  }
+export async function createPatrickRuntime(
+  options: PatrickConfigOptions = {},
+): Promise<PatrickRuntime> {
+  return PatrickRuntime.create(options);
+}
 
-  emitError(error: unknown): void {
-    this.emit({ type: "error", message: userFacingError(error) });
-  }
+export async function createPatrickAgent(
+  options: PatrickConfigOptions = {},
+): Promise<PatrickSession> {
+  const runtime = await PatrickRuntime.create(options);
+  return runtime.createSession();
 }

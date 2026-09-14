@@ -1,20 +1,20 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
-export interface AppMessage {
+export interface PatrickMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
 }
 
-export interface SessionState {
+export interface PatrickSessionState {
   sessionId: string;
   model: string | null;
   isStreaming: boolean;
-  messages: AppMessage[];
+  messages: PatrickMessage[];
 }
 
-export type AppEvent =
-  | { type: "state"; state: SessionState }
+export type PatrickEvent =
+  | { type: "state"; state: PatrickSessionState }
   | { type: "assistant_delta"; text: string }
   | { type: "thinking_delta"; text: string }
   | { type: "tool_start"; id: string; name: string }
@@ -22,7 +22,7 @@ export type AppEvent =
   | { type: "status"; status: "idle" | "running" | "stopping" }
   | { type: "error"; message: string };
 
-export function translateAgentEvent(event: AgentSessionEvent): AppEvent | null {
+export function translateAgentEvent(event: AgentSessionEvent): PatrickEvent | null {
   if (event.type === "agent_start") {
     return { type: "status", status: "running" };
   }
@@ -59,4 +59,3 @@ export function translateAgentEvent(event: AgentSessionEvent): AppEvent | null {
 
   return null;
 }
-

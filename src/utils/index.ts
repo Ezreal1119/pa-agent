@@ -8,7 +8,7 @@ export function userFacingError(error: unknown): string {
     message.includes("No API key found") ||
     message.includes("No models available")
   ) {
-    return "未找到可用模型。请在项目根目录的 .env 中配置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY，然后重启服务。";
+    return "未找到可用模型。请配置 API_KEY、BASE_URL 和 MODEL_ID。";
   }
   return message;
 }

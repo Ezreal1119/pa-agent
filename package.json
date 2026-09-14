@@ -3,16 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "web"
-  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
-    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "tsx watch src/index.ts",
-    "dev:web": "npm run dev --workspace web",
-    "build": "npm run typecheck && npm run build --workspace web",
-    "start": "NODE_ENV=production tsx src/index.ts",
-    "typecheck": "tsc --noEmit && npm run typecheck --workspace web"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
@@ -20,8 +21,6 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "concurrently": "^9.2.1",
-    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },
   "engines": {
