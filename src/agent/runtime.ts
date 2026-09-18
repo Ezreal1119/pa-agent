@@ -182,8 +182,8 @@ export class AgentRuntime {
       resourceLoader,
       sessionManager,
       settingsManager,
-      // Explicitly enables every built-in tool currently used by this Agent Core.
-      tools: ["read", "bash", "edit", "write"],
+      // Enables only read-only filesystem tools for product knowledge retrieval.
+      tools: ["read", "grep", "find", "ls"],
       // Uses the SDK's default reasoning level, clamped when the model supports less.
       thinkingLevel: "medium",
     });

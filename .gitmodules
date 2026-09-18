@@ -1,0 +1,4 @@
+[submodule "resources/skills/urovo-product-skill"]
+	path = resources/skills/urovo-product-skill
+	url = https://github.com/Ezreal1119/urovo-product-skill.git
+	branch = general

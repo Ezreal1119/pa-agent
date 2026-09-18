@@ -4,8 +4,8 @@ import { registerHooks } from "../hooks/index.js";
 import { registerTools } from "../tools/index.js";
 
 /** Thin composition layer between application modules and Pi extensions. */
-export const agentExtension: ExtensionFactory = (pi) => {
+export const agentExtension: ExtensionFactory = async (pi) => {
   registerTools(pi);
   registerCommands(pi);
-  registerHooks(pi);
+  await registerHooks(pi);
 };

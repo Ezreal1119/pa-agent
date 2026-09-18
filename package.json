@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "start": "node dist/server.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

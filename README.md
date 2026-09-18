@@ -38,6 +38,34 @@ await session.prompt("Hello");
 session.dispose();
 ```
 
+## Product Query API
+
+Set a separate HTTP API key in `.env`:
+
+```env
+PRODUCT_API_KEY=replace-with-a-random-secret
+HOST=127.0.0.1
+PORT=3000
+```
+
+Build and start the server:
+
+```bash
+npm run build
+npm start
+```
+
+Query the product expert Skill:
+
+```bash
+curl http://127.0.0.1:3000/v1/product/query \
+  -H "Authorization: Bearer $PRODUCT_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"query":"What is the IP rating of the DT50?"}'
+```
+
+Each request uses a new in-memory session and returns the final answer as JSON.
+
 Each call to `runtime.createSession()` returns an isolated Pi `AgentSession` directly, with its complete state, events, controls, session ID, and JSONL session file. A single `AgentRuntime` shares model configuration while allowing multiple conversations to run independently.
 
 To resume the most recent conversation:
@@ -57,7 +85,6 @@ const session = await runtime.createSession(sessionManager);
 - `resources/prompts`: prompt content stored as Markdown.
 - `src/extensions`: the composition layer for tools, commands, and hooks.
 - `src/tools`, `src/commands`, `src/hooks`: intentionally empty registration points.
+- `src/server.ts`: minimal authenticated HTTP product-query API.
 - `src/integrations`: protocol and external-service adapters such as MCP.
 - `src/memory`: long-term memory boundary.
-
-The optional HTTP server and React UI live on the `web` branch.
