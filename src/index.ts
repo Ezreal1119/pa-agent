@@ -1,8 +1,8 @@
 export * from "./agent/index.js";
 export {
-  resolvePatrickConfig,
-  type PatrickConfig,
-  type PatrickConfigOptions,
-  type PatrickModelConfig,
+  resolveConfig,
+  type AgentConfig,
+  type AgentConfigOptions,
+  type ModelConfig,
 } from "./config.js";
 export * from "./prompts/index.js";

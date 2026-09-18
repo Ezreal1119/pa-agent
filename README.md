@@ -23,32 +23,36 @@ Pi Patrick always uses the `openai-completions` protocol. `BASE_URL` must not in
 ## Usage
 
 ```ts
-import { createPatrickRuntime } from "pi-patrick";
+import { createAgentRuntime, SessionManager } from "pi-patrick";
 
-const runtime = await createPatrickRuntime();
+const runtime = await createAgentRuntime();
 const session = await runtime.createSession();
 
 session.subscribe((event) => {
-  if (event.type === "assistant_delta") process.stdout.write(event.text);
+  if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+    process.stdout.write(event.assistantMessageEvent.delta);
+  }
 });
 
 await session.prompt("Hello");
 session.dispose();
 ```
 
-Each call to `runtime.createSession()` creates an isolated Pi `AgentSession` with its own session ID and JSONL session file. A single `PatrickRuntime` shares model configuration while allowing multiple conversations to run independently.
+Each call to `runtime.createSession()` returns an isolated Pi `AgentSession` directly, with its complete state, events, controls, session ID, and JSONL session file. A single `AgentRuntime` shares model configuration while allowing multiple conversations to run independently.
 
 To resume the most recent conversation:
 
 ```ts
-const session = await runtime.createSession({
-  target: { type: "continue-recent" },
-});
+const sessionManager = SessionManager.continueRecent(
+  runtime.config.cwd,
+  runtime.config.sessionsDir,
+);
+const session = await runtime.createSession(sessionManager);
 ```
 
 ## Structure
 
-- `src/agent`: runtime, isolated sessions, Pi resource assembly, and event translation.
+- `src/agent`: runtime, isolated Pi sessions, resource assembly, and a complete event reference.
 - `src/prompts`: prompt loading and composition logic.
 - `resources/prompts`: prompt content stored as Markdown.
 - `src/extensions`: the composition layer for tools, commands, and hooks.

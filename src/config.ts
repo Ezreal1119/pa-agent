@@ -2,9 +2,12 @@ import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-export interface PatrickModelConfig {
+export interface ModelConfig {
   apiKey: string;
   baseUrl: string;
   modelId: string;
@@ -12,22 +15,22 @@ export interface PatrickModelConfig {
   maxTokens: number;
 }
 
-export interface PatrickConfig {
+export interface AgentConfig {
   rootDir: string;
   cwd: string;
   dataDir: string;
   agentDir: string;
   sessionsDir: string;
   resourcesDir: string;
-  model: PatrickModelConfig;
+  model: ModelConfig;
 }
 
-export interface PatrickConfigOptions {
+export interface AgentConfigOptions {
   cwd?: string;
   dataDir?: string;
   agentDir?: string;
   resourcesDir?: string;
-  model?: Partial<PatrickModelConfig>;
+  model?: Partial<ModelConfig>;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -35,7 +38,11 @@ function required(value: string | undefined, name: string): string {
   return value.trim();
 }
 
-function positiveInteger(value: number | string | undefined, fallback: number, name: string): number {
+function positiveInteger(
+  value: number | string | undefined,
+  fallback: number,
+  name: string,
+): number {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer`);
@@ -43,15 +50,17 @@ function positiveInteger(value: number | string | undefined, fallback: number, n
   return parsed;
 }
 
-export function resolvePatrickConfig(options: PatrickConfigOptions = {}): PatrickConfig {
-  const cwd = path.resolve(options.cwd ?? process.env.PI_PATRICK_CWD ?? process.cwd());
+export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
+  const cwd = path.resolve(
+    options.cwd ?? process.env.AGENT_CWD ?? process.cwd(),
+  );
   const dataDir = path.resolve(
-    options.dataDir ?? process.env.PI_PATRICK_DATA_DIR ?? path.join(cwd, ".data"),
+    options.dataDir ?? process.env.AGENT_DATA_DIR ?? path.join(cwd, ".data"),
   );
-  const baseUrl = required(options.model?.baseUrl ?? process.env.BASE_URL, "BASE_URL").replace(
-    /\/+$/,
-    "",
-  );
+  const baseUrl = required(
+    options.model?.baseUrl ?? process.env.BASE_URL,
+    "BASE_URL",
+  ).replace(/\/+$/, "");
 
   return {
     rootDir: packageRoot,
@@ -59,11 +68,16 @@ export function resolvePatrickConfig(options: PatrickConfigOptions = {}): Patric
     dataDir,
     agentDir: path.resolve(options.agentDir ?? path.join(dataDir, "agent")),
     sessionsDir: path.join(dataDir, "sessions"),
-    resourcesDir: path.resolve(options.resourcesDir ?? path.join(packageRoot, "resources")),
+    resourcesDir: path.resolve(
+      options.resourcesDir ?? path.join(packageRoot, "resources"),
+    ),
     model: {
       apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY"),
       baseUrl,
-      modelId: required(options.model?.modelId ?? process.env.MODEL_ID, "MODEL_ID"),
+      modelId: required(
+        options.model?.modelId ?? process.env.MODEL_ID,
+        "MODEL_ID",
+      ),
       contextWindow: positiveInteger(
         options.model?.contextWindow ?? process.env.CONTEXT_WINDOW,
         128_000,
