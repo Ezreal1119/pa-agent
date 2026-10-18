@@ -241,3 +241,19 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 行为/兼容性影响：新增decodeOfficeXml，按BOM/字节签名选择UTF-8/UTF-16LE/UTF-16BE，fatal解码拒绝坏字节，明确不支持UTF-32。先解码再执行原XML验证与DOCTYPE/ENTITY拒绝，ZIP/扩展体积/像素/单元格限制保持不变；错误提供部件名和编码或XML错误位置。既有ZIP与元数据字节不改写。另修复写入端先trim工作表名的问题，精确匹配实际的“Spec EDC ”，找不到时再保留旧trim回退。不修改其他Agent/记忆/会话逻辑，没有新增依赖或.env字段。
 
 验证：本机构建和79项完整测试通过，新增4项编码回归覆盖BOM与无BOM签名、双字节序、损坏字节/UTF-32拒绝、UTF-16中的DTD/实体拒绝、体积限制、真实worker读取/写入且元数据和原件保留。用户真实附件按workbook及worksheet读取均complete，测试副本C5写入成功，重新打开确认值，15个customXml部件字节完全一致、原文件SHA-256未变。日志/测试输出仅存.data/debug/office-xml-encoding/且Git忽略。没有修改用户附件、业务知识/.env/记忆或VPS，也没有调用真实模型或部署；未提交推送。
+
+## 2026-10-18 — Office XML 测试 npm 快捷命令
+
+原因：用户希望无需记忆环境变量和测试文件路径，直接使用 npm 命令。
+
+行为/兼容性影响：增加 npm run test:office-xml，先构建再以 NODE_ENV=production、FILE_WORKER_IMAGE为空执行 Office XML 编码回归；沿用项目Mac/Ubuntu shell，不引入cross-env依赖、不改.env和服务配置。npm test/npm run test仍执行完整套件。README与VPS部署文档同步。
+
+验证：直接执行 npm run test:office-xml，构建及4项测试通过；日志在.data/debug/office-xml-encoding/npm-test.log。仅新增命令，无Agent运行行为变更，未修改业务数据或VPS，未提交推送。
+
+## 2026-10-18 — 本地产品文档与专属记忆同步脚本
+
+原因：用户要求在ProductExpertCloud/.data创建product_docs_sync，从只读patrick-agent来源同步产品Markdown，产品MEMORY改从skill_memories专属路径获取。
+
+行为/兼容性影响：创建.data/product_docs_sync.py（按用户要求位于Git忽略目录），仅用Python标准库。递归保留相对路径，同步.md（大小写均可），排除任意层级名为SYNC_PROMPT.md/SKILL.md/MEMORY.md的源技能Markdown；单独将patrick-agent/skill_memories/urovo-product-expert/MEMORY.md同步为目标根MEMORY.md。默认新增/更新、不删除目标独有文件，不碰共享memory/UMS；提供--dry-run和路径覆盖参数。实际写入逐文件临时文件+fsync+replace，覆盖前备份至.data/maintenance-backups/product-docs-sync/，同进程外flock拒绝并发脚本，源/目标重叠、链接及空源MEMORY拒绝。脚本只负责本地同步，不修改/运行源项目，不会通过Git自动传到VPS。
+
+验证：隔离临时夹具验证预览零写入、深层排除、只复制MD、专属记忆来源、源项目内容不变、共享记忆不变、目标独有文件保留、备份、重复运行幂等和链接拒绝。真实目录只运行--dry-run：0新增、1更新（MEMORY.md）、491相同、3排除；没有实际修改业务知识或记忆。日志统一.data/debug/product-docs-sync/{tests.log,preview.log}。本轮没有运行主项目或源项目测试，没有部署/提交推送。

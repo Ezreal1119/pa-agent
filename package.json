@@ -19,6 +19,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "test:office-xml": "npm run build && NODE_ENV=production FILE_WORKER_IMAGE= node --test tests/office-xml-encoding.test.mjs",
     "web": "npm run build && node dist/web/cli.js"
   },
   "dependencies": {

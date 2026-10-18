@@ -84,6 +84,8 @@ ssh -N -L 4321:127.0.0.1:4321 root@VPS_IP
 
 ## 日常更新（VPS root）
 
+Office XML 编码兼容的定向验证直接运行 `npm run test:office-xml`；命令会先构建，再自动设置 production 与无 Docker 测试环境。完整回归仍使用 `npm test`，无需记忆测试文件名或手工设置环境变量。这里的环境变量只对测试进程生效，不改写 `.env` 或 systemd 配置。
+
 ```sh
 cd /opt/ProductExpertCloud
 git pull --ff-only

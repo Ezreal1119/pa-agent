@@ -207,3 +207,8 @@ If a later model request fails or the run is stopped, already-published files re
 ## Local debug artifacts
 
 Keep development test logs, screenshots, fixtures, validation reports and temporary test-service data under `.data/debug/`. This directory is Git ignored and is not required for production. Runtime data (`agent/`, `sessions/`, `files/`), business knowledge and memory, the local `file-runtime/` environment, and `maintenance-backups/` stay in their existing `.data/` locations.
+
+## Test commands
+
+- `npm test` (or `npm run test`): build and run the complete test suite.
+- `npm run test:office-xml`: build and run the Office XML encoding regression tests in production/native-worker mode. This command supports the project’s macOS/Ubuntu shell environments; it does not edit `.env`.
