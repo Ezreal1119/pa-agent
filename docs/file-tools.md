@@ -77,7 +77,11 @@ npm run build
 
 设置 MARKITDOWN_COMMAND 为该虚拟环境中 markitdown 的绝对路径，再启用 FILE_TOOLS_ENABLED。Python 顶层依赖及约束版本分别见 requirements-files.txt / requirements-files.lock。MarkItDown 的 Magika/ONNX 依赖用于文件类型判断，无需本地视觉大模型或 GPU。
 
-Ubuntu 24 生产部署建议使用隔离镜像：
+Ubuntu 24 无 Docker 部署：不设置 `FILE_WORKER_IMAGE` 即使用原生 worker，支持 `NODE_ENV=production`。使用 `deploy/product-expert.service` 约束整组进程，并将知识目录以只读方式挂载到服务视图。安装、账号权限、验证、启动及升级步骤见 [VPS 原生部署](vps-native-deploy.md)。
+
+原生 worker 仍是每任务一个 Node 子进程，384MiB JS 堆上限、单并发队列、超时/取消终止进程组、受控文件输入和新输出不变；工作目录为本次任务目录。不传递模型密钥等宿主环境变量。它不是每任务 OS 沙箱：Python/原生内存不受 JS 堆上限约束，worker 与主服务共用账号和 systemd 资源总额，不能宣称 worker 已禁止联网或只能访问 job 目录。
+
+可选 Docker 后端保留：设置 `FILE_WORKER_IMAGE` 时仍使用隔离镜像。需要时构建：
 
 ```sh
 docker build -f deploy/Dockerfile.files -t product-expert-files:ubuntu24 .
@@ -89,7 +93,7 @@ FILE_TOOLS_ENABLED=true
 FILE_WORKER_IMAGE=product-expert-files:ubuntu24
 ```
 
-应用在宿主机运行并需要可用的 Docker CLI/daemon。每个文件任务使用一次性容器：1 CPU、768MiB 内存、禁止 swap 扩容、64 进程上限、只读根文件系统、无网络、不授予额外能力，仅挂载该任务目录和 64MiB 临时空间。镜像不包含 .env/.data；容器不挂载知识库和 Docker socket，不传模型密钥。主进程通过受控标准输入输出转发视觉请求。Linux production 模式缺少 FILE_WORKER_IMAGE 时拒绝文件执行；本机开发子进程模式仅有 Node 堆和超时限制，不等同于 Linux 容器的 OS 内存限制。
+应用在宿主机运行并需要可用的 Docker CLI/daemon。每个文件任务使用一次性容器：1 CPU、768MiB 内存、禁止 swap 扩容、64 进程上限、只读根文件系统、无网络、不授予额外能力，仅挂载该任务目录和 64MiB 临时空间。镜像不包含 .env/.data；容器不挂载知识库和 Docker socket，不传模型密钥。主进程通过受控标准输入输出转发视觉请求。未设置镜像时不调用 Docker，Linux production 也可运行原生子进程。原生部署的 systemd 总额限制不等同于每任务容器隔离。
 
 2 核 2GB VPS 应为主服务和系统保留剩余资源，文件重任务保持单并发；构建镜像建议在开发机/CI 完成，再导入匹配 CPU 架构的镜像。Web 继续只监听 127.0.0.1，访问可使用 SSH 隧道，未改变既有 Host/Origin/登录策略。未在本次工作中公开部署 Web 或接入 WeCom。
 

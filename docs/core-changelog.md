@@ -28,6 +28,8 @@
 
 - Excel 输出由后端直接登记 generated-file-v1 JSONL 关联到 run/用户消息/工具调用，回答下显示可下载文件卡片；支持实时通知、多文件、失败/停止后保留、重启与旧工具结果恢复，不依赖模型文本路径。见 2026-10-18 输出交付记录。
 
+- Ubuntu production 不再强制 Docker：FILE_WORKER_IMAGE 为空使用原生任务子进程，显式镜像仍选容器；新增 /opt/ProductExpertCloud 的 systemd 模板与原生部署步骤。见 2026-10-18 VPS 原生部署记录。
+
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
 原因：用户要求产品专家和 UMS 技能默认生效，每个 run 强制加载技能与对应 MEMORY，并限制聊天上下文和磁盘历史生命周期。
@@ -207,3 +209,13 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 行为/兼容性影响：将根目录测试日志、UI 截图与隔离测试服务目录、文件验证夹具/报告、Docker 测试配置及审查记录移入 `.data/debug/`，保留原目录名。历史记录中的证据路径同步修正为归档后的地址。后续调试资料统一放该目录；未修改应用代码、.env、知识/记忆、正式会话/附件、Python 运行环境或维护备份。已归档的一次性测试脚本/日志保留原内容，其中旧绝对路径仅作历史记录，不作为现行启动入口。
 
 验证：所有迁移文件逐个校验 SHA-256、大小和权限（链接校验目标）一致；正式 agent/sessions/files、两套业务 Skill、共享记忆及维护备份前后摘要一致。迁移清单见 `.data/debug/2026-10-18-debug-relocation.json`。仅目录整理，无代码改动，未重新运行模型或测试套件。
+
+## 2026-10-18 — VPS 原生文件处理与 systemd 部署
+
+原因：用户明确选择不使用 Docker，VPS 为 Ubuntu24/x86_64、Node22.23.2/Python3.12.3、约1.6GiB内存，代码与两套知识目录已手工上传。
+
+行为/兼容性影响：取消 Linux production 缺少 FILE_WORKER_IMAGE 时拒绝执行的分支；空镜像使用原有原生 Node worker，显式镜像保留容器行为。工作目录改为本任务目录；单并发、384MiB worker JS 堆、环境变量白名单、超时/取消终止进程组、原件/公式保护及输出登记保持不变。未新增 bash 或任意写入工具。这里原生 worker 不是每任务 OS 沙箱，不能声称仅能读取 job 或禁止联网。
+
+部署：增加 deploy/product-expert.service，普通 productexpert 账号、主进程256MiB堆；systemd 整组 MemoryHigh900M/MemoryMax1100M/Swap256M、CPU150%、Tasks96，OOM 整组结束并由 on-failure 重启。服务只开放 .data 写入，知识目录和转换环境只读，保留额外记忆/会话/附件写入；.env 由 dotenv 读取。新增 docs/vps-native-deploy.md 说明凭据、账号、安装、Host兼容SSH隧道及更新流程；.env.example/README/文件工具文档同步。历史“Linux生产必须容器”的记录仅描述当时版本，以本条为后续修正。
+
+验证：本机构建及67项完整测试通过；新增 production+空PATH+空镜像测试，实际创建Excel、验证输出内容、原件不变及公式拒绝，指标为process且没有容器峰值。测试日志在 .data/debug/vps-native-tests.log。另行 production 文件定向结果见 dev-history 记录。没有修改实际.env/知识/记忆，没有连接或改变VPS；未在Ubuntu24/systemd上执行本次unit，内存/只读mount/重启需用户VPS实测，不能把Mac子进程测试作为Linux隔离验收。未提交或推送。

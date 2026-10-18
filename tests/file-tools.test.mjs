@@ -76,3 +76,21 @@ test('vision results are reused only within a run and stale session files expire
 test('individual file switches deny direct execution as well as model tool registration',async()=>{
  const config=fileToolConfig(path.resolve('.data/test-no-write'),{enabled:true,tools:['pdf_read']});const tools=new FileTools(config);assert.deepEqual(tools.tools('test-session-id').map(t=>t.name),['pdf_read']);await assert.rejects(tools.execute('test-session-id','image_read',{path:'inputs/test.png'}),/disabled/);
 });
+
+test('native production workers create protected outputs without Docker or a shell on PATH', {timeout:30000},async t=>{
+ const f=await setup(t,{workerImage:''});const file=await f.upload('sample.xlsx');
+ const source=await fs.readFile(path.join(f.tools.store.directory(f.session),file.path));
+ const previous={PATH:process.env.PATH,NODE_ENV:process.env.NODE_ENV};
+ try {
+  process.env.PATH='';process.env.NODE_ENV='production';
+  const result=await f.tools.execute(f.session,'excel_patch_template',{sourcePath:file.path,outputPath:'native.xlsx',operations:[{type:'setCell',sheet:'Data',range:'B2',value:88}]});
+  assert.equal(result.ok,true);assert.equal(result.metrics.backend,'process');assert.equal(result.metrics.workerPeakBytes,undefined);
+  const opened=await f.tools.store.open(f.session,result.file.id);const output=await opened.handle.readFile();await opened.handle.close();
+  const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(output);assert.equal(workbook.getWorksheet('Data').getCell('B2').value,88);
+  assert.deepEqual(await fs.readFile(path.join(f.tools.store.directory(f.session),file.path)),source);
+  await assert.rejects(f.tools.execute(f.session,'excel_patch_template',{sourcePath:file.path,outputPath:'formula.xlsx',operations:[{type:'clearCell',sheet:'Data',range:'C2'}]}),/formula/);
+ } finally {
+  for(const [key,value] of Object.entries(previous))if(value===undefined)delete process.env[key];else process.env[key]=value;
+ }
+ assert.equal((await fs.readdir(path.join(f.tools.store.directory(f.session),'work'))).length,0);
+});

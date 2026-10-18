@@ -32,13 +32,15 @@ export async function runFileWorker(scope: WorkerScope, name: FileToolName, inpu
     const config = scope.config; const publicConfig = { ...config, dataDir: "", readRoots: [], vision: { ...config.vision, apiKey: "", baseUrl: "" } };
     const workerFile = fileURLToPath(new URL("./worker.js", import.meta.url));
     const container = config.workerImage; const containerName = `expert-file-${randomUUID()}`;
-    if (process.platform === "linux" && process.env.NODE_ENV === "production" && !container) throw new Error("Production Linux file tools require FILE_WORKER_IMAGE for OS memory and network isolation.");
+    // An image opts into the container backend; otherwise use a native worker,
+    // including on production Linux. Native deployments enforce aggregate
+    // resource limits and read-only knowledge mounts through the systemd unit.
     const mappedScope = container ? { ...scope, input: `/job/${path.basename(scope.input)}`, output: "/job/result.xlsx", config: { ...publicConfig, markitdown: "markitdown" } } : { ...scope, config: publicConfig };
     const mappedInput = { ...input, ...(name === "excel_patch_template" ? { sourcePath: mappedScope.input, outputPath: mappedScope.output } : { path: mappedScope.input }) };
     const args = container
       ? ["run", "--rm", "--pull", "never", "--interactive", "--name", containerName, "--network", "none", "--memory", "768m", "--memory-swap", "768m", "--cpus", "1", "--pids-limit", "64", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", `type=bind,src=${path.dirname(scope.input)},dst=/job`, container]
       : ["--max-old-space-size=384", workerFile];
-    const child = spawn(container ? "docker" : process.execPath, args, { detached: process.platform !== "win32", env: { PATH: process.env.PATH, HOME: path.dirname(scope.input), LANG: "C.UTF-8", TMPDIR: process.env.TMPDIR }, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(container ? "docker" : process.execPath, args, { cwd: path.dirname(scope.input), detached: process.platform !== "win32", env: { PATH: process.env.PATH, HOME: path.dirname(scope.input), LANG: "C.UTF-8", TMPDIR: process.env.TMPDIR }, stdio: ["pipe", "pipe", "pipe"] });
     const controller = new AbortController(); const observations: FileExecution["metrics"]["vision"] = []; let visionCalls = 0;
     return new Promise<FileExecution>((resolve, reject) => {
       let settled = false; let stderrBytes = 0; let stdoutBytes = 0; let result: unknown; let peakRssKiB = 0; let workerPeakBytes: number | undefined; let failure: Error | undefined;

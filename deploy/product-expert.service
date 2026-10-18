@@ -1,0 +1,51 @@
+[Unit]
+Description=Product Expert Web Agent
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=productexpert
+Group=productexpert
+WorkingDirectory=/opt/ProductExpertCloud
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/opt/ProductExpertCloud/.data/agent
+# .env is read by dotenv from WorkingDirectory, using the same syntax as local runs.
+ExecStart=/usr/bin/env node --max-old-space-size=256 /opt/ProductExpertCloud/dist/web/cli.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+OOMPolicy=kill
+UMask=0077
+LimitCORE=0
+
+# Limits apply to the main service AND every native worker/converter together.
+MemoryAccounting=yes
+MemoryHigh=900M
+MemoryMax=1100M
+MemorySwapMax=256M
+CPUQuota=150%
+TasksMax=96
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/ProductExpertCloud/.data
+ReadOnlyPaths=/opt/ProductExpertCloud/.data/urovo-product-expert
+ReadOnlyPaths=-/opt/ProductExpertCloud/.data/ums-expert
+ReadOnlyPaths=-/opt/ProductExpertCloud/.data/file-runtime
+
+[Install]
+WantedBy=multi-user.target
