@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Product Expert · 登录</title>
+  <link rel="stylesheet" href="/style.css"><script defer src="/login.js"></script>
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <a class="brand" href="/login" aria-label="Product Expert"><span class="brand-mark">p<span>e</span></span><span>Product Expert<small>KNOWLEDGE WORKSPACE</small></span></a>
+    <div class="login-heading"><span class="eyebrow">WELCOME BACK</span><h1>登录你的工作空间</h1><p>连接产品知识与业务记忆，从这里开始。</p></div>
+    <form id="login-form">
+      <label for="login-account">账号</label><input id="login-account" name="username" autocomplete="username" maxlength="256" required placeholder="输入管理员账号">
+      <label for="login-password">密码</label><input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="4096" required placeholder="输入密码">
+      <p id="login-error" class="form-error" role="alert" hidden></p>
+      <p id="login-status" class="login-status" role="status">正在检查登录配置…</p>
+      <button id="login-submit" class="primary-button login-submit" type="submit" disabled>登录 <span>↗</span></button>
+    </form>
+    <p class="login-foot">管理员工作空间 · 登录有效期 12 小时</p>
+  </main>
+</body>
+</html>

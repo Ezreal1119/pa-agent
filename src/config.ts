@@ -1,6 +1,7 @@
 import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fileToolConfig, type FileToolConfig, type FileToolOptions } from "./file-tools/config.js";
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -23,6 +24,7 @@ export interface AgentConfig {
   sessionsDir: string;
   resourcesDir: string;
   model: ModelConfig;
+  fileTools: FileToolConfig;
 }
 
 export interface AgentConfigOptions {
@@ -31,6 +33,7 @@ export interface AgentConfigOptions {
   agentDir?: string;
   resourcesDir?: string;
   model?: Partial<ModelConfig>;
+  fileTools?: FileToolOptions;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -71,6 +74,7 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
     resourcesDir: path.resolve(
       options.resourcesDir ?? path.join(packageRoot, "resources"),
     ),
+    fileTools: fileToolConfig(dataDir, options.fileTools),
     model: {
       apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY"),
       baseUrl,

@@ -1,0 +1,25 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import JSZip from 'jszip';
+import ExcelJS from 'exceljs';
+import {createCanvas} from '@napi-rs/canvas';
+import {PDFDocument,StandardFonts} from 'pdf-lib';
+
+export function imageFixture(width=160,height=100) {
+  const canvas=createCanvas(width,height);const c=canvas.getContext('2d');c.fillStyle='white';c.fillRect(0,0,width,height);c.fillStyle='#1250cc';c.fillRect(10,10,30,30);c.fillStyle='black';c.font='20px sans-serif';c.fillText('TEST 42',8,80);return canvas.toBuffer('image/png');
+}
+export async function fixtures(directory) {
+  await fs.mkdir(directory,{recursive:true});const png=imageFixture();await fs.writeFile(path.join(directory,'image.png'),png);
+  const pdf=await PDFDocument.create();const page=pdf.addPage([400,300]);const font=await pdf.embedFont(StandardFonts.Helvetica);page.drawText('PDF FILE TOOL TEST 42',{x:30,y:250,size:20,font});await fs.writeFile(path.join(directory,'sample.pdf'),await pdf.save());
+  const wb=new ExcelJS.Workbook();const sheet=wb.addWorksheet('Data');sheet.getCell('A1').value='Product';sheet.getCell('B1').value='Quantity';sheet.getCell('A2').value='DT66';sheet.getCell('B2').value=42;sheet.getCell('C2').value={formula:'B2*2',result:84};sheet.getCell('A2').font={bold:true,color:{argb:'FF1250CC'}};sheet.getCell('A2').note='Keep this note';sheet.mergeCells('A4:C4');sheet.getCell('A4').value='Merged heading';sheet.pageSetup.printArea='A1:C8';const image=wb.addImage({buffer:png,extension:'png'});sheet.addImage(image,{tl:{col:0,row:5},ext:{width:160,height:100}});const hidden=wb.addWorksheet('Hidden',{state:'hidden'});hidden.getCell('A1').value='HIDDEN SENTINEL';await wb.xlsx.writeFile(path.join(directory,'sample.xlsx'));
+  const docx=new JSZip();docx.file('[Content_Types].xml',`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
+  docx.file('_rels/.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
+  docx.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>DOCX FILE TOOL TEST 42</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>DT66</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>`);docx.file('word/media/image1.png',png);await fs.writeFile(path.join(directory,'sample.docx'),await docx.generateAsync({type:'nodebuffer',compression:'DEFLATE'}));
+  const pptx=new JSZip();pptx.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>`);
+  pptx.file('_rels/.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>`);
+  pptx.file('ppt/presentation.xml',`<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`);
+  pptx.file('ppt/_rels/presentation.xml.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>`);
+  pptx.file('ppt/slides/slide1.xml',`<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>PPTX FILE TOOL TEST 42</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`);
+  await fs.writeFile(path.join(directory,'sample.pptx'),await pptx.generateAsync({type:'nodebuffer',compression:'DEFLATE'}));
+  return {png};
+}

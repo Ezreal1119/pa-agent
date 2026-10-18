@@ -1,0 +1,3 @@
+-c requirements-files.lock
+markitdown[pdf,docx,pptx,xlsx]==0.1.8
+onnxruntime==1.23.2
