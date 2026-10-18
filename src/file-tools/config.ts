@@ -31,7 +31,7 @@ export function fileToolConfig(dataDir: string, options: FileToolOptions = {}, e
     enabled: options.enabled ?? ["true", "1"].includes(env.FILE_TOOLS_ENABLED ?? "false"), dataDir: path.resolve(dataDir),
     tools: options.tools ? [...new Set(options.tools)].filter(name => FILE_TOOL_NAMES.includes(name)) : [...FILE_TOOL_NAMES],
     readRoots: options.readRoots ?? [path.join(dataDir, "ums-expert"), path.join(dataDir, "urovo-product-expert")],
-    maxFileBytes: number("FILE_MAX_BYTES", 10 * 1024 * 1024, options.maxFileBytes),
+    maxFileBytes: number("FILE_MAX_BYTES", 30 * 1024 * 1024, options.maxFileBytes),
     maxExpandedBytes: number("FILE_MAX_EXPANDED_BYTES", 64 * 1024 * 1024, options.maxExpandedBytes),
     maxCells: number("FILE_MAX_CELLS", 50_000, options.maxCells), maxSheets: number("FILE_MAX_SHEETS", 20, options.maxSheets),
     maxPages: number("FILE_MAX_PAGES", 100, options.maxPages), maxPixels: number("FILE_MAX_PIXELS", 20_000_000, options.maxPixels),

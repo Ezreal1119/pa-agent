@@ -479,7 +479,7 @@ test('login validates credentials, uses a protected cookie, and logout invalidat
   assert.equal((await f.request('/api/auth/login', 'POST', f.auth.admin, { Cookie: '', 'X-Local-Token': '' })).status, 403);
   assert.equal((await f.request('/api/auth/login', 'POST', f.auth.admin, { Cookie: '', Origin: 'https://evil.example' })).status, 403);
   const login = await f.request('/api/auth/login', 'POST', f.auth.admin, { Cookie: '' }); assert.equal(login.status, 200);
-  const header = login.headers.get('set-cookie'); assert.match(header, /HttpOnly/); assert.match(header, /SameSite=Strict/); assert.match(header, /Max-Age=43200/);
+  const header = login.headers.get('set-cookie'); assert.match(header, /HttpOnly/); assert.match(header, /SameSite=Strict/); assert.match(header, /Max-Age=604800/);
   assert.ok(!header.includes(f.auth.admin.password)); assert.ok(!header.includes(f.auth.admin.account));
   const cookie = header.split(';')[0];
   assert.equal((await f.request('/api/status', 'GET', undefined, { Cookie: cookie })).status, 200);

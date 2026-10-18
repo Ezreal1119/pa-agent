@@ -34,6 +34,10 @@
 
 - Office 预检按 BOM/字节签名解码 UTF-16 元数据，不再强制 UTF-8 导致误拒绝；精确匹配含空格的工作表名。见 2026-10-18 Office XML 编码兼容记录。
 
+- 单文件上传默认30MiB，Excel/图片原件输入统一遵循FILE_MAX_BYTES，前端动态提示；见2026-10-18上传上限记录。
+
+- Web 登录固定有效期改为7天，Cookie与服务端过期时间一致，重启仍清空登录；见2026-10-18登录有效期记录。
+
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
 原因：用户要求产品专家和 UMS 技能默认生效，每个 run 强制加载技能与对应 MEMORY，并限制聊天上下文和磁盘历史生命周期。
@@ -257,3 +261,19 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 行为/兼容性影响：创建.data/product_docs_sync.py（按用户要求位于Git忽略目录），仅用Python标准库。递归保留相对路径，同步.md（大小写均可），排除任意层级名为SYNC_PROMPT.md/SKILL.md/MEMORY.md的源技能Markdown；单独将patrick-agent/skill_memories/urovo-product-expert/MEMORY.md同步为目标根MEMORY.md。默认新增/更新、不删除目标独有文件，不碰共享memory/UMS；提供--dry-run和路径覆盖参数。实际写入逐文件临时文件+fsync+replace，覆盖前备份至.data/maintenance-backups/product-docs-sync/，同进程外flock拒绝并发脚本，源/目标重叠、链接及空源MEMORY拒绝。脚本只负责本地同步，不修改/运行源项目，不会通过Git自动传到VPS。
 
 验证：隔离临时夹具验证预览零写入、深层排除、只复制MD、专属记忆来源、源项目内容不变、共享记忆不变、目标独有文件保留、备份、重复运行幂等和链接拒绝。真实目录只运行--dry-run：0新增、1更新（MEMORY.md）、491相同、3排除；没有实际修改业务知识或记忆。日志统一.data/debug/product-docs-sync/{tests.log,preview.log}。本轮没有运行主项目或源项目测试，没有部署/提交推送。
+
+## 2026-10-18 — 单文件上限提升至30MiB
+
+原因：用户要求最大文件上传从10M调整到30M。
+
+行为/兼容性影响：FILE_MAX_BYTES默认由10485760改为31457280，.env.example同步；Web既有后端/前端校验及提示动态读取该值，无需硬编码界面文案。Excel读取/模板输入输出及图片原件输入改用worker配置，移除内部20MiB/12MiB输入硬上限，避免30MiB上传后被旧限制拒绝。继续保留Office64MiB展开、50000单元格、2000万像素、文本/视觉请求大小、100MiB会话配额和执行超时/队列等限制。现有.env显式数值仍优先，VPS须单独调整.env再重启；本机.env没有显式该字段，因此未修改它。
+
+验证：本机构建和81项完整测试通过；新增HTTP30MiB边界成功、30MiB+1返回413、流式超限拒绝且无残留登记；状态接口返回31457280，前端使用此值。真实worker读取并修改含21MiB原始ZIP部件的XLSX、读取13MiB合法PNG均成功，证明旧内层限制已解除。日志在.data/debug/upload-limit/full-tests.log。未调用真实模型、修改知识/记忆、修改VPS或提交推送。
+
+## 2026-10-18 — Web 登录有效期延长至7天
+
+原因：用户要求把原12小时登录状态改为7天。
+
+行为/兼容性影响：SESSION_MS改为7×24小时，浏览器Cookie Max-Age=604800秒、服务端内存令牌过期统一由同一常量计算。为登录时起算的固定有效期，普通访问不续期；保留HttpOnly/SameSite、退出注销、限流及128会话上限。登录记录仍仅在内存，重启或dispose继续使登录失效，不新增凭据或登录持久化。.env无需修改，更新重启后重新登录获得新有效期。README同步。
+
+验证：构建及33项认证/Web定向测试通过，模拟时间验证12小时仍有效、7天前1ms有效、满7天失效，并校验Cookie=604800和HTTP登录/注销/限流/重启行为。日志.data/debug/login-seven-days/tests.log。没有真实模型、业务数据或VPS操作，未提交推送；同工作区既有30MiB上传改动保留。

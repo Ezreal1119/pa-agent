@@ -6,6 +6,7 @@ import os from 'node:os';
 import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
+import {crc32} from 'node:zlib';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import {FileTools} from '../dist/file-tools/index.js';
@@ -75,6 +76,20 @@ test('vision results are reused only within a run and stale session files expire
 
 test('individual file switches deny direct execution as well as model tool registration',async()=>{
  const config=fileToolConfig(path.resolve('.data/test-no-write'),{enabled:true,tools:['pdf_read']});const tools=new FileTools(config);assert.deepEqual(tools.tools('test-session-id').map(t=>t.name),['pdf_read']);await assert.rejects(tools.execute('test-session-id','image_read',{path:'inputs/test.png'}),/disabled/);
+});
+
+test('Excel and image workers accept inputs above their old private caps under the 30 MiB limit', {timeout:60000},async t=>{
+ const f=await setup(t,{maxFileBytes:30*1024*1024,workerImage:''});
+ const zip=await JSZip.loadAsync(await fs.readFile(path.join(f.source,'sample.xlsx')));
+ zip.file('customXml/preserved.bin',Buffer.alloc(21*1024*1024,0x41));
+ const source=await zip.generateAsync({type:'nodebuffer',compression:'STORE'});assert.ok(source.length>20*1024*1024);
+ const excel=await f.tools.store.upload(f.session,'large.xlsx',[source]);
+ const read=await f.tools.execute(f.session,'excel_read',{path:excel.path,scope:'workbook'});assert.equal(read.ok,true);assert.match(JSON.stringify(read),/DT66/);
+ const patch=await f.tools.execute(f.session,'excel_patch_template',{sourcePath:excel.path,outputPath:'large-patched.xlsx',operations:[{type:'setCell',sheet:'Data',range:'B2',value:77}]});assert.equal(patch.ok,true);
+ const png=imageFixture();const payload=Buffer.alloc(13*1024*1024,0x41);payload.write('Comment\0');
+ const type=Buffer.from('tEXt');const chunk=Buffer.alloc(payload.length+12);chunk.writeUInt32BE(payload.length,0);type.copy(chunk,4);payload.copy(chunk,8);chunk.writeUInt32BE(crc32(Buffer.concat([type,payload])),payload.length+8);
+ const image=await f.tools.store.upload(f.session,'large.png',[png.subarray(0,-12),chunk,png.subarray(-12)]);
+ const seen=await f.tools.execute(f.session,'image_read',{path:image.path,question:'Describe.'});assert.equal(seen.ok,true);assert.match(seen.description,/TEST 42/);
 });
 
 test('native production workers create protected outputs without Docker or a shell on PATH', {timeout:30000},async t=>{

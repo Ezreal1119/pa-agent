@@ -49,7 +49,7 @@ ExcelJS 读取失败时按原逻辑回退到只读 OOXML，再回退到 MarkItDo
 
 | 配置 | 默认 |
 | --- | --- |
-| FILE_MAX_BYTES | 10MiB/文件 |
+| FILE_MAX_BYTES | 30MiB/文件（31457280 字节） |
 | FILE_MAX_EXPANDED_BYTES | 64MiB/Office 包 |
 | FILE_MAX_CELLS / FILE_MAX_SHEETS | 50000 / 20 |
 | FILE_MAX_PAGES | PDF/PPTX 100 页 |
@@ -59,6 +59,8 @@ ExcelJS 读取失败时按原逻辑回退到只读 OOXML，再回退到 MarkItDo
 | FILE_TIMEOUT_MS | 120000，任务开始执行后计时 |
 | FILE_QUEUE_LIMIT | 一个任务执行，最多八个等待，全进程共享 |
 | VISION_TIMEOUT_MS / VISION_MAX_CALLS | 单次 60000 毫秒 / 每轮八次预算 |
+
+Web 大小提示与前端校验读取后端 FILE_MAX_BYTES；Excel 读取/模板输入输出及图片原件输入也遵循同一配置，不再叠加旧的20MiB/12MiB输入硬限制。已有 .env 中显式的 FILE_MAX_BYTES 会覆盖新默认值，部署更新时应改为31457280并重启。像素、Office解压体积、转换文本/视觉请求大小和会话配额仍独立受限，30MiB上传成功不表示所有复杂文件都能完成解析。
 
 Office ZIP 在解压前检查目录、声明尺寸、条目和路径，解压后检查实际尺寸、XML/实体和实际单元格、合并区域规模。最终仍有工作进程内存与时间限制。图片校验后，发给视觉模型的图像最多约四百万像素、最长边 2048；region 可保留局部小字。两种内存预算不同，缩小输出不等于解析只占用该部分内存。
 

@@ -5,9 +5,7 @@ import { analyzeVisualContent } from "../vision-bridge.js";
 import type { ResolvedAgentSettings } from "../bridge.js";
 import { redactSecrets } from "../bridge.js";
 import type { RuntimeTool } from "../bridge.js";
-import { isRecord, readString, resolveReadablePath, SUPPORTED_IMAGE_EXTENSIONS } from "../workspace.js";
-
-export const MAX_VISUAL_IMAGE_BYTES = 12 * 1024 * 1024;
+import { isRecord, readString, resolveReadablePath, SUPPORTED_IMAGE_EXTENSIONS, workerScope } from "../workspace.js";
 
 export const MAX_VISUAL_IMAGE_PIXELS = 20_000_000;
 
@@ -58,8 +56,8 @@ export const readImageTool: RuntimeTool = {
     const stat = await fs.stat(resolved.absolutePath);
     if (!stat.isFile()) throw new Error("Image path must be a regular file.");
     if (stat.size === 0) throw new Error("Image file is empty.");
-    if (stat.size > MAX_VISUAL_IMAGE_BYTES) {
-      throw new Error("Image exceeds the 12 MiB visual-analysis payload limit.");
+    if (stat.size > workerScope().config.maxFileBytes) {
+      throw new Error("Image exceeds the configured input file size limit.");
     }
 
     const buffer = await fs.readFile(resolved.absolutePath);

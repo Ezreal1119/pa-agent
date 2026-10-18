@@ -10,9 +10,8 @@ import { inferSheetNamesFromMarkdown, readExcelMarkdown } from "./excelMarkitdow
 import { createExcelImageReadContext, type ExcelImageReadContext } from "./excelImageReader.js";
 import { serializeWorksheetRows, type ExcelReadBounds, type SerializedWorksheetRow, worksheetContentBounds } from "./excelReadSerialization.js";
 import { findWorksheetByName } from "./excelWorksheetNames.js";
-import { resolveReadablePath, type WorkspaceResolvedPath } from "../workspace.js";
+import { resolveReadablePath, workerScope, type WorkspaceResolvedPath } from "../workspace.js";
 
-const MAX_XLSX_BYTES = 20 * 1024 * 1024;
 
 const MAX_SHEETS = 50;
 
@@ -115,8 +114,8 @@ export async function getExcelReadCacheEntry(requestedPath: string): Promise<Exc
   }
   const stat = await fs.stat(resolved.absolutePath);
   if (!stat.isFile()) throw new Error("Excel path must be a regular file.");
-  if (stat.size === 0 || stat.size > MAX_XLSX_BYTES) {
-    throw new Error("Excel file must be non-empty and no larger than 20 MiB.");
+  if (stat.size === 0 || stat.size > workerScope().config.maxFileBytes) {
+    throw new Error("Excel file must be non-empty and within the configured file size limit.");
   }
 
   pruneExpiredEntries();

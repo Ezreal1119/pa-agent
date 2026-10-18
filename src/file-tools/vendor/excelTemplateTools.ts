@@ -4,9 +4,8 @@ import path from "node:path";
 import { RuntimeTool } from "../bridge.js";
 import { patchWorkbookTemplateOoxml, type TemplatePatchOperation } from "./excelTemplateOoxml.js";
 import { invalidateExcelReadCache } from "./excelReadCache.js";
-import { isRecord, readString, resolveWorkspaceDestinationPath, resolveReadablePath, safePathParameterDescription } from "../workspace.js";
+import { isRecord, readString, resolveWorkspaceDestinationPath, resolveReadablePath, safePathParameterDescription, workerScope } from "../workspace.js";
 
-const MAX_XLSX_BYTES = 20 * 1024 * 1024;
 
 const MAX_TEMPLATE_OPERATIONS = 100;
 
@@ -69,8 +68,8 @@ export const patchWorkbookTemplateTool: RuntimeTool = {
     const destination = await requireNewWorkbookDestination(readString(input, "outputPath"));
     const operations = readOperations(input);
     const result = await patchWorkbookTemplateOoxml(await fs.readFile(source.absolutePath), operations);
-    if (result.buffer.byteLength > MAX_XLSX_BYTES) {
-      throw new Error("Generated Excel file exceeds the 20 MiB limit.");
+    if (result.buffer.byteLength > workerScope().config.maxFileBytes) {
+      throw new Error("Generated Excel file exceeds the configured file size limit.");
     }
     await fs.writeFile(destination.absolutePath, result.buffer, { flag: "wx" });
     invalidateExcelReadCache(destination.absolutePath);
@@ -94,7 +93,7 @@ async function requireWorkbookSource(requestedPath: string) {
   assertXlsxPath(resolved.absolutePath);
   const stat = await fs.stat(resolved.absolutePath);
   if (!stat.isFile()) throw new Error("Excel template path must be a file.");
-  if (stat.size > MAX_XLSX_BYTES) throw new Error("Excel template exceeds the 20 MiB limit.");
+  if (stat.size > workerScope().config.maxFileBytes) throw new Error("Excel template exceeds the configured file size limit.");
   return resolved;
 }
 

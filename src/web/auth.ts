@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const COOKIE = "pe_admin_session";
-const SESSION_MS = 12 * 60 * 60 * 1000;
+const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const FAILURE_WINDOW_MS = 60_000;
 const digest = (value: string) => createHash("sha256").update(value).digest();
 

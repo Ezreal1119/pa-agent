@@ -19,11 +19,11 @@ function reply(res,tool,text='完成测试') {
  for(const [i,delta] of chunks.entries())res.write(`data: ${JSON.stringify({id:'fixture',model:'fixture',object:'chat.completion.chunk',created:1,choices:[{index:0,delta,finish_reason:i===chunks.length-1?(tool?'tool_calls':'stop'):null}]})}\n\n`);
  res.end('data: [DONE]\n\n');
 }
-async function setup(t,enabled=true) {
+async function setup(t,enabled=true,fileOptions={}) {
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'expert-web-files-'));const dataDir=path.join(root,'.data');await fixtures(path.join(root,'fixtures'));
  for(const name of ['ums-expert','urovo-product-expert']) { await fs.mkdir(path.join(dataDir,name),{recursive:true});await fs.writeFile(path.join(dataDir,name,'SKILL.md'),'BUSINESS SKILL');await fs.writeFile(path.join(dataDir,name,'MEMORY.md'),'BUSINESS MEMORY'); }
  let handler;const payloads=[];const model=createServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);payloads.push(body);if(handler)return handler(body,res);reply(res);});model.listen(0,'127.0.0.1');await once(model,'listening');
- const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},model:{apiKey:'MAIN_TEST_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'},fileTools:{enabled}};
+ const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},model:{apiKey:'MAIN_TEST_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'},fileTools:{enabled,...fileOptions}};
  let app,url,token,cookie;
  async function start(){app=await createWebServer(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');url=`http://127.0.0.1:${app.server.address().port}`;token=(await(await fetch(url+'/api/auth/status')).json()).token;const login=await fetch(url+'/api/auth/login',{method:'POST',headers:{'content-type':'application/json','x-local-token':token},body:JSON.stringify(options.admin)});cookie=login.headers.get('set-cookie').split(';')[0];}
  await start();t.after(async()=>{await app.close();model.closeAllConnections();await new Promise(r=>model.close(r));await fs.rm(root,{recursive:true,force:true});});
@@ -33,6 +33,20 @@ async function setup(t,enabled=true) {
  return {root,dataDir,payloads,request,create,upload,setHandler(fn){handler=fn;},async restart(enabled=options.fileTools.enabled){await app.close();options.fileTools.enabled=enabled;await start();}};
 }
 const frames=text=>text.split('\n\n').flatMap(frame=>{const event=frame.match(/^event: (.+)$/m)?.[1];const data=frame.match(/^data: (.+)$/m)?.[1];return event&&data?[{event,data:JSON.parse(data)}]:[];});
+test('30 MiB upload limit is advertised, accepts the exact boundary, and rejects one extra byte', {timeout:30000},async t=>{
+ const limit=30*1024*1024;assert.equal(fileToolConfig('/tmp/limit-default',{},{}).maxFileBytes,limit);
+ const f=await setup(t,true,{maxFileBytes:limit});const id=await f.create();
+ const status=await(await f.request('/api/status')).json();assert.equal(status.fileTools.maxFileBytes,limit);
+ const data=Buffer.alloc(limit,0x41);
+ const accepted=await f.request(`/api/sessions/${id}/files?name=boundary.pdf`,'POST',data,{'content-type':'application/octet-stream'});
+ assert.equal(accepted.status,201,await accepted.clone().text());assert.equal((await accepted.json()).file.bytes,limit);
+ const rejected=await f.request(`/api/sessions/${id}/files?name=oversized.pdf`,'POST',Buffer.alloc(limit+1),{'content-type':'application/octet-stream'});
+ assert.equal(rejected.status,413);
+ const listed=await(await f.request(`/api/sessions/${id}/files`)).json();assert.equal(listed.files.length,1);
+ const store=new FileStore(fileToolConfig(f.dataDir,{maxFileBytes:limit}));
+ await assert.rejects(store.upload(id,'stream-overflow.pdf',[Buffer.alloc(limit),Buffer.from([1])]),/size/);
+ assert.equal((await store.list(id)).length,1);
+});
 test('Web binary upload, authenticated download, ownership, restart and session deletion', {timeout:30000}, async t=>{
  const f=await setup(t);const a=await f.create();const b=await f.create();const file=await f.upload(a,'image.png');
  const original=await fs.readFile(path.join(f.root,'fixtures/image.png'));const download=await f.request(`/api/sessions/${a}/files/${file.id}`);assert.equal(download.status,200);assert.deepEqual(Buffer.from(await download.arrayBuffer()),original);assert.match(download.headers.get('content-disposition'),/attachment/);
