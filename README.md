@@ -138,7 +138,7 @@ npm run web
 
 Open `http://127.0.0.1:4321`. The server only listens on the loopback address. Set `WEB_PORT` to choose another local port. The interface runs the existing Core directly, with the same default skills, memory snapshots, five-round context, and 30-day session retention.
 
-Before opening the workspace, set both `ADMIN_ACCOUNT` and `ADMIN_PASSWORD` in your Git-ignored `.env` (or process environment), then restart the Web server. There are no default credentials. Missing or partial configuration shows setup instructions on the login page and leaves Agent APIs inaccessible. The administrator account is separate from the model API key. Credentials are loaded at startup and never returned to the frontend, written to conversation history, or saved in browser storage.
+Before opening the workspace, set both `ADMIN_ACCOUNT` and `ADMIN_PASSWORD` in your Git-ignored `.env` (or process environment), then restart the Web server. There are no default credentials. Missing or partial configuration shows setup instructions on the login page and leaves browser Agent APIs inaccessible. The administrator account is separate from the model API key. Credentials are loaded at startup and never returned to the frontend, written to conversation history, or saved in browser storage.
 
 Login uses an opaque HttpOnly, SameSite=Strict cookie with a fixed seven-day lifetime (604800 seconds from login; ordinary requests do not extend it). Login records are bounded and held in server memory, so restarting the server invalidates existing logins. Use **退出登录** to invalidate the current cookie on the server; the UI disables logout while its run is active. Ten failed login attempts from the same address within one minute temporarily block further attempts. This login protects the existing local interface; it does not enable public hosting or add multiple administrator roles.
 
@@ -212,3 +212,11 @@ Keep development test logs, screenshots, fixtures, validation reports and tempor
 
 - `npm test` (or `npm run test`): build and run the complete test suite.
 - `npm run test:office-xml`: build and run the Office XML encoding regression tests in production/native-worker mode. This command supports the project’s macOS/Ubuntu shell environments; it does not edit `.env`.
+
+## WeCom on the VPS
+
+An optional independent long-connection bridge in `integrations/wecom-bridge/` reuses the existing Agent, skills, memory and file workers through a scoped loopback machine API. Single chats isolate users; group members share one session per group. PDF/DOCX/PPTX/XLSX/images use the existing attachment pipeline, and validated Excel outputs are delivered from structured backend output metadata, without parsing answer paths.
+
+Set `WECOM_ENABLED=true` and the Bot ID/Secret plus a dedicated `WECOM_API_TOKEN` in `.env`. The new `/api/wecom/...` API accepts only that credential and owned WeCom session IDs, without browser cookies or access to Agent settings. Browser routes retain their login and CSRF requirements. Both HTTP entry points share `AGENT_MAX_CONCURRENT_RUNS` (default 2) and a bounded waiting queue (default 8); file workers remain serial. Library/CLI callers are not governed by this HTTP gate.
+
+Run `npm run test:wecom` for isolated transport/API and real-file-worker integration tests. Run `npm run wecom:bridge` for foreground operation after configuration. For VPS setup, install the two supplied service units and manage `product-expert.service` and `wecom-bridge.service` independently. Neither unit starts, stops or restarts the other. Full configuration, root deployment commands, recovery limits and real-bot acceptance steps: [WeCom bridge](docs/wecom-bridge.md).

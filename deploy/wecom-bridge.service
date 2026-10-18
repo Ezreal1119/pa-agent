@@ -1,0 +1,44 @@
+[Unit]
+Description=Product Expert WeCom Bridge
+Wants=network-online.target
+After=network-online.target product-expert.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Matches the user's root deployment. The Agent's existing User override remains independent.
+User=root
+Group=root
+WorkingDirectory=/opt/ProductExpertCloud
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/opt/ProductExpertCloud/.data/agent
+ExecStart=/usr/bin/env node --max-old-space-size=192 /opt/ProductExpertCloud/integrations/wecom-bridge/index.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+LimitCORE=0
+MemoryAccounting=yes
+MemoryHigh=220M
+MemoryMax=300M
+MemorySwapMax=128M
+CPUQuota=50%
+TasksMax=32
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/ProductExpertCloud/.data/wecom
+
+[Install]
+WantedBy=multi-user.target

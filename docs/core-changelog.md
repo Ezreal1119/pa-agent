@@ -38,6 +38,8 @@
 
 - Web 登录固定有效期改为7天，Cookie与服务端过期时间一致，重启仍清空登录；见2026-10-18登录有效期记录。
 
+- 新增可选企微长连接 Bridge、专用本机 API 和 Web/企微共用的有界并发队列；复用现有文件工具并结构化回传生成文件，systemd 使用 product-expert 与 wecom-bridge 两个独立服务分别管理。详见 2026-10-18 企业微信接入及独立启停修正记录。
+
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
 原因：用户要求产品专家和 UMS 技能默认生效，每个 run 强制加载技能与对应 MEMORY，并限制聊天上下文和磁盘历史生命周期。
@@ -277,3 +279,27 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 行为/兼容性影响：SESSION_MS改为7×24小时，浏览器Cookie Max-Age=604800秒、服务端内存令牌过期统一由同一常量计算。为登录时起算的固定有效期，普通访问不续期；保留HttpOnly/SameSite、退出注销、限流及128会话上限。登录记录仍仅在内存，重启或dispose继续使登录失效，不新增凭据或登录持久化。.env无需修改，更新重启后重新登录获得新有效期。README同步。
 
 验证：构建及33项认证/Web定向测试通过，模拟时间验证12小时仍有效、7天前1ms有效、满7天失效，并校验Cookie=604800和HTTP登录/注销/限流/重启行为。日志.data/debug/login-seven-days/tests.log。没有真实模型、业务数据或VPS操作，未提交推送；同工作区既有30MiB上传改动保留。
+
+## 2026-10-18 — 企业微信长连接 Bridge 与 HTTP 共用并发限制
+
+原因：用户要求将 VPS 的 Product Agent 接入企业微信，支持多人同时问答、读取 PDF/Word/PPT/Excel 和图片、填写标书并回传文件；单聊按用户隔离、群聊全群共享，日常由主服务统一启停。
+
+行为：新增独立 `integrations/wecom-bridge/`，使用精确版本 `@wecom/aibot-node-sdk@1.0.7` 的 Bot ID/Secret 长连接认证、重连和媒体上传，官方 SDK 解密配合有界下载。支持单/多机器人命名空间；单聊每用户、群聊每群复用 session，按会话顺序调度。先上传后提问时，将三十分钟内的待处理附件与该上传者下一条明确问题绑定；多份文件要求指明名称或全部。文件工具及技能/记忆均复用现有后端，不给企微增加 Bash 或任意文件写入权限。发送“新建对话”或 `/new` 重置当前映射，群里作用于整个群。
+
+接口/配置：增加受 `WECOM_API_TOKEN` 保护的本机 `/api/wecom/status` 及有限 session/run/stop/files/rename/delete 接口；与浏览器 Cookie/CSRF 分离，校验 Host/Origin，仅允许操作后端登记的企微会话，不能访问 Web 专属会话或 Agent 设置。原浏览器认证保持不变。Web 和企微 HTTP run 共用默认 2 个运行、8 个等待的 Gate，可配置 `AGENT_MAX_CONCURRENT_RUNS` / `AGENT_RUN_QUEUE_LIMIT`；取消等待不调用模型，队列满返回 429，同会话仍拒绝重入。原库/CLI 调用不受 HTTP Gate 限制。计时从取得运行名额开始，不包含此前排队时间。
+
+文件/持久化：PDF/DOCX/PPTX/XLSX/图片走现有受控文件目录与工具；单文件遵循 FILE_MAX_BYTES 且企微侧最多30MiB、单条20个/合计60MiB，批次下载全局串行，暂存到 `.data/wecom/inbox/`。输出直接消费 SSE `output` 及本轮结构化记录，无需模型提及文件名或 fileId；长回答按 UTF-8 字节拆分，回调回复失效时尝试主动投递。映射、去重、任务和投递进度以原子 JSON 保存于 `.data/wecom/`，完成后移除桥接正文/暂存件；后端会话附件继续按手动删除/闲置30天清理。完成去重记录最多七天/一万条，活动任务不截断。重启恢复排队与投递；未知运行先查原 run/产物，不重复执行可能有副作用的请求。消息投递不承诺崩溃窗口下严格 exactly-once，平台离线消息补发与权限需真实验收。
+
+部署/兼容性：`WECOM_ENABLED=false` 为默认，不需要企微凭据即可继续运行 Web；缺省 API 凭据不开放 machine 接口。新增 `product-expert-wecom.service`（按用户当前 root 部署选择），主 unit 的 Wants 与桥接 unit 的 PartOf/After 关联启动/停止/重启；需首次复制两个 unit、创建 `.data/wecom` 并 daemon-reload。Bridge 单独限制192MiB Node heap / 300MiB总内存，主服务原上限不变。未修改本机 `.env`、技能、业务记忆或参考 patrick-agent；密钥、运行数据和日志继续 Git 忽略。详细配置和 VPS 步骤见 `docs/wecom-bridge.md`。
+
+验证：本机构建及完整回归100/100通过（含19项新增企微相关测试）；新增本机模拟企微/模型测试验证身份隔离、群共享、跨会话并发/同会话串行、HTTP 权限/重启归属、Web 与企微共用队列、等待停止、附件绑定、超量拒绝、加密文件解密/有界下载、UTF-8/SSE、消息去重、暂存/投递恢复与无副作用重跑。端到端通过真实 Agent SDK 和文件子进程读取 PDF/DOCX/PPTX、读取并填写真实 XLSX，再校验回传文件的目标值、样式、公式及原件未改；模型最终文字未包含文件名仍能回传。没有连接真实企微、调用真实供应商模型或在 VPS 安装/运行 unit，未宣称 Ubuntu 实测或真实投递已验收。
+
+验证补充：最终 `npm test` 100/100 通过，约15.3秒；`WECOM_ENABLED=false npm run wecom:bridge` 冒烟正常退出，最终 diff 检查通过。Linux 锁恢复使用 boot ID/进程开始时间识别 PID 复用；该分支留有 Linux 条件测试，但本机 macOS 不算作 Linux 实测。
+
+## 2026-10-18 — 修正为 Agent 与企微 Bridge 独立启停
+
+原因：用户明确改为分别管理 product-expert 与 wecom-bridge，不再沿用上一条历史记录中的主服务联动方案。
+
+行为/兼容性：Bridge unit 更名为 `deploy/wecom-bridge.service`，移除其 Requires/PartOf 主服务依赖，主 unit 移除对 Bridge 的 Wants。保留 After 仅用于同时启动时排序，Bridge 增加自己的 WantedBy=multi-user.target，可独立 enable/start/stop/restart。停止任一服务不会通过 systemd 启停另一个；Agent 不运行时 Bridge 无法调用其问答 API。WECOM_API_TOKEN 仍用于独立于 Web Cookie 的本机 API 鉴权，未取消或复用企微 Secret。README 和企微部署说明同步改为独立管理，并说明旧 unit 的迁移。
+
+验证：本轮只涉及 unit 文件名/依赖与文档，检查 unit 内容、配置引用和 git diff 格式通过；未重复执行之前已通过的100项问答/文件测试，未在 VPS 实际安装或运行 systemd。此前历史记录保留，以上修正为当前最终行为。

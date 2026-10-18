@@ -14,6 +14,8 @@ import { getToolRuns, publicRunMetrics } from "./tool-calls.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
 import { WebAuth } from "./auth.js";
+import { BridgeAccess } from "./bridge-access.js";
+import { RunGate, boundedSetting } from "./run-gate.js";
 import { ExtraMemoryStore, EXTRA_MEMORY_SECTION } from "../agent/extra-memory.js";
 import { fileToolConfig, FILE_TOOL_NAMES, type FileToolOptions } from "../file-tools/config.js";
 import { generatedFiles } from "../file-tools/outputs.js";
@@ -27,8 +29,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
-type RecordState = { id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean };
-export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; }
+type RecordState = { id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
+export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; bridgeToken?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -56,6 +58,13 @@ export async function createWebServer(options: WebOptions = {}) {
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
   const auth = new WebAuth(adminAccount, adminPassword);
+  const bridgeToken = options.bridgeToken ?? process.env.WECOM_API_TOKEN ?? diskEnv.WECOM_API_TOKEN ?? "";
+  const bridge = new BridgeAccess(dataDir, bridgeToken);
+  await bridge.load();
+  const runGate = new RunGate(
+    boundedSetting(options.maxConcurrentRuns ?? process.env.AGENT_MAX_CONCURRENT_RUNS ?? diskEnv.AGENT_MAX_CONCURRENT_RUNS, 2, 1, 8, "AGENT_MAX_CONCURRENT_RUNS"),
+    boundedSetting(options.runQueueLimit ?? process.env.AGENT_RUN_QUEUE_LIMIT ?? diskEnv.AGENT_RUN_QUEUE_LIMIT, 8, 0, 100, "AGENT_RUN_QUEUE_LIMIT")
+  );
   const records = new Map<string, RecordState>();
   const deletedIds = new Set<string>();
   let runtime: AgentRuntime | undefined;
@@ -65,6 +74,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const configured = () => Boolean(settings.apiKey && settings.baseUrl && settings.modelId);
   const redact = (error: unknown) => {
     let message = error instanceof Error ? error.message : String(error);
+    if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
     if (adminPassword) message = message.split(adminPassword).join("[REDACTED]");
     if (fileConfig.vision.apiKey) message = message.split(fileConfig.vision.apiKey).join("[REDACTED]");
@@ -98,6 +108,7 @@ export async function createWebServer(options: WebOptions = {}) {
     const item = records.get(id);
     if (item?.running || item?.opening || item?.mutating) throw new Error("Session is busy; retry expiration later.");
     await fileStore.remove(id);
+    await bridge.remove(id);
     item?.session?.dispose(); records.delete(id);
   });
   await retention.cleanup(); retention.start();
@@ -244,14 +255,14 @@ export async function createWebServer(options: WebOptions = {}) {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(body));
   }
-  function validRequest(req: IncomingMessage) {
+  function validRequest(req: IncomingMessage, machine = false) {
     const port = (server.address() as import("node:net").AddressInfo).port;
     const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
     const host = req.headers.host;
     if (!host || !allowed.has(host)) throw new HttpError(403, "只允许通过本机地址访问。");
     if (req.headers.origin && req.headers.origin !== `http://${host}`) throw new HttpError(403, "不允许跨站请求。");
     if (req.headers["sec-fetch-site"] === "cross-site") throw new HttpError(403, "不允许跨站请求。");
-    if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers["x-local-token"] !== csrf) throw new HttpError(403, "页面已过期，请刷新后重试。");
+    if (!machine && !["GET", "HEAD"].includes(req.method ?? "") && req.headers["x-local-token"] !== csrf) throw new HttpError(403, "页面已过期，请刷新后重试。");
   }
   const server = http.createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -259,10 +270,25 @@ export async function createWebServer(options: WebOptions = {}) {
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
-      validRequest(req);
       const url = new URL(req.url ?? "/", "http://localhost");
       const method = req.method;
-      const authenticated = auth.authenticated(req);
+      const machine = url.pathname.startsWith("/api/wecom/");
+      validRequest(req, machine);
+      if (machine) {
+        if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "企微 API 凭据无效或未配置。");
+        const route = url.pathname.slice("/api/wecom".length);
+        const owned = route.match(/^\/sessions\/([\w-]+)(?:\/(run|stop|files)(?:\/([a-f0-9-]{36}))?)?$/);
+        const allowed = route === "/status" && method === "GET" || route === "/sessions" && method === "POST" || owned && (
+          !owned[2] && ["GET", "PATCH", "DELETE"].includes(method ?? "") ||
+          ["run", "stop"].includes(owned[2] ?? "") && method === "POST" && !owned[3] ||
+          owned[2] === "files" && (method === "GET" || method === "POST" && !owned[3])
+        );
+        if (!allowed) throw new HttpError(403, "企微 API 不支持此操作。");
+        if (owned && !bridge.owns(owned[1]!)) throw new HttpError(404, "企微会话不存在。");
+        url.pathname = `/api${route}`;
+        if (route === "/status") return json(res, 200, { configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
+      }
+      const authenticated = machine || auth.authenticated(req);
       if (method === "GET" && url.pathname === "/api/auth/status") return json(res, 200, { token: csrf, configured: auth.configured, authenticated });
       if (method === "POST" && url.pathname === "/api/auth/login") {
         if (!auth.configured) throw new HttpError(503, "请在 .env 配置 ADMIN_ACCOUNT 和 ADMIN_PASSWORD，重启服务后登录。");
@@ -311,6 +337,7 @@ export async function createWebServer(options: WebOptions = {}) {
           const session = await (await getRuntime()).createSession();
           const item: RecordState = { id: session.sessionId, session, running: false, title: "新对话", updated: new Date().toISOString() };
           records.set(item.id, item);
+          if (machine) await bridge.register(item.id);
           return json(res, 201, { id: item.id });
         } finally { openingSessions--; }
       }
@@ -382,6 +409,7 @@ export async function createWebServer(options: WebOptions = {}) {
             if (target?.exists) await fs.unlink(target.file);
             item.session?.dispose(); item.session = undefined;
             deletedIds.add(item.id); records.delete(item.id);
+            await bridge.remove(item.id);
             return json(res, 200, { ok: true, id: item.id });
           } finally { item.mutating = false; }
         }
@@ -391,13 +419,18 @@ export async function createWebServer(options: WebOptions = {}) {
           return json(res, 200, { id: item.id, title: item.title, messages: await publicMessages(session, item.activeRunId), rounds, contextRounds: Math.min(rounds, 5), running: item.running, context: item.context, runs: publicRunMetrics(session, item.activeRunId), files: await fileStore.list(item.id) });
         }
         if (method === "POST" && match[2] === "stop") {
-          if (item.running) { item.cancelled = true; await item.session?.abort(); }
+          if (item.running) { item.cancelled = true; item.cancelQueued?.(); await item.session?.abort(); }
           return json(res, 200, { ok: true });
         }
         if (method === "POST" && match[2] === "run") {
           if (item.running || configuring) throw new HttpError(409, "当前对话正在执行，请稍后或点击停止。");
           item.running = true; item.cancelled = false; item.context = undefined;
           let session: AgentSession;
+          let releaseRun: (() => void) | undefined;
+          const queuedAbort = new AbortController();
+          const cancelWaiting = () => queuedAbort.abort();
+          item.cancelQueued = cancelWaiting;
+          res.once("close", cancelWaiting);
           try {
             const body = await readBody(req);
             if (typeof body.text !== "string" || body.text.length > 12000) throw new HttpError(400, "请输入问题，最多 12000 个字符。");
@@ -415,6 +448,10 @@ export async function createWebServer(options: WebOptions = {}) {
             if (body.effort !== undefined && !isReasoningMode(body.effort)) throw new HttpError(400, "思考强度必须为 off、low、high 或 max。");
             if (!supportsEffort && body.effort !== undefined) throw new HttpError(400, "当前强度按钮仅适配 DeepSeek 模型，其他模型沿用供应商默认设置。");
             if (supportsEffort) effort = body.effort ?? agentSettings.effort;
+            try { releaseRun = await runGate.acquire(queuedAbort.signal); }
+            catch (error) { throw new HttpError(queuedAbort.signal.aborted ? 499 : 429, (error as Error).message); }
+            res.off("close", cancelWaiting);
+            item.cancelQueued = undefined;
             const acceptedAt = performance.now();
             const acceptedAtIso = new Date().toISOString();
             session = await getSession(item);
@@ -518,7 +555,7 @@ export async function createWebServer(options: WebOptions = {}) {
               }
             }
             return;
-          } finally { item.running = false; item.updated = new Date().toISOString(); }
+          } finally { res.off("close", cancelWaiting); item.cancelQueued = undefined; releaseRun?.(); item.running = false; item.updated = new Date().toISOString(); }
         }
       }
       const assets: Record<string, [string, string]> = {
@@ -542,7 +579,7 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
-    await Promise.allSettled([...records.values()].filter(r => r.running).map(r => r.session?.abort()));
+    await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
     auth.dispose(); retention.dispose();

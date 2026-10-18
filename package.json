@@ -20,11 +20,14 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:office-xml": "npm run build && NODE_ENV=production FILE_WORKER_IMAGE= node --test tests/office-xml-encoding.test.mjs",
-    "web": "npm run build && node dist/web/cli.js"
+    "web": "npm run build && node dist/web/cli.js",
+    "wecom:bridge": "node integrations/wecom-bridge/index.mjs",
+    "test:wecom": "npm run build && node --test tests/wecom-*.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@napi-rs/canvas": "1.0.2",
+    "@wecom/aibot-node-sdk": "1.0.7",
     "dompurify": "^3.4.17",
     "dotenv": "^17.2.2",
     "exceljs": "4.4.0",
