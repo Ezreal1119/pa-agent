@@ -30,6 +30,8 @@
 
 - Ubuntu production 不再强制 Docker：FILE_WORKER_IMAGE 为空使用原生任务子进程，显式镜像仍选容器；新增 /opt/ProductExpertCloud 的 systemd 模板与原生部署步骤。见 2026-10-18 VPS 原生部署记录。
 
+- Excel 模板写入正确区分自闭合空单元格/行，发布前独立验证行/单元格/样式及目标值完整性；失败不发布，详见 2026-10-18 Excel 空单元格写入修复。
+
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
 原因：用户要求产品专家和 UMS 技能默认生效，每个 run 强制加载技能与对应 MEMORY，并限制聊天上下文和磁盘历史生命周期。
@@ -219,3 +221,13 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 部署：增加 deploy/product-expert.service，普通 productexpert 账号、主进程256MiB堆；systemd 整组 MemoryHigh900M/MemoryMax1100M/Swap256M、CPU150%、Tasks96，OOM 整组结束并由 on-failure 重启。服务只开放 .data 写入，知识目录和转换环境只读，保留额外记忆/会话/附件写入；.env 由 dotenv 读取。新增 docs/vps-native-deploy.md 说明凭据、账号、安装、Host兼容SSH隧道及更新流程；.env.example/README/文件工具文档同步。历史“Linux生产必须容器”的记录仅描述当时版本，以本条为后续修正。
 
 验证：本机构建及67项完整测试通过；新增 production+空PATH+空镜像测试，实际创建Excel、验证输出内容、原件不变及公式拒绝，指标为process且没有容器峰值。测试日志在 .data/debug/vps-native-tests.log。另行 production 文件定向结果见 dev-history 记录。没有修改实际.env/知识/记忆，没有连接或改变VPS；未在Ubuntu24/systemd上执行本次unit，内存/只读mount/重启需用户VPS实测，不能把Mac子进程测试作为Linux隔离验收。未提交或推送。
+
+## 2026-10-18 — Excel 空单元格写入修复与发布前校验
+
+原因：VPS 真实模板在 F5:F33 填写及 F7 单格测试时，原工具把自闭合空单元格与后续单元格/行一起匹配，造成33行变5行/32行却仍返回成功。只读调查确认原表行号属性齐全，原附件SHA-256未变，模型“原表缺行号”的解释不成立。此前生成夹具没有覆盖行末带样式空单元格，本轮补齐。
+
+行为/兼容性影响：用先识别开标签、区分自闭合/成对标签的扫描替换单元格及行匹配；安全处理已有空行、缺失单元格/行、空sheetData和单双引号属性。新增独立 worksheet 校验，在写入后与最终ZIP序列化后核对 XML、坐标顺序/行归属、既有行属性、未修改单元格原始内容、目标最终值、样式/元数据、工作表布局及dimension覆盖。无法安全解析的省略坐标等结构明确拒绝；校验抛错发生在发布/登记之前，不返回ok:true或下载卡片。沿用原件/公式保护和未改ZIP部件摘要验证；不改变其他工具/Skill/记忆/session逻辑。旧坏输出保留历史，不自动覆盖，应从原件重新生成。
+
+部署说明纠正：补充知识检索必需的ripgrep和fd-find，避免Pi运行时下载等待。没有新增运行配置或依赖包。
+
+验证：本机构建及75项完整测试通过（含8项新增回归），git diff --check通过；覆盖行末空白、连续29行/双sheet37格、清空重填、插入空行/缺失行/空sheetData、单双引号、公式邻接及值/样式/行/布局破坏拦截，实际worker拒绝不支持结构且无输出/登记。仅下载VPS原附件与原两次工具参数的只读副本到.data/debug/excel-patch-fix，重放37格与1格原操作后工作表均保留33行，原件摘要一致。日志与输出全部Git忽略。此次新代码未在VPS执行，未调用真实模型、未修改VPS文件或本机业务知识/.env/记忆，也未提交推送；源patrick-agent/pi-patrick未修改。

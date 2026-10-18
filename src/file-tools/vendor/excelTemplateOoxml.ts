@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import JSZip from "jszip";
 import { XMLParser } from "fast-xml-parser";
 import { assertOoxmlIntegrity, inspectExcelPackage } from "./excelOoxml.js";
+import { assertWorksheetPatchIntegrity, worksheetAttributes, worksheetElements } from "./excelTemplateValidation.js";
 
 const MAX_TEMPLATE_PATCH_CELLS = 50_000;
 
@@ -69,10 +70,12 @@ export async function patchWorkbookTemplateOoxml(
   assertOoxmlIntegrity(sourceReport);
   const zip = await JSZip.loadAsync(source, { checkCRC32: true });
   const sourceDigests = await digestZipParts(zip);
+  const originalSheets = new Map<string, string>();
   const sheets = await loadWorkbookSheetParts(zip);
   const sheetByName = new Map(sheets.map((sheet) => [sheet.name, sheet]));
   const xmlBySheetPath = new Map<string, string>();
   const changedCells: TemplatePatchResult["changedCells"] = [];
+  const expectedBySheet = new Map<string, Map<string, TemplateCellValue>>();
   let requestedCells = 0;
 
   for (const operation of operations) {
@@ -83,6 +86,7 @@ export async function patchWorkbookTemplateOoxml(
     }
     const originalXml = xmlBySheetPath.get(sheet.path)
       ?? await requiredZipText(zip, sheet.path);
+    if (!originalSheets.has(sheet.path)) originalSheets.set(sheet.path, originalXml);
     if (/<(?:\w+:)?sheetProtection\b/u.test(originalXml)) {
       throw new Error(`Worksheet "${sheet.name}" is protected and cannot be patched safely.`);
     }
@@ -93,7 +97,10 @@ export async function patchWorkbookTemplateOoxml(
       throw new Error(`Template patch exceeds the ${MAX_TEMPLATE_PATCH_CELLS}-cell limit.`);
     }
     let sheetXml = originalXml;
+    const expected = expectedBySheet.get(sheet.path) ?? new Map<string, TemplateCellValue>();
+    expectedBySheet.set(sheet.path, expected);
     for (const edit of edits) {
+      expected.set(edit.coordinate.address, edit.value);
       const existing = findCellXml(sheetXml, edit.coordinate.address);
       if (existing && containsFormula(existing.xml) && !operation.allowReplaceFormula) {
         throw new Error(
@@ -117,6 +124,7 @@ export async function patchWorkbookTemplateOoxml(
   const allowedChangedParts = new Set<string>();
   for (const [sheetPath, xml] of xmlBySheetPath) {
     const before = await requiredZipText(zip, sheetPath);
+    assertWorksheetPatchIntegrity(before, xml, expectedBySheet.get(sheetPath)!);
     if (xml !== before) {
       zip.file(sheetPath, xml);
       allowedChangedParts.add(sheetPath);
@@ -135,6 +143,9 @@ export async function patchWorkbookTemplateOoxml(
   const outputReport = await inspectExcelPackage(output);
   assertOoxmlIntegrity(outputReport);
   const outputZip = await JSZip.loadAsync(output, { checkCRC32: true });
+  for (const [sheetPath, expected] of expectedBySheet) {
+    assertWorksheetPatchIntegrity(originalSheets.get(sheetPath)!, await requiredZipText(outputZip, sheetPath), expected);
+  }
   const outputDigests = await digestZipParts(outputZip);
   const changedParts = comparePartDigests(sourceDigests, outputDigests);
   const unexpected = changedParts.filter((part) => !allowedChangedParts.has(part));
@@ -262,15 +273,9 @@ function findCellXml(
   xml: string,
   address: string
 ): { index: number; xml: string; openingTag: string } | undefined {
-  const escaped = escapeRegExp(address);
-  const pattern = new RegExp(
-    `<c\\b(?=[^>]*\\br="${escaped}")[^>]*(?:\\/>|>[\\s\\S]*?<\\/c>)`,
-    "u"
-  );
-  const match = pattern.exec(xml);
-  if (!match || match.index === undefined) return undefined;
-  const openingTag = match[0].match(/^<c\b[^>]*>/u)?.[0] ?? match[0];
-  return { index: match.index, xml: match[0], openingTag };
+  const cell = worksheetElements(xml, "c").find(cell => worksheetAttributes(cell.openingTag).get("r") === address);
+  if (!cell) return undefined;
+  return { index: cell.index, xml: cell.xml, openingTag: cell.openingTag };
 }
 
 function buildCellXml(openingTagInput: string, address: string, value: TemplateCellValue): string {
@@ -311,40 +316,26 @@ function formulaResultXml(result: TemplateCellValue extends never ? never : unkn
 }
 
 function insertCellIntoWorksheet(xml: string, coordinate: CellCoordinate, cellXml: string): string {
-  const rowPattern = new RegExp(
-    `<row\\b(?=[^>]*\\br="${coordinate.row}")[^>]*(?:\\/>|>[\\s\\S]*?<\\/row>)`,
-    "u"
-  );
-  const rowMatch = rowPattern.exec(xml);
-  if (rowMatch && rowMatch.index !== undefined) {
-    const rowXml = rowMatch[0];
-    const rowOpening = rowXml.match(/^<row\b[^>]*>/u)?.[0] ?? rowXml;
-    if (rowXml.endsWith("/>")) {
-      const expanded = `${rowOpening.replace(/\/>$/u, ">")}${cellXml}</row>`;
-      return `${xml.slice(0, rowMatch.index)}${expanded}${xml.slice(rowMatch.index + rowXml.length)}`;
+  const row = worksheetElements(xml, "row").find(row => worksheetAttributes(row.openingTag).get("r") === String(coordinate.row));
+  if (row) {
+    if (row.selfClosing) {
+      const expanded = `${row.openingTag.replace(/\/>$/u, ">")}${cellXml}</row>`;
+      return `${xml.slice(0, row.index)}${expanded}${xml.slice(row.end)}`;
     }
-    const cells = [...rowXml.matchAll(/<c\b(?=[^>]*\br="([A-Z]{1,3}[1-9][0-9]*)")[^>]*(?:\/>|>[\s\S]*?<\/c>)/gu)];
-    const laterCell = cells.find((match) => parseCellAddress(match[1]!).column > coordinate.column);
-    const insertAt = laterCell?.index ?? rowXml.lastIndexOf("</row>");
-    const expanded = `${rowXml.slice(0, insertAt)}${cellXml}${rowXml.slice(insertAt)}`;
-    return `${xml.slice(0, rowMatch.index)}${expanded}${xml.slice(rowMatch.index + rowXml.length)}`;
+    const laterCell = worksheetElements(row.body, "c").find(cell => parseCellAddress(worksheetAttributes(cell.openingTag).get("r") ?? "").column > coordinate.column);
+    const insertAt = row.bodyIndex + (laterCell?.index ?? row.body.length);
+    return `${xml.slice(0, insertAt)}${cellXml}${xml.slice(insertAt)}`;
   }
-
-  const sheetData = /<sheetData\b[^>]*>([\s\S]*?)<\/sheetData>/u.exec(xml);
+  const sheetData = worksheetElements(xml, "sheetData")[0];
+  if (!sheetData) throw new Error("Worksheet XML does not contain sheetData.");
   const newRow = `<row r="${coordinate.row}">${cellXml}</row>`;
-  if (sheetData && sheetData.index !== undefined) {
-    const body = sheetData[1];
-    const rows = [...body!.matchAll(/<row\b(?=[^>]*\br="([1-9][0-9]*)")[^>]*(?:\/>|>[\s\S]*?<\/row>)/gu)];
-    const laterRow = rows.find((match) => Number(match[1]) > coordinate.row);
-    const bodyInsertAt = laterRow?.index ?? body!.length;
-    const replacement = `${body!.slice(0, bodyInsertAt)}${newRow}${body!.slice(bodyInsertAt)}`;
-    const bodyStart = sheetData.index + sheetData[0].indexOf(body!);
-    return `${xml.slice(0, bodyStart)}${replacement}${xml.slice(bodyStart + body!.length)}`;
+  if (sheetData.selfClosing) {
+    const expanded = `${sheetData.openingTag.replace(/\/>$/u, ">")}${newRow}</sheetData>`;
+    return `${xml.slice(0, sheetData.index)}${expanded}${xml.slice(sheetData.end)}`;
   }
-  if (/<sheetData\b[^>]*\/>/u.test(xml)) {
-    return xml.replace(/<sheetData\b[^>]*\/>/u, `<sheetData>${newRow}</sheetData>`);
-  }
-  throw new Error("Worksheet XML does not contain sheetData.");
+  const laterRow = worksheetElements(sheetData.body, "row").find(row => Number(worksheetAttributes(row.openingTag).get("r")) > coordinate.row);
+  const insertAt = sheetData.bodyIndex + (laterRow?.index ?? sheetData.body.length);
+  return `${xml.slice(0, insertAt)}${newRow}${xml.slice(insertAt)}`;
 }
 
 function expandWorksheetDimension(xml: string, coordinate: CellCoordinate): string {
@@ -574,13 +565,13 @@ function containsFormula(cellXml: string): boolean {
 }
 
 function setXmlAttribute(tag: string, name: string, value: string): string {
-  const pattern = new RegExp(`\\s${escapeRegExp(name)}="[^"]*"`, "u");
+  const pattern = new RegExp(`\\s${escapeRegExp(name)}\\s*=\\s*(["'])[\\s\\S]*?\\1`, "u");
   if (pattern.test(tag)) return tag.replace(pattern, ` ${name}="${escapeXmlAttribute(value)}"`);
   return tag.replace(/\/?>$/u, (ending) => ` ${name}="${escapeXmlAttribute(value)}"${ending}`);
 }
 
 function removeXmlAttribute(tag: string, name: string): string {
-  return tag.replace(new RegExp(`\\s${escapeRegExp(name)}="[^"]*"`, "gu"), "");
+  return tag.replace(new RegExp(`\\s${escapeRegExp(name)}\\s*=\\s*(["'])[\\s\\S]*?\\1`, "gu"), "");
 }
 
 function escapeXml(value: string): string {

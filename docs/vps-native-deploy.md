@@ -11,7 +11,7 @@
 ```sh
 cd /opt/ProductExpertCloud
 apt update
-apt install -y python3-venv ca-certificates libstdc++6 libatomic1
+apt install -y python3-venv ca-certificates libstdc++6 libatomic1 ripgrep fd-find
 # 文档中文渲染需要字体时：apt install -y fonts-noto-cjk
 npm ci
 npm run build
@@ -19,6 +19,8 @@ python3 -m venv /opt/ProductExpertCloud/.data/file-runtime
 .data/file-runtime/bin/python -m pip install --no-cache-dir -r requirements-files.txt
 .data/file-runtime/bin/markitdown --help
 ```
+
+`ripgrep` 和 `fd-find` 是 Pi 的 grep/find 检索依赖（Ubuntu 命令为 rg/fdfind，SDK 均可识别），需预装以避免运行时尝试下载而长时间等待。
 
 `.env` 填写 API_KEY、BASE_URL、MODEL_ID、ADMIN_ACCOUNT、ADMIN_PASSWORD，以及独立 VISION_LLM_*。路径：
 
