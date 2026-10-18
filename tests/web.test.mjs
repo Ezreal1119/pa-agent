@@ -328,7 +328,7 @@ test('new and restored agents advertise read-only retrieval plus memory tools an
   const newFile = path.join(f.root, 'should-not-exist.md');
   let called = false;
   f.setHandler((_req, res, payload) => {
-    assert.deepEqual(payload.tools.map(t => t.function.name).sort(), ['find', 'grep', 'ls', 'memory', 'read']);
+    assert.deepEqual(payload.tools.map(t => t.function.name).sort(), ['find', 'get_file_link_from_library', 'grep', 'ls', 'memory', 'read']);
     if (!called) {
       called = true;
       return replyChunks(res, [
@@ -577,7 +577,7 @@ test('single memory tool rejects obsolete tool names, unknown actions and missin
   const f=await fixture(t);const id=await createSession(f);let sent=false;
   const {ExtraMemoryStore}=await import('../dist/agent/extra-memory.js');const store=new ExtraMemoryStore(path.join(f.root,'.data'));const expected_revision=(await store.snapshot()).revision;
   f.setHandler((_req,res,payload)=>{
-    assert.deepEqual(payload.tools.map(t=>t.function.name).sort(),['find','grep','ls','memory','read']);
+    assert.deepEqual(payload.tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','read']);
     if(!sent){sent=true;return replyChunks(res,[
       {id:'old-memory-name',name:'memory_add',args:{content:'obsolete',expected_revision}},
       {id:'invalid-action',name:'memory',args:{action:'list',expected_revision}},
@@ -602,14 +602,14 @@ test('global effort and individual file toggles reach actual new and restored SD
  assert.equal((await(await f.request('/api/status')).json()).reasoning.default,'high');
  for(const id of [a,b]){
   const data=events(await(await f.request(`/api/sessions/${id}/run`,'POST',{text:'global preference'})).text()).find(e=>e.event==='done').data;assert.equal(data.failed,false);assert.equal(data.run.effort,'high');
-  const request=f.requests.at(-1);assert.equal(request.reasoning_effort,'high');assert.deepEqual(request.tools.map(t=>t.function.name).sort(),['find','grep','ls','memory','pdf_read','read']);
+  const request=f.requests.at(-1);assert.equal(request.reasoning_effort,'high');assert.deepEqual(request.tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','pdf_read','read']);
  }
  await f.restart();assert.deepEqual((await(await f.request('/api/agent-settings')).json()).settings,preference);
  await(await f.request(`/api/sessions/${a}/run`,'POST',{text:'restored preference'})).text();assert.equal(f.requests.at(-1).reasoning_effort,'high');assert.ok(f.requests.at(-1).tools.some(t=>t.function.name==='pdf_read'));assert.equal((await(await f.request(`/api/sessions/${a}`)).json()).messages.filter(m=>m.role==='user').length,3);
  preference.fileTools.enabled=false;assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
- await(await f.request(`/api/sessions/${a}/run`,'POST',{text:'off'})).text();assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),['find','grep','ls','memory','read']);
+ await(await f.request(`/api/sessions/${a}/run`,'POST',{text:'off'})).text();assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','read']);
  preference.fileTools.enabled=true;preference.fileTools.tools.pdf_read=false;preference.fileTools.tools.image_read=true;preference.effort='off';assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
- await(await f.request(`/api/sessions/${b}/run`,'POST',{text:'fast with image tool'})).text();assert.equal(f.requests.at(-1).thinking.type,'disabled');assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),['find','grep','image_read','ls','memory','read']);
+ await(await f.request(`/api/sessions/${b}/run`,'POST',{text:'fast with image tool'})).text();assert.equal(f.requests.at(-1).thinking.type,'disabled');assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','image_read','ls','memory','read']);
 });
 
 test('Agent settings enforce authentication, CSRF, schema and provider capability without accepting model fields', async t=>{

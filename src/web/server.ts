@@ -579,7 +579,7 @@ export async function createWebServer(options: WebOptions = {}) {
             send("start", { id: item.id, title: item.title, run: metric });
             try {
               if (item.cancelled) throw new Error("本次执行已停止。");
-              await session.prompt(text);
+              await session.prompt(body.text.trim() ? body.text : text);
               const last = session.messages.findLast(m => m.role === "assistant");
               if (item.cancelled || (last?.role === "assistant" && last.stopReason === "aborted")) {
                 metric.status = "stopped";

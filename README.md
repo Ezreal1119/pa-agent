@@ -87,7 +87,7 @@ Both skill templates instruct the model to omit sources, file paths, citation ma
 
 Versioned skill templates live in `resources/skills/`. Deploy the product template and its knowledge/memory under its data directory. Optionally deploy `ums-expert/SKILL.md` and `references/`; the SDK advertises its name, description and actual deployed file path, and the agent reads its body with `read` when the user asks a relevant UMS question. UMS has no dedicated MEMORY loading step, and missing UMS files do not block product runs. An existing UMS MEMORY is retained on disk but no longer automatically read or injected. Runtime edits use the `.data/` copies; templates do not automatically overwrite them. Use configured roots rather than Mac-specific absolute paths when deploying to Linux.
 
-Knowledge, business memories, session history, maintenance backups, and `.env` remain Git-ignored. Only code and generic skill templates belong in Git. New and resumed sessions enable Pi's built-in `read`, `grep`, `find`, and `ls`, plus one narrowly scoped `memory` tool (five tools total). Bash, PowerShell, general edit, and write are unavailable, even if the model requests an old tool from session history. Searches use tool parameters rather than shell commands/pipelines; `find` uses fd and `grep` uses ripgrep, installed or resolved by the SDK. This limits agent capabilities, but is not a filesystem sandbox: readable paths are not confined to the knowledge roots, and OS/container read-only mounts have not been added. Session/log persistence and retention continue to write from application code, independently of model tools.
+Knowledge, business memories, session history, maintenance backups, and `.env` remain Git-ignored. Only code and generic skill templates belong in Git. New and resumed sessions enable Pi's built-in `read`, `grep`, `find`, and `ls`, plus the narrowly scoped `memory` tool and `get_file_link_from_library` (six tools total). Bash, PowerShell, general edit, and write are unavailable, even if the model requests an old tool from session history. Searches use tool parameters rather than shell commands/pipelines; `find` uses fd and `grep` uses ripgrep, installed or resolved by the SDK. This limits agent capabilities, but is not a filesystem sandbox: readable paths are not confined to the knowledge roots, and OS/container read-only mounts have not been added. Session/log persistence and retention continue to write from application code, independently of model tools.
 
 ### Shared extra agent memory
 
@@ -236,3 +236,12 @@ Set `WECOM_NOTIFY_USER_ID` in the VPS `.env` to receive other users' incoming me
 
 
 企微联系人使用独立页面 `/wecom-contacts`（左侧入口），展示提问次数和输入/输出/总 Token。统计从升级后开始；群聊按本轮发送者归属，失败/停止也计一轮，文件单独上传不算。Token 只累加收到的 usage，缺失会标明；会话删除和30天清理不清零联系人累计。详情见 `docs/wecom-bridge.md` 的“联系人与用量统计”；本次升级需分别重启 Agent 与 Bridge。
+
+
+### 资料库文件 / 工具下载链接
+
+默认工具 `get_file_link_from_library` 用于“给我 DT50S 规格书”“获取 UMS 工具下载链接”等请求。工具将当前轮的完整用户正文作为 `prompt`，POST 到 `https://tool-files.patrick-shenzhen.org/api/ai-search`；原样发送，不改写、翻译或拼入记忆/知识/历史/附件内容。实际正文由后端绑定当前 session 的用户消息，不依赖模型正确复述参数。
+
+返回 API 的 JSON 检索结果（包含文件名、URL、匹配说明等），由 Agent 展示下载链接；未精确匹配时说明替代资料，不伪造链接，不自动下载文件或作为生成附件上传。此工具独立于六个二进制文件工具的开关，默认在 Web、企微和 Core 新建/恢复 session 中可用：基础工具6个，文件工具全部启用时12个。无需新增 `.env` 字段、密钥或依赖；请求超时60秒，支持停止取消，返回正文最多256KiB，重定向不跟随。
+
+本机回归仍使用 `npm test`。升级按原流程同步代码、build/test 并重启 `product-expert.service`，无需单独修改 Bridge 配置。

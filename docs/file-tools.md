@@ -11,7 +11,7 @@ VISION_LLM_API_KEY=your-key
 VISION_LLM_MODEL=your-vision-model
 ```
 
-首次默认由 FILE_TOOLS_ENABLED 决定（false），修改环境变量后重启。Web 的“Agent 设置”可直接保存总开关和六个独立开关，后续请求立即生效；保存到 `.data/web-agent-settings.json` 后优先于环境变量的初始开关，重启保留，不改写 .env。默认关闭时：只注册原有 read/grep/find/ls/memory，不加载 file-skills，不启动文件任务或独立文件缓存清理定时器。会话过期删除其附件的联动仍然生效。已有附件、输出及历史工具记录保留，已登录管理员仍可下载历史附件。上传入口在关闭时隐藏，上传 API 返回 409。关闭并恢复旧 session 仍使用原五个工具。
+首次默认由 FILE_TOOLS_ENABLED 决定（false），修改环境变量后重启。Web 的“Agent 设置”可直接保存总开关和六个独立开关，后续请求立即生效；保存到 `.data/web-agent-settings.json` 后优先于环境变量的初始开关，重启保留，不改写 .env。默认关闭时：只注册基础 read/grep/find/ls/memory/get_file_link_from_library，不加载 file-skills，不启动文件任务或独立文件缓存清理定时器。会话过期删除其附件的联动仍然生效。已有附件、输出及历史工具记录保留，已登录管理员仍可下载历史附件。上传入口在关闭时隐藏，上传 API 返回 409。关闭并恢复旧 session 仍使用基础六个工具。
 
 六项全部启用时共 11 个工具，部分启用为原五项加所选项。独立开关同步限制 SDK 工具注册和直接执行，关闭的文件 Skill 不再自动提供；总开关关闭时保留各项选择，以便下次启用。默认产品 Skill、产品记忆与额外记忆注入（UMS 为按需普通 Skill，无专属记忆加载）、五轮窗口、SDK JSONL、会话重命名/删除和管理员登录沿用现有机制。新增文件 Skill 位于 resources/file-skills，按需读取，无需对应 MEMORY。所有文件 Skill 遵守默认不展示来源的回答规则。
 

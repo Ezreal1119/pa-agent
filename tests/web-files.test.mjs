@@ -70,15 +70,15 @@ test('enabled SDK file tools read and patch attachments, retain business injecti
  mode='patch';const patch=frames(await(await f.request(`/api/sessions/${id}/run`,'POST',{text:'把B2改成77另存'})).text()).find(x=>x.event==='done').data;assert.equal(patch.failed,false);assert.equal(patch.files.filter(f=>f.direction==='outputs').length,1);assert.equal(patch.messages.filter(m=>m.role==='assistant').at(-1).outputs.length,1);const output=patch.files.find(f=>f.direction==='outputs');assert.equal((await f.request(`/api/sessions/${id}/files/${output.id}`)).status,200);
  assert.ok(!JSON.stringify(f.payloads).includes('data:image/'));
  await f.restart(false);
- f.setHandler((body,res)=>{assert.deepEqual(body.tools.map(t=>t.function.name).sort(),['find','grep','ls','memory','read']);reply(res);});
+ f.setHandler((body,res)=>{assert.deepEqual(body.tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','read']);reply(res);});
  const restored=frames(await(await f.request(`/api/sessions/${id}/run`,'POST',{text:'关闭文件模块后继续原会话'})).text()).find(x=>x.event==='done').data;assert.equal(restored.failed,false);
  assert.equal((await f.request(`/api/sessions/${id}/files/${output.id}`)).status,200);
  const oldTools=await(await f.request(`/api/sessions/${id}/runs/${done.run.id}/tools`)).json();assert.equal(oldTools.calls[0].name,'excel_read');
  const historical=await(await f.request(`/api/sessions/${id}`)).json();assert.equal(historical.messages.flatMap(m=>m.outputs||[])[0].id,output.id);
 });
-test('disabled switch preserves exactly five tools and omits file skills and processing', {timeout:30000}, async t=>{
+test('disabled switch preserves six base tools and omits file skills and processing', {timeout:30000}, async t=>{
  const f=await setup(t,false);const id=await f.create();
- f.setHandler((body,res)=>{assert.deepEqual(body.tools.map(t=>t.function.name).sort(),['find','grep','ls','memory','read']);assert.ok(!JSON.stringify(body.messages).includes('file-skills'));reply(res);});
+ f.setHandler((body,res)=>{assert.deepEqual(body.tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','read']);assert.ok(!JSON.stringify(body.messages).includes('file-skills'));reply(res);});
  const status=await(await f.request('/api/status')).json();assert.equal(status.fileTools.enabled,false);assert.deepEqual(status.fileTools.tools,[]);
  const result=frames(await(await f.request(`/api/sessions/${id}/run`,'POST',{text:'普通问答'})).text()).find(f=>f.event==='done').data;assert.equal(result.failed,false);
  const original=await fs.readFile(path.join(f.root,'fixtures/image.png'));assert.equal((await f.request(`/api/sessions/${id}/files?name=image.png`,'POST',original,{'content-type':'application/octet-stream'})).status,409);

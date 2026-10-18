@@ -20,6 +20,7 @@ import { SessionRetention } from "./retention.js";
 import { installSessionPolicy } from "./session-policy.js";
 import { isDeepSeekModel } from "./reasoning.js";
 import { createMemoryTool, MEMORY_TOOL_NAME } from "../tools/memory.js";
+import { createLibraryLinkTool, LIBRARY_LINK_TOOL_NAME } from "../tools/library-link.js";
 import { registerGeneratedFile } from "../file-tools/outputs.js";
 import { FileTools } from "../file-tools/index.js";
 import { installMessageAttachments, messageAttachments } from "./message-attachments.js";
@@ -210,11 +211,18 @@ export class AgentRuntime {
     // Loads the configured resources from disk.
     await resourceLoader.reload();
 
+    let boundSession: AgentSession | undefined;
+    const libraryLinks = createLibraryLinkTool({ getPrompt: () => {
+      const message = boundSession?.messages.findLast(message => message.role === "user");
+      if (!message) return undefined;
+      return typeof message.content === "string" ? message.content : message.content.filter(block => block.type === "text").map(block => block.text).join("");
+    } });
+
     // Gives the model, resources, and session manager to Agent Core to create the session.
     // Composition of the Prompts: System + User&Assistant... + Tools
     // 1. System: systemPrompt(system.md) + appendSystemPrompt(appendSystemPrompt) + AGENTS.md(contextFile) + SKILLS_LIST + CWD
     // 2. User&Assistant...: User -> Assistant(tool_calling_results + final_llm_response) -> User -> ...
-    // 3. Four read-only tools plus one fixed-file memory tool with three actions.
+    // 3. Four read-only tools, fixed-file memory, and the library link search tool.
     const { session } = await createAgentSession({
       cwd: this.config.cwd,
       agentDir: this.config.agentDir,
@@ -225,12 +233,13 @@ export class AgentRuntime {
       settingsManager,
       // No shell or general file mutation tools, including in resumed sessions.
       // The memory tool can only mutate memory/MEMORY.md; read paths are not sandboxed.
-      tools: ["read", "grep", "find", "ls", MEMORY_TOOL_NAME, ...(this.files ? this.config.fileTools.tools : [])],
-      customTools: [createMemoryTool(this.config.dataDir), ...(this.files?.tools(sessionManager.getSessionId(), (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file)) ?? [])],
+      tools: ["read", "grep", "find", "ls", MEMORY_TOOL_NAME, LIBRARY_LINK_TOOL_NAME, ...(this.files ? this.config.fileTools.tools : [])],
+      customTools: [createMemoryTool(this.config.dataDir), libraryLinks, ...(this.files?.tools(sessionManager.getSessionId(), (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file)) ?? [])],
       // Uses the SDK's default reasoning level, clamped when the model supports less.
       thinkingLevel: "medium",
     });
 
+    boundSession = session;
     try {
       await installSessionPolicy(session, this.config.dataDir, this.retention);
       installMessageAttachments(session);
