@@ -31,7 +31,7 @@ export class WebAuth {
     const failure = this.failures.get(req.socket.remoteAddress ?? "local");
     return failure && failure.count >= 10 ? Math.max(1, Math.ceil((failure.until - this.now()) / 1000)) : 0;
   }
-  login(req: IncomingMessage, res: ServerResponse, account: unknown, password: unknown): boolean {
+  login(req: IncomingMessage, res: ServerResponse, account: unknown, password: unknown, secure = false): boolean {
     // Hash to equal-length buffers and compare both fields without early account rejection.
     const sameAccount = timingSafeEqual(digest(typeof account === "string" ? account : ""), digest(this.account));
     const samePassword = timingSafeEqual(digest(typeof password === "string" ? password : ""), digest(this.password));
@@ -48,13 +48,13 @@ export class WebAuth {
     while (this.sessions.size >= 128) this.sessions.delete(this.sessions.keys().next().value!);
     const token = randomBytes(32).toString("base64url");
     this.sessions.set(digest(token).toString("hex"), this.now() + SESSION_MS);
-    res.setHeader("Set-Cookie", `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MS / 1000}`);
+    res.setHeader("Set-Cookie", `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MS / 1000}${secure ? "; Secure" : ""}`);
     return true;
   }
-  logout(req: IncomingMessage, res: ServerResponse) {
+  logout(req: IncomingMessage, res: ServerResponse, secure = false) {
     const token = this.cookie(req);
     if (token) this.sessions.delete(digest(token).toString("hex"));
-    res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+    res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? "; Secure" : ""}`);
   }
   dispose() { this.sessions.clear(); this.failures.clear(); }
 }

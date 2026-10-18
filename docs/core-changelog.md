@@ -40,6 +40,8 @@
 
 - 新增可选企微长连接 Bridge、专用本机 API 和 Web/企微共用的有界并发队列；复用现有文件工具并结构化回传生成文件，systemd 使用 product-expert 与 wecom-bridge 两个独立服务分别管理。详见 2026-10-18 企业微信接入及独立启停修正记录。
 
+- Web 新增 WEB_PUBLIC_URL 显式 HTTPS 域名来源配置，支持反代登录并保留本机入口、登录/CSRF 与 Secure Cookie。见 2026-10-19 HTTPS 域名登录修复记录。
+
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
 原因：用户要求产品专家和 UMS 技能默认生效，每个 run 强制加载技能与对应 MEMORY，并限制聊天上下文和磁盘历史生命周期。
@@ -303,3 +305,15 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 行为/兼容性：Bridge unit 更名为 `deploy/wecom-bridge.service`，移除其 Requires/PartOf 主服务依赖，主 unit 移除对 Bridge 的 Wants。保留 After 仅用于同时启动时排序，Bridge 增加自己的 WantedBy=multi-user.target，可独立 enable/start/stop/restart。停止任一服务不会通过 systemd 启停另一个；Agent 不运行时 Bridge 无法调用其问答 API。WECOM_API_TOKEN 仍用于独立于 Web Cookie 的本机 API 鉴权，未取消或复用企微 Secret。README 和企微部署说明同步改为独立管理，并说明旧 unit 的迁移。
 
 验证：本轮只涉及 unit 文件名/依赖与文档，检查 unit 内容、配置引用和 git diff 格式通过；未重复执行之前已通过的100项问答/文件测试，未在 VPS 实际安装或运行 systemd。此前历史记录保留，以上修正为当前最终行为。
+
+## 2026-10-19 — HTTPS 域名反代登录来源修复
+
+原因：用户通过 https://urovo-agent.patrick-shenzhen.cn/login 访问，原代码将所有 Origin 固定与 http://Host 比较，TLS 在代理端终止且 Host 改写时，页面可打开而登录 POST 返回“不允许跨站请求”。
+
+行为/兼容性：新增 WEB_PUBLIC_URL（WebOptions.publicUrl）作为单个显式 HTTPS 来源；只接受根来源，不接受 /login、通配符、账号密码、查询或片段。未配置时维持原本本机 Host/HTTP 来源约束。配置后兼容代理保留公开 Host 与改写为本机 Host 两种模式；不从 X-Forwarded-* 自动授予信任，陌生 Host/Origin、null Origin、cross-site 仍拒绝。管理员认证、修改请求 X-Local-Token 与七天有效期不变；识别为公开HTTPS请求时登录/注销设置 Secure，仍保留 HttpOnly/SameSite=Strict，本机HTTP登录不强制 Secure。企微 machine 路由不接受公开 Host/Origin，反代示例明确不转发 /api/wecom/。监听仍只在127.0.0.1，不引入公网监听或无鉴权API。
+
+配置/部署：.env.example 新增空白 WEB_PUBLIC_URL，README 与 VPS 文档增加域名、反代 SSE/30MiB上传及独立 Agent 重启步骤。VPS 须设置 WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn 并更新代码后重启 product-expert.service。无需修改企微 Secret/Token 或联动重启 Bridge；未修改本机.env、VPS、业务知识与记忆。
+
+验证：新增四项 HTTP 回归覆盖保留/改写 Host 登录、Secure Cookie/退出、未登录拒绝、CSRF、陌生/伪装来源及转发头不扩大信任、默认本机行为、machine入口、本地.env读取与非法配置。定向八项测试已通过；完整回归结果见后续验证补充。模拟的是 TLS 在代理终止后的后端 HTTP 请求，未声称已配置或登录真实公网域名。
+
+验证补充：最终 `npm test` 104/104 通过，约18.6秒；git diff 检查通过。日志统一 `.data/debug/web-public-origin/`。没有修改真实反代配置或 VPS，仍需用户同步本次代码、设置公开来源并重启 Agent 后验收。

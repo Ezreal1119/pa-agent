@@ -14,6 +14,7 @@ import { getToolRuns, publicRunMetrics } from "./tool-calls.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
 import { WebAuth } from "./auth.js";
+import { WebOriginPolicy, RequestOriginError } from "./origin.js";
 import { BridgeAccess } from "./bridge-access.js";
 import { RunGate, boundedSetting } from "./run-gate.js";
 import { ExtraMemoryStore, EXTRA_MEMORY_SECTION } from "../agent/extra-memory.js";
@@ -30,7 +31,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; bridgeToken?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -41,6 +42,7 @@ export async function createWebServer(options: WebOptions = {}) {
     if (error.code === "ENOENT") return {} as Record<string, string>;
     throw error;
   });
+  const originPolicy = new WebOriginPolicy(options.publicUrl ?? process.env.WEB_PUBLIC_URL ?? diskEnv.WEB_PUBLIC_URL ?? "");
   const fileConfig = fileToolConfig(dataDir, options.fileTools, { ...diskEnv, ...process.env });
   const agentSettingsStore = new AgentSettingsStore(dataDir);
   let agentSettings = await agentSettingsStore.load({ effort: "low", fileTools: { enabled: fileConfig.enabled, tools: Object.fromEntries(FILE_TOOL_NAMES.map(name => [name, fileConfig.tools.includes(name)])) as Record<typeof FILE_TOOL_NAMES[number], boolean> } });
@@ -257,12 +259,11 @@ export async function createWebServer(options: WebOptions = {}) {
   }
   function validRequest(req: IncomingMessage, machine = false) {
     const port = (server.address() as import("node:net").AddressInfo).port;
-    const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-    const host = req.headers.host;
-    if (!host || !allowed.has(host)) throw new HttpError(403, "只允许通过本机地址访问。");
-    if (req.headers.origin && req.headers.origin !== `http://${host}`) throw new HttpError(403, "不允许跨站请求。");
-    if (req.headers["sec-fetch-site"] === "cross-site") throw new HttpError(403, "不允许跨站请求。");
+    let secureCookies: boolean;
+    try { secureCookies = originPolicy.check(req, port, machine); }
+    catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
     if (!machine && !["GET", "HEAD"].includes(req.method ?? "") && req.headers["x-local-token"] !== csrf) throw new HttpError(403, "页面已过期，请刷新后重试。");
+    return secureCookies;
   }
   const server = http.createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -273,7 +274,7 @@ export async function createWebServer(options: WebOptions = {}) {
       const url = new URL(req.url ?? "/", "http://localhost");
       const method = req.method;
       const machine = url.pathname.startsWith("/api/wecom/");
-      validRequest(req, machine);
+      const secureCookies = validRequest(req, machine);
       if (machine) {
         if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "企微 API 凭据无效或未配置。");
         const route = url.pathname.slice("/api/wecom".length);
@@ -296,7 +297,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (retryAfter) { res.setHeader("Retry-After", retryAfter); throw new HttpError(429, "登录尝试过于频繁，请一分钟后再试。"); }
         const body = await readBody(req);
         if (typeof body.account !== "string" || typeof body.password !== "string" || body.account.length > 256 || body.password.length > 4096) throw new HttpError(400, "请输入有效的账号和密码。");
-        if (!auth.login(req, res, body.account.trim(), body.password)) throw new HttpError(401, "账号或密码不正确。");
+        if (!auth.login(req, res, body.account.trim(), body.password, secureCookies)) throw new HttpError(401, "账号或密码不正确。");
         return json(res, 200, { ok: true });
       }
       const publicAsset = ["/login", "/login.js", "/style.css"].includes(url.pathname) && (method === "GET" || method === "HEAD");
@@ -306,7 +307,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
-        auth.logout(req, res); return json(res, 200, { ok: true });
+        auth.logout(req, res, secureCookies); return json(res, 200, { ok: true });
       }
       if (method === "GET" && url.pathname === "/api/status") {
         const extraMemory = await new ExtraMemoryStore(dataDir).snapshot().then(value => ({ ready: true, bytes: Buffer.byteLength(value.text) })).catch(() => ({ ready: false, bytes: 0 }));

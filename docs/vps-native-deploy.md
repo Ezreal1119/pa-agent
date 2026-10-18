@@ -80,7 +80,41 @@ curl -I http://127.0.0.1:4321/login
 ssh -N -L 4321:127.0.0.1:4321 root@VPS_IP
 ```
 
-浏览器打开 `http://127.0.0.1:4321/`。服务端当前 Host 校验只允许实际服务端口，因此隧道两端均用4321，本机该端口必须空闲；服务端和本机一起修改 WEB_PORT 才能换用其他端口。不要直接公开4321端口；域名反代需另行适配/验证 Host 和 Origin。登录后测试真实问答、五类附件读取、Excel 输出下载及重启历史恢复。命令行夹具通过不等于真实模型/VPS24小时验收。
+浏览器打开 `http://127.0.0.1:4321/`。服务端当前 Host 校验只允许实际服务端口，因此隧道两端均用4321，本机该端口必须空闲；服务端和本机一起修改 WEB_PORT 才能换用其他端口。不要直接公开4321端口；HTTPS 域名反代按下方 WEB_PUBLIC_URL 配置。登录后测试真实问答、五类附件读取、Excel 输出下载及重启历史恢复。命令行夹具通过不等于真实模型/VPS24小时验收。
+
+## HTTPS 域名访问
+
+如果使用域名 `https://urovo-agent.patrick-shenzhen.cn` 访问，请在 VPS 现有 `.env` 中追加来源地址（不含 `/login`）：
+
+```ini
+WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn
+```
+
+同步本次代码、构建与测试后，执行 `systemctl restart product-expert.service` 并刷新登录页。这个配置只影响 Web/Agent，不需要重启独立的 `wecom-bridge.service`。不填该字段则仍仅允许本机 HTTP 来源；模型凭据、Web 密码和企微 API 凭据不变。
+
+后端继续只监听 `127.0.0.1:4321`。显式公开地址允许 HTTPS 来源，兼容反代保留公共 Host 或改写为本机 Host，且不从任意 `X-Forwarded-*` 自动推断可信地址。登录和退出的公开 HTTPS 请求设置 Secure Cookie；本机 HTTP 调试仍可用。来源、管理员登录和修改请求的 X-Local-Token 均保留，不启用通配符跨域。
+
+若使用 Nginx，在**现有 HTTPS server** 中合并以下 location 配置，证书/域名继续用你已有设置；保留浏览器原始 Origin：
+
+```nginx
+client_max_body_size 30m;
+
+location ^~ /api/wecom/ {
+    return 404;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:4321;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_read_timeout 1000s;
+}
+```
+
+`/api/wecom/` 留给同机 Bridge；Web 的普通 API、SSE 和附件通过上方普通代理转发。`client_max_body_size` 与后端的30MiB上传上限配合。参考 [Nginx 官方代理模块文档](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)。已有反代能打开页面时，先更新代码和 `.env`；无需为了来源修复去覆盖现有证书或整段反代配置。
 
 ## 日常更新（VPS root）
 
