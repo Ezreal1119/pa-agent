@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { identity, inbound, splitUtf8, resultFromDone, DAY } from './protocol.mjs';
 import { downloadMedia } from './media.mjs';
+import { MessageObserver, notificationInput } from './notifications.mjs';
 
 const live = job => !['done', 'interrupted'].includes(job.state);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -14,6 +15,12 @@ export class WecomBridge {
     this.active = new Map(); this.connected = new Set(); this.mediaTail = Promise.resolve(); this.controllers = new Set(); this.receiving = new Set(); this.closing = false;
   }
   async start() {
+    try {
+      this.observer = await new MessageObserver({ directory: this.store.directory, api: this.api, clients: this.clients,
+        isConnected: botId => this.connected.has(botId), recipientFor: botId => this.config.bots.find(bot => bot.botId === botId)?.notifyUserId ?? this.config.notifyUserId,
+        log: { warn: (...values) => this.log.warn(...values.map(value => this.safeError(value))) } }).open();
+    } catch (error) { this.log.warn('WeCom observer unavailable; chat remains enabled:', this.safeError(error)); }
+
     for (const job of this.store.data.jobs) {
       if (job.state === 'receiving') { job.state = 'delivering'; job.result = { text: '上次接收附件时服务中断，请重新发送文件。', files: [] }; }
       else if (job.state === 'running') job.state = 'recovering';
@@ -23,7 +30,7 @@ export class WecomBridge {
     this.timer.unref?.();
     this.retryTimer = setInterval(() => this.pump(), 1000); this.retryTimer.unref?.();
   }
-  authenticated(botId) { this.connected.add(botId); this.pump(); }
+  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); }
   disconnected(botId) { this.connected.delete(botId); }
   client(botId) { const client = this.clients.get(botId); if (!client) throw new Error('机器人配置不存在。'); return client; }
   async send(job, text) {
@@ -39,6 +46,8 @@ export class WecomBridge {
     const who = identity(botId, frame.body);
     const previous = this.store.data.jobs.find(job => job.botId === botId && job.msgid === who.msgid);
     if (previous) return; // Persist before processing, including same-process duplicate callbacks.
+    const notice = notificationInput(frame.body);
+    void this.observer?.enqueue(who, notice).catch(error => this.log.warn('WeCom observer:', this.safeError(error)));
     let input;
     try { input = inbound(frame.body); } catch (error) { await this.send(who, error.message); return; }
     if (this.store.data.jobs.filter(live).length >= this.config.queueLimit + this.config.concurrency) { await this.send(who, '当前排队人数较多，请稍后再发送。'); return; }
@@ -75,6 +84,8 @@ export class WecomBridge {
     } catch (error) {
       job.result = { text: this.safeError(error), files: [] }; job.state = 'delivering'; await this.store.save();
     }
+    const names = input.media.map((media, index) => job.staged[index]?.name ?? (media.kind === 'image' ? '图片' : '文件'));
+    if (names.length) void this.observer?.attachments(botId, who.msgid, names).catch(error => this.log.warn('WeCom attachment notice:', this.safeError(error)));
     this.pump();
   }
   pump() {
@@ -153,7 +164,7 @@ export class WecomBridge {
             // Non-blocking SDK path avoids a slow WeCom connection holding Agent SSE open.
             void this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {});
           }
-        }, signal);
+        }, signal, { botId: job.botId, userId: job.userId, chatType: JSON.parse(job.key)[1], ...(JSON.parse(job.key)[1] === 'group' ? { chatId: job.target } : {}), at: job.created });
         job.result = resultFromDone(done, job.runId, outputs);
         if (done.failed && job.runError) job.result.text += `\n\n本轮未完整完成：${job.runError}`;
       }
@@ -238,6 +249,7 @@ export class WecomBridge {
     for (const controller of this.controllers) controller.abort();
     await Promise.allSettled([...this.active.values(), ...this.receiving]);
     for (const client of this.clients.values()) client.disconnect();
+    await this.observer?.close();
     await this.store.save(); await this.store.close();
   }
 }

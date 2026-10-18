@@ -227,3 +227,12 @@ Run `npm run test:wecom` for isolated transport/API and real-file-worker integra
 For HTTPS reverse-proxy access, set `WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn` in the VPS `.env` (origin only, without `/login`) and restart **product-expert.service**. The listener remains on 127.0.0.1; the configured domain is an explicit Host/Origin allowance. Both preserved public Host and rewritten loopback Host are supported; client-provided forwarded headers never grant additional trust. With the field blank, the original loopback-only behavior remains.
 
 HTTPS-domain logins/logout use Secure cookies, retaining HttpOnly, SameSite=Strict, the seven-day lifetime, and request-token checks. Local HTTP logins continue to work. The WeCom service remains separately managed and its API does not accept the public Host/Origin. Reverse proxies should exclude `/api/wecom/`; the sample also includes SSE and 30MiB upload settings. See [HTTPS proxy configuration](docs/vps-native-deploy.md#https-域名访问).
+
+## WeCom contact notes and incoming-message notifications
+
+The sidebar **企微联系人** lists observed sender User IDs, including members who speak in groups. Set a note per bot/user; the same person's private/group messages share that note, independently of session titles or deletion. Existing available bridge mappings/jobs seed the list, and future messages register identities through the scoped machine API. Only the Web administrator can edit notes.
+
+Set `WECOM_NOTIFY_USER_ID` in the VPS `.env` to receive other users' incoming messages and exclude your own messages everywhere. Notifications show **对话人** using the latest note (or User ID), Beijing time, message text and attachment names/types; they omit the session-title field. They do not call the model or forward answers/tool bodies. A separate bounded durable outbox handles retries, deduplication and restart recovery without taking Agent slots. Blank configuration disables forwarding; contacts still register. Per-bot `notifyUserId` can override the global recipient. See [configuration and retention details](docs/wecom-bridge.md#企微联系人备注与消息通知).
+
+
+企微联系人使用独立页面 `/wecom-contacts`（左侧入口），展示提问次数和输入/输出/总 Token。统计从升级后开始；群聊按本轮发送者归属，失败/停止也计一轮，文件单独上传不算。Token 只累加收到的 usage，缺失会标明；会话删除和30天清理不清零联系人累计。详情见 `docs/wecom-bridge.md` 的“联系人与用量统计”；本次升级需分别重启 Agent 与 Bridge。

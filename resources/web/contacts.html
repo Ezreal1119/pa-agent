@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>企微联系人 · Product Expert</title><link rel="stylesheet" href="/style.css"><script defer src="/contacts.js"></script></head>
+<body>
+  <main class="contacts-page">
+    <header class="contacts-page-header"><a class="brand" href="/"><span class="brand-mark">pe</span><span><strong>Product Expert</strong><small>KNOWLEDGE WORKSPACE</small></span></a><a class="contacts-back" href="/">← 返回工作空间</a></header>
+    <span class="eyebrow">WECOM CONTACTS</span><h1>企微联系人</h1>
+    <p class="contacts-description">为 User ID 设置备注，通知中的“对话人”会使用这个名称。同一人在私聊和群里共用备注，不修改对话标题。</p>
+    <div class="contacts-summary" id="contacts-summary" aria-label="联系人统计汇总"></div>
+    <div class="contacts-toolbar"><label class="sr-only" for="contacts-search">搜索备注或 User ID</label><input id="contacts-search" placeholder="搜索备注、User ID 或机器人" type="search"><button id="contacts-refresh" type="button" class="secondary-button">刷新</button></div>
+    <p class="contacts-notice">提问次数按实际开始的 Agent 轮次统计，包含失败或停止的轮次；单独上传文件、新建对话指令不计入。群聊 Token 归本轮提问者，包含共享上下文及工具触发的多次模型请求。<br>统计从升级后开始累计，不回填旧记录；会话删除或过期不清零。Token 仅累计服务端收到的 usage，缺失或中断未返回的不估算；输入含缓存，输出含供应商已计入的思考 Token，不代表费用。</p>
+    <p id="contacts-status" class="contacts-status" role="status"></p><div id="contacts-list" class="contacts-list"></div>
+  </main>
+  <div id="toast" class="toast" role="alert" hidden></div>
+</body></html>

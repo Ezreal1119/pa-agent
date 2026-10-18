@@ -14,11 +14,12 @@ async function setup(t,overrides={}){
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-bridge-'));const store=await new BridgeStore(directory).open();
  const sessions=new Map(),runs=[];let delay=15,active=0,peak=0;const busy=new Set();
  const api={async json(route,method='GET',body){
+  if(route==='/contacts')return{contact:{userId:body.userId,name:''}};
   if(route==='/status')return{fileTools:{enabled:true,tools:['excel_read'],maxFileBytes:30*1024*1024}};
   if(route==='/sessions'){const id=randomUUID();sessions.set(id,{id,runs:[],messages:[]});return{id};}
   const id=route.split('/')[2];if(!sessions.has(id))throw new ApiError(404,'missing');if(method==='PATCH')return{};return sessions.get(id);
- },async upload(id,name,buffer){const file={id:randomUUID(),name,bytes:buffer.length};return file;},async download(){return Buffer.from('generated');},async run(id,text,ids,event,signal){
-  assert.ok(!busy.has(id),'same conversation must serialize');busy.add(id);active++;peak=Math.max(peak,active);const run={id:randomUUID(),status:'completed'};runs.push({id,text,ids});
+ },async upload(id,name,buffer){const file={id:randomUUID(),name,bytes:buffer.length};return file;},async download(){return Buffer.from('generated');},async run(id,text,ids,event,signal,sender){
+  assert.ok(!busy.has(id),'same conversation must serialize');busy.add(id);active++;peak=Math.max(peak,active);const run={id:randomUUID(),status:'completed'};runs.push({id,text,ids,sender});
   await event('start',{run});signal?.throwIfAborted();await new Promise((resolve,reject)=>{const timer=setTimeout(resolve,delay);signal?.addEventListener('abort',()=>{clearTimeout(timer);reject(new Error('aborted'));},{once:true});});
   const done={run,messages:[{role:'assistant',text:`回答 ${text}`,run}],failed:false};sessions.set(id,{...done,runs:[run],running:false});active--;busy.delete(id);return done;
  }};
@@ -30,7 +31,7 @@ async function setup(t,overrides={}){
 
 test('simultaneous users execute concurrently, group members serialize into one session, bots isolate, duplicates persist',async t=>{
  const f=await setup(t);const same=message('a','first');await Promise.all([f.bridge.receive('bot',same),f.bridge.receive('bot',same),f.bridge.receive('bot',message('b','second'))]);await f.bridge.idle();assert.equal(f.runs.length,2);assert.equal(f.peak,2);assert.notEqual(f.runs[0].id,f.runs[1].id);
- await Promise.all([f.bridge.receive('bot',message('a','group one','g')),f.bridge.receive('bot',message('b','group two','g'))]);await f.bridge.idle();assert.equal(f.runs.at(-1).id,f.runs.at(-2).id);
+ await Promise.all([f.bridge.receive('bot',message('a','group one','g')),f.bridge.receive('bot',message('b','group two','g'))]);await f.bridge.idle();assert.equal(f.runs.at(-1).id,f.runs.at(-2).id);assert.equal(f.runs.at(-2).sender.userId,'a');assert.equal(f.runs.at(-1).sender.userId,'b');assert.equal(f.runs.at(-1).sender.chatId,'g');
  await f.bridge.receive('other',message('a','other bot','g'));await f.bridge.idle();assert.notEqual(f.runs.at(-1).id,f.runs.at(-2).id);
  await f.restart();await f.bridge.receive('bot',same);await f.bridge.idle();assert.equal(f.runs.length,5);
 });
@@ -48,7 +49,7 @@ test('multiple pending files require selection or explicit all; new conversation
 test('structured outputs send files even when answer omits names, retry only delivery after failure',async t=>{
  const f=await setup(t);let count=0;const original=f.api.run;f.api.run=async(id,text,ids,event,signal)=>{const done=await original(id,text,ids,event,signal);const file={id:randomUUID(),name:'filled.xlsx',bytes:9};await event('output',{file});done.messages.at(-1).outputs=[file];return done;};
  f.client.uploadMedia=async(buffer,options)=>{if(!count++)throw new Error('transient');f.client.files.push({buffer,options});return{media_id:'ok'};};
- await f.bridge.receive('bot',message());await new Promise(r=>setTimeout(r,100));assert.equal(f.runs.length,1);const job=f.store.data.jobs.find(j=>j.state==='delivering');assert.ok(job);job.retryAt=0;f.bridge.pump();await f.bridge.idle();assert.equal(f.runs.length,1);assert.equal(f.client.files[0].options.filename,'filled.xlsx');assert.equal(f.client.texts.length,1);
+ await f.bridge.receive('bot',message());await f.bridge.idle();assert.equal(f.runs.length,1);const job=f.store.data.jobs.find(j=>j.state==='delivering');assert.ok(job);job.retryAt=0;f.bridge.pump();await f.bridge.idle();assert.equal(f.runs.length,1);assert.equal(f.client.files[0].options.filename,'filled.xlsx');assert.equal(f.client.texts.length,1);
 });
 test('queue bounds, interrupted execution is recovered without replay, and expired map is recreated',async t=>{
  const f=await setup(t,{concurrency:1,queueLimit:1});f.setDelay(100);
@@ -68,7 +69,7 @@ test('restart resumes remaining output delivery without replaying the run or res
  f.api.run=async(id,text,ids,event,signal)=>{const done=await original(id,text,ids,event,signal);for(const file of files)await event('output',{file});return done;};
  let secondFails=true;const delivered=[];
  f.client.uploadMedia=async(buffer,options)=>{if(options.filename==='two.xlsx'&&secondFails)throw new Error('network');delivered.push(options.filename);return{media_id:options.filename};};
- await f.bridge.receive('bot',message());await new Promise(r=>setTimeout(r,100));assert.deepEqual(delivered,['one.xlsx']);
+ await f.bridge.receive('bot',message());await f.bridge.idle();assert.deepEqual(delivered,['one.xlsx']);
  const job=f.store.data.jobs.find(job=>job.state==='delivering');assert.ok(job);job.retryAt=0;await f.store.save();secondFails=false;
  await f.restart();await f.bridge.idle();assert.deepEqual(delivered,['one.xlsx','two.xlsx']);assert.equal(f.runs.length,1);assert.equal(f.client.texts.length,1);
 });

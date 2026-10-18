@@ -26,8 +26,8 @@ export class AgentApi {
     const response = await this.request(`/sessions/${sessionId}/files/${file.id}`, {}, signal);
     return readBounded(response, Math.min(file.bytes ?? 30 * 1024 * 1024, 30 * 1024 * 1024));
   }
-  async run(sessionId, text, attachmentIds, onEvent, signal) {
-    const response = await this.request(`/sessions/${sessionId}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, attachmentIds }) }, signal);
+  async run(sessionId, text, attachmentIds, onEvent, signal, wecomSender) {
+    const response = await this.request(`/sessions/${sessionId}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, attachmentIds, ...(wecomSender ? { wecomSender } : {}) }) }, signal);
     let done;
     for await (const frame of sse(response.body)) { await onEvent(frame.event, frame.data); if (frame.event === 'done') done = frame.data; }
     if (!done) throw new Error('Agent 连接中断，未收到运行结束事件；不会自动重复执行。');

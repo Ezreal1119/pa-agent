@@ -8,6 +8,7 @@ import {once} from 'node:events';
 import {randomUUID} from 'node:crypto';
 import ExcelJS from 'exceljs';
 import {createWebServer} from '../dist/web/server.js';
+import {WecomContacts} from '../dist/web/wecom-contacts.js';
 import {BridgeStore} from '../integrations/wecom-bridge/store.mjs';
 import {AgentApi} from '../integrations/wecom-bridge/api.mjs';
 import {WecomBridge} from '../integrations/wecom-bridge/bridge.mjs';
@@ -36,14 +37,17 @@ test('WeCom transport uses the real Agent/file workers to read PDF DOCX PPTX and
    reply(res,{name:{pdf:'pdf_read',docx:'docx_read',pptx:'pptx_read',xlsx:'excel_read'}[type],args:type==='xlsx'?{path:filePath,scope:'workbook'}:{path:filePath}});
   }catch(error){assertionsError=error;res.destroy(error);}
  });model.listen(0,'127.0.0.1');await once(model,'listening');
+ const addressBook=new WecomContacts(dataDir);for(const type of ['pdf','docx','pptx','xlsx']){const contact=await addressBook.record({botId:'bot',userId:`user-${type}`,chatType:'single',at:Date.now()});await addressBook.rename(contact.id,{name:`联系人-${type}`});}
  const token='e2e-wecom-token-'.repeat(4);const app=await createWebServer({cwd:root,dataDir,bridgeToken:token,model:{apiKey:'TEST_ONLY',modelId:'fixture',baseUrl:`http://127.0.0.1:${model.address().port}/v1`},fileTools:{enabled:true,markitdown:process.env.FILE_TEST_MARKITDOWN||path.resolve('.data/file-runtime/bin/markitdown')}});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
- const store=await new BridgeStore(path.join(dataDir,'wecom')).open();const client={texts:[],files:[],async replyStream(_f,_i,text,done){if(done)this.texts.push(text);},async replyStreamNonBlocking(){},async sendMessage(_t,b){this.texts.push(b.markdown.content);},async uploadMedia(buffer,options){this.files.push({buffer,options});return{media_id:'out'};},async replyMedia(){},async sendMediaMessage(){},disconnect(){}};
- const bridge=new WecomBridge({store,api:new AgentApi(`http://127.0.0.1:${app.server.address().port}`,token),clients:new Map([['bot',client]]),config:{concurrency:1,queueLimit:8,maxFileBytes:30*1024*1024,timeoutMs:90000,token,bots:[{botId:'bot',secret:'test'}]},download:async(media)=>{const name=new URL(media.url).pathname.slice(1);return{name,buffer:await fs.readFile(path.join(source,name))};}});await bridge.start();bridge.authenticated('bot');
+ const store=await new BridgeStore(path.join(dataDir,'wecom')).open();const client={texts:[],notices:[],files:[],async replyStream(_f,_i,text,done){if(done)this.texts.push(text);},async replyStreamNonBlocking(){},async sendMessage(target,b){if(target==='owner')this.notices.push(b.markdown.content);else this.texts.push(b.markdown.content);},async uploadMedia(buffer,options){this.files.push({buffer,options});return{media_id:'out'};},async replyMedia(){},async sendMediaMessage(){},disconnect(){}};
+ const bridge=new WecomBridge({store,api:new AgentApi(`http://127.0.0.1:${app.server.address().port}`,token),clients:new Map([['bot',client]]),config:{notifyUserId:'owner',concurrency:1,queueLimit:8,maxFileBytes:30*1024*1024,timeoutMs:90000,token,bots:[{botId:'bot',secret:'test'}]},download:async(media)=>{const name=new URL(media.url).pathname.slice(1);return{name,buffer:await fs.readFile(path.join(source,name))};}});await bridge.start();bridge.authenticated('bot');
  t.after(async()=>{await bridge.close();await app.close();model.closeAllConnections();await new Promise(r=>model.close(r));await fs.rm(root,{recursive:true,force:true});});
  for(const type of ['pdf','docx','pptx','xlsx']){
   await bridge.receive('bot',{headers:{req_id:randomUUID()},body:{msgid:randomUUID(),chattype:'single',from:{userid:`user-${type}`},msgtype:'text',text:{content:type==='xlsx'?'读取并填写数量为70000':'读取文件'},quote:{msgtype:'file',file:{url:`https://fixture.invalid/sample.${type}`}}}});
-  await bridge.idle(90000);if(assertionsError)throw assertionsError;
+  await bridge.idle(90000);await bridge.observer.idle();if(assertionsError)throw assertionsError;
  }
+ const contacts=await addressBook.list();assert.equal(contacts.length,4);for(const contact of contacts){assert.equal(contact.stats.questions,1);assert.equal(contact.stats.finishedRuns,1);assert.ok(contact.stats.requests>=2);assert.equal(contact.stats.reportedRequests,0);}
+ assert.equal(client.notices.length,4);assert.ok(client.notices.every(text=>text.includes('对话人：联系人')&&!text.includes('会话：')));
  assert.deepEqual(new Set(toolResults.map(item=>item.type)),new Set(['pdf','docx','pptx','xlsx']));assert.equal(client.files.length,1);assert.equal(client.files[0].options.filename,'填写结果.xlsx');
  const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(client.files[0].buffer);assert.equal(workbook.getWorksheet('Data').getCell('B2').value,70000);assert.equal(workbook.getWorksheet('Data').getCell('C2').formula,'B2*2');assert.equal(workbook.getWorksheet('Data').getCell('A2').font.bold,true);
  const original=new ExcelJS.Workbook();await original.xlsx.readFile(path.join(source,'sample.xlsx'));assert.equal(original.getWorksheet('Data').getCell('B2').value,42);

@@ -13,8 +13,10 @@ export function bridgeConfig(env, cwd) {
   try { bots = env.WECOM_BOTS ? JSON.parse(env.WECOM_BOTS) : [{ botId: env.WECOM_BOT_ID, secret: env.WECOM_BOT_SECRET }]; }
   catch { throw new Error('WECOM_BOTS 不是有效 JSON，请检查格式。'); }
   if (!Array.isArray(bots) || !bots.length || bots.length > 20 || bots.some(bot => !bot || typeof bot.botId !== 'string' || !bot.botId.trim() || typeof bot.secret !== 'string' || !bot.secret.trim()) || new Set(bots.map(bot => bot.botId)).size !== bots.length) throw new Error('请配置唯一的 WECOM_BOT_ID / WECOM_BOT_SECRET，或 WECOM_BOTS JSON 数组。');
+  const notifyUserId = env.WECOM_NOTIFY_USER_ID?.trim() || '';
+  for (const value of [notifyUserId, ...bots.map(bot => bot.notifyUserId ?? '')]) if (typeof value !== 'string' || value.length > 256 || /[\s\u0000-\u001f\u007f]/.test(value)) throw new Error('WECOM_NOTIFY_USER_ID / notifyUserId 必须是有效的企微用户标识。');
   const dataDir = path.resolve(cwd, env.AGENT_DATA_DIR || '.data');
-  return { enabled, bots, dataDir, directory: path.join(dataDir, 'wecom'), apiUrl: env.WECOM_AGENT_URL || `http://127.0.0.1:${env.WEB_PORT || 4321}`, token: env.WECOM_API_TOKEN,
+  return { enabled, bots, notifyUserId, dataDir, directory: path.join(dataDir, 'wecom'), apiUrl: env.WECOM_AGENT_URL || `http://127.0.0.1:${env.WEB_PORT || 4321}`, token: env.WECOM_API_TOKEN,
     concurrency: number(env.WECOM_MAX_CONCURRENT_RUNS, 2, 1, 8, 'WECOM_MAX_CONCURRENT_RUNS'),
     queueLimit: number(env.WECOM_QUEUE_LIMIT, 8, 1, 100, 'WECOM_QUEUE_LIMIT'),
     maxFileBytes: Math.min(number(env.FILE_MAX_BYTES, 30 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER, 'FILE_MAX_BYTES'), 30 * 1024 * 1024),

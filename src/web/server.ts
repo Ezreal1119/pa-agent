@@ -9,11 +9,12 @@ import { AgentRuntime } from "../agent/runtime.js";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_SKILLS, ON_DEMAND_SKILLS, loadRunKnowledge } from "../agent/knowledge.js";
 import { REASONING_MODES, isReasoningMode, isDeepSeekModel, applyDeepSeekReasoning, type ReasoningMode } from "../agent/reasoning.js";
-import { getRunMetrics, saveRunMetric, type RunMetric } from "./run-metrics.js";
+import { getRunMetrics, saveRunMetric, sdkTokens, visionTokens, type RunMetric } from "./run-metrics.js";
 import { getToolRuns, publicRunMetrics } from "./tool-calls.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
 import { WebAuth } from "./auth.js";
+import { WecomContacts, observation } from "./wecom-contacts.js";
 import { WebOriginPolicy, RequestOriginError } from "./origin.js";
 import { BridgeAccess } from "./bridge-access.js";
 import { RunGate, boundedSetting } from "./run-gate.js";
@@ -60,6 +61,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
   const auth = new WebAuth(adminAccount, adminPassword);
+  const wecomContacts = new WecomContacts(dataDir);
   const bridgeToken = options.bridgeToken ?? process.env.WECOM_API_TOKEN ?? diskEnv.WECOM_API_TOKEN ?? "";
   const bridge = new BridgeAccess(dataDir, bridgeToken);
   await bridge.load();
@@ -152,7 +154,10 @@ export async function createWebServer(options: WebOptions = {}) {
         const engine = await getRuntime();
         const saved = (await savedSessions()).find(s => s.id === item.id);
         const manager = saved ? SessionManager.open(saved.path, sessionsDir, cwd) : SessionManager.create(cwd, sessionsDir, { id: item.id });
-        return item.session = await engine.createSession(manager);
+        const session = await engine.createSession(manager);
+        // Replay persisted snapshots after a restart; cursors make this idempotent.
+        await wecomContacts.recoverSession(item.id, getRunMetrics(session));
+        return item.session = session;
       } finally { openingSessions--; item.opening = undefined; }
     })();
     return item.opening;
@@ -279,13 +284,17 @@ export async function createWebServer(options: WebOptions = {}) {
         if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "企微 API 凭据无效或未配置。");
         const route = url.pathname.slice("/api/wecom".length);
         const owned = route.match(/^\/sessions\/([\w-]+)(?:\/(run|stop|files)(?:\/([a-f0-9-]{36}))?)?$/);
-        const allowed = route === "/status" && method === "GET" || route === "/sessions" && method === "POST" || owned && (
+        const allowed = route === "/contacts" && method === "POST" || route === "/status" && method === "GET" || route === "/sessions" && method === "POST" || owned && (
           !owned[2] && ["GET", "PATCH", "DELETE"].includes(method ?? "") ||
           ["run", "stop"].includes(owned[2] ?? "") && method === "POST" && !owned[3] ||
           owned[2] === "files" && (method === "GET" || method === "POST" && !owned[3])
         );
         if (!allowed) throw new HttpError(403, "企微 API 不支持此操作。");
         if (owned && !bridge.owns(owned[1]!)) throw new HttpError(404, "企微会话不存在。");
+        if (route === "/contacts") {
+          try { return json(res, 200, { contact: await wecomContacts.record(await readBody(req)) }); }
+          catch (error) { throw new HttpError(400, redact(error)); }
+        }
         url.pathname = `/api${route}`;
         if (route === "/status") return json(res, 200, { configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
       }
@@ -302,7 +311,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       const publicAsset = ["/login", "/login.js", "/style.css"].includes(url.pathname) && (method === "GET" || method === "HEAD");
       if (!authenticated && !publicAsset) {
-        if (url.pathname === "/" && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
+        if (["/", "/wecom-contacts"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
         throw new HttpError(401, "请先登录。");
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
@@ -312,6 +321,18 @@ export async function createWebServer(options: WebOptions = {}) {
       if (method === "GET" && url.pathname === "/api/status") {
         const extraMemory = await new ExtraMemoryStore(dataDir).snapshot().then(value => ({ ready: true, bytes: Buffer.byteLength(value.text) })).catch(() => ({ ready: false, bytes: 0 }));
         return json(res, 200, { token: csrf, configured: configured(), model: { modelId: settings.modelId, baseUrl: settings.baseUrl, hasKey: Boolean(settings.apiKey), contextWindow: settings.contextWindow, maxTokens: settings.maxTokens }, skills: await resources(), ordinarySkills: await ordinarySkills(), extraMemory, historyRounds: 5, retentionDays: 30, reasoning: { supported: isDeepSeekModel(settings), default: agentSettings.effort, modes: REASONING_MODES }, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes, visionConfigured: Boolean(fileConfig.vision.baseUrl && fileConfig.vision.apiKey && fileConfig.vision.model), queue: queueState() } });
+      }
+      const contactMatch = url.pathname.match(/^\/api\/wecom-contacts(?:\/([a-f0-9]{64}))?$/);
+      if (contactMatch) {
+        if (!contactMatch[1] && method === "GET") return json(res, 200, { contacts: await wecomContacts.list() });
+        if (contactMatch[1] && method === "PATCH") {
+          let contact;
+          try { contact = await wecomContacts.rename(contactMatch[1], await readBody(req)); }
+          catch (error) { throw new HttpError(400, redact(error)); }
+          if (!contact) throw new HttpError(404, "企微联系人不存在。");
+          return json(res, 200, { contact });
+        }
+        throw new HttpError(405, "企微联系人仅支持查看列表与修改备注。");
       }
       if (url.pathname === "/api/config") throw new HttpError(410, "模型连接参数仅通过 .env 管理，修改后请重启服务。");
       if (url.pathname === "/api/agent-settings") {
@@ -435,6 +456,11 @@ export async function createWebServer(options: WebOptions = {}) {
           try {
             const body = await readBody(req);
             if (typeof body.text !== "string" || body.text.length > 12000) throw new HttpError(400, "请输入问题，最多 12000 个字符。");
+            let sender;
+            if (body.wecomSender !== undefined) {
+              if (!machine) throw new HttpError(403, "仅企微 Bridge 可以指定提问者。");
+              try { sender = observation(body.wecomSender); } catch { throw new HttpError(400, "企微提问者格式不正确。"); }
+            }
             const ids = body.attachmentIds ?? [];
             if (!Array.isArray(ids) || ids.length > 20 || ids.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id)) || new Set(ids).size !== ids.length) throw new HttpError(400, "附件 ID 格式错误、重复或数量超过 20 个。");
             if (ids.length && (!fileConfig.enabled || !fileConfig.tools.length)) throw new HttpError(409, "文件工具已关闭，不能发送新附件。");
@@ -461,16 +487,27 @@ export async function createWebServer(options: WebOptions = {}) {
             if (item.cancelled) throw new HttpError(409, "本次执行已停止。");
             if (item.title === "新对话" && !session.sessionName) item.title = text.slice(0, 36);
             item.updated = new Date().toISOString();
-            res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-            res.flushHeaders();
             let finished = false; let calls = 0;
             const started = acceptedAt;
             const initialRounds = session.messages.filter(m => m.role === "user").length;
             const metric: RunMetric = {
               id: randomUUID(), sequence: getRunMetrics(session).length + 1, round: null,
               modelId: settings.modelId, effort, startedAt: acceptedAtIso,
-              finishedAt: null, elapsedMs: null, firstTextMs: null, status: "running", toolCalls: [],
+              finishedAt: null, elapsedMs: null, firstTextMs: null, status: "running", toolCalls: [], usage: { input: 0, output: 0, requests: 0, reportedRequests: 0 }, ...(sender ? { wecom: sender } : {}),
             };
+            let statistics = Promise.resolve();
+            const persistStatistics = () => {
+              saveRunMetric(session, metric);
+              if (metric.wecom) {
+                const snapshot = structuredClone(metric);
+                statistics = statistics.then(() => wecomContacts.recordRun(snapshot.wecom!, item.id, snapshot));
+                // Do not fail an already running question because of a statistics disk error.
+                statistics = statistics.catch(() => { console.warn("企微统计保存失败，请检查联系人数据与磁盘。"); });
+              }
+            };
+            if (sender) await wecomContacts.recordRun(sender, item.id, metric);
+            res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+            res.flushHeaders();
             item.activeRunId = metric.id;
             saveRunMetric(session, metric);
             if (effort !== "provider-default") session.setThinkingLevel(effort);
@@ -480,6 +517,7 @@ export async function createWebServer(options: WebOptions = {}) {
             res.on("close", disconnect);
             const priorPayload = session.agent.onPayload;
             session.agent.onPayload = async (payload, model) => {
+              metric.usage!.requests++; persistStatistics();
               const replacement = await priorPayload?.(payload, model);
               const finalPayload = effort === "provider-default"
                 ? replacement ?? payload
@@ -496,6 +534,11 @@ export async function createWebServer(options: WebOptions = {}) {
             const toolStarts = new Map<string, number>();
             const releaseAttachments = captureMessageAttachments(session, metric.id, attachments as import("../file-tools/store.js").ManagedFile[]);
             const unsubscribe = session.subscribe(event => {
+              if (event.type === "message_end" && event.message.role === "assistant") {
+                const tokens = sdkTokens(event.message.usage);
+                if (tokens) { metric.usage!.input += tokens.input; metric.usage!.output += tokens.output; metric.usage!.reportedRequests++; }
+                persistStatistics();
+              }
               if (event.type === "message_start" && event.message.role === "user") send("message", { attachmentIds: ids });
               if (event.type === "message_end" && event.message.role === "user" && metric.round === null) {
                 metric.round = initialRounds + 1;
@@ -512,6 +555,14 @@ export async function createWebServer(options: WebOptions = {}) {
                 send("tool", { id: event.toolCallId, name: event.toolName, state: "running", count: getToolRuns(session, metric.id).get(initialRounds + 1)?.calls.length ?? metric.toolCalls!.length });
               }
               if (event.type === "tool_execution_end") {
+                const result = event.result as { details?: { metrics?: { vision?: { cached?: boolean; usage?: unknown }[] } } };
+                for (const vision of result?.details?.metrics?.vision ?? []) {
+                  if (vision.cached) continue;
+                  metric.usage!.requests++;
+                  const tokens = visionTokens(vision.usage);
+                  if (tokens) { metric.usage!.input += tokens.input; metric.usage!.output += tokens.output; metric.usage!.reportedRequests++; }
+                }
+                persistStatistics();
                 for (const record of generatedFiles(session)) {
                   if (record.runId !== metric.id || record.toolCallId !== event.toolCallId || publishedIds.has(record.file.id)) continue;
                   publishedIds.add(record.file.id);
@@ -547,7 +598,8 @@ export async function createWebServer(options: WebOptions = {}) {
               try {
                 releaseAttachments();
                 if (session.sessionFile && await fs.stat(session.sessionFile).catch(() => undefined)) item.persistedFile = session.sessionFile;
-                saveRunMetric(session, metric);
+                persistStatistics();
+                await statistics;
                 const runs = publicRunMetrics(session);
                 send("done", { messages: await publicMessages(session), rounds: session.messages.filter(m => m.role === "user").length, context: item.context, failed: metric.status !== "completed", run: runs.find(r => r.id === metric.id), runs, files: await fileStore.list(item.id) });
               } finally {
@@ -561,6 +613,8 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       const assets: Record<string, [string, string]> = {
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
+        "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
+        "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
         "/app.js": [path.join(resourcesDir, "web/app.js"), "text/javascript; charset=utf-8"],

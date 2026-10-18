@@ -1,4 +1,5 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { Observation, TokenUsage } from "./wecom-contacts.js";
 import type { ReasoningMode } from "../agent/reasoning.js";
 
 export const RUN_METRICS_TYPE = "web-run-metrics-v1";
@@ -22,6 +23,8 @@ export interface RunMetric {
   status: RunStatus;
   /** Timing only; arguments/results remain in the original SDK messages. */
   toolCalls?: ToolTiming[];
+  wecom?: Observation;
+  usage?: TokenUsage;
 }
 
 /** Custom entries persist in the SDK log but are excluded from model context. */
@@ -41,4 +44,18 @@ export function getRunMetrics(session: AgentSession, activeId?: string): RunMetr
       : metric);
   }
   return [...runs.values()];
+}
+
+/** SDK input excludes cache reads/writes; output already contains reasoning tokens.
+ * All-zero SDK usage is also the default when the provider omits usage. */
+export function sdkTokens(raw: unknown): { input: number; output: number } | undefined {
+  const u = raw as { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } | null;
+  if (!u || ![u.input, u.output, u.cacheRead ?? 0, u.cacheWrite ?? 0].every(n => Number.isSafeInteger(n) && Number(n) >= 0)) return;
+  const input = u.input! + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0); const output = u.output!;
+  if (input + output > 0) return { input, output };
+}
+export function visionTokens(raw: unknown): { input: number; output: number } | undefined {
+  const u = raw as { prompt_tokens?: number; completion_tokens?: number } | null;
+  if (!u || ![u.prompt_tokens, u.completion_tokens].every(n => Number.isSafeInteger(n) && Number(n) >= 0)) return;
+  return { input: u.prompt_tokens!, output: u.completion_tokens! };
 }
