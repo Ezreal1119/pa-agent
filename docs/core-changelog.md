@@ -32,6 +32,8 @@
 
 - Excel 模板写入正确区分自闭合空单元格/行，发布前独立验证行/单元格/样式及目标值完整性；失败不发布，详见 2026-10-18 Excel 空单元格写入修复。
 
+- Office 预检按 BOM/字节签名解码 UTF-16 元数据，不再强制 UTF-8 导致误拒绝；精确匹配含空格的工作表名。见 2026-10-18 Office XML 编码兼容记录。
+
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
 原因：用户要求产品专家和 UMS 技能默认生效，每个 run 强制加载技能与对应 MEMORY，并限制聊天上下文和磁盘历史生命周期。
@@ -231,3 +233,11 @@ Web/API：SSE 新增 output 事件 `{ runId, file }`，文件任务结束后立�
 部署说明纠正：补充知识检索必需的ripgrep和fd-find，避免Pi运行时下载等待。没有新增运行配置或依赖包。
 
 验证：本机构建及75项完整测试通过（含8项新增回归），git diff --check通过；覆盖行末空白、连续29行/双sheet37格、清空重填、插入空行/缺失行/空sheetData、单双引号、公式邻接及值/样式/行/布局破坏拦截，实际worker拒绝不支持结构且无输出/登记。仅下载VPS原附件与原两次工具参数的只读副本到.data/debug/excel-patch-fix，重放37格与1格原操作后工作表均保留33行，原件摘要一致。日志与输出全部Git忽略。此次新代码未在VPS执行，未调用真实模型、未修改VPS文件或本机业务知识/.env/记忆，也未提交推送；源patrick-agent/pi-patrick未修改。
+
+## 2026-10-18 — Office XML 编码与真实工作表名兼容
+
+原因：用户上传 Spec EDC 070569.xlsx，所有文件工具在预检被笼统的 Invalid or unsafe Office XML 拒绝。只读检查确认48452字节、40个ZIP部件、非加密；主工作表XML可解析，5个customXml/item*.xml实际带UTF-16LE BOM，声明却部分为us-ascii/utf-8。此前data.toString(utf8)产生替换字符/NUL并被XMLValidator拒绝，不能据此归因为改后缀、密码、宏或外链。
+
+行为/兼容性影响：新增decodeOfficeXml，按BOM/字节签名选择UTF-8/UTF-16LE/UTF-16BE，fatal解码拒绝坏字节，明确不支持UTF-32。先解码再执行原XML验证与DOCTYPE/ENTITY拒绝，ZIP/扩展体积/像素/单元格限制保持不变；错误提供部件名和编码或XML错误位置。既有ZIP与元数据字节不改写。另修复写入端先trim工作表名的问题，精确匹配实际的“Spec EDC ”，找不到时再保留旧trim回退。不修改其他Agent/记忆/会话逻辑，没有新增依赖或.env字段。
+
+验证：本机构建和79项完整测试通过，新增4项编码回归覆盖BOM与无BOM签名、双字节序、损坏字节/UTF-32拒绝、UTF-16中的DTD/实体拒绝、体积限制、真实worker读取/写入且元数据和原件保留。用户真实附件按workbook及worksheet读取均complete，测试副本C5写入成功，重新打开确认值，15个customXml部件字节完全一致、原文件SHA-256未变。日志/测试输出仅存.data/debug/office-xml-encoding/且Git忽略。没有修改用户附件、业务知识/.env/记忆或VPS，也没有调用真实模型或部署；未提交推送。

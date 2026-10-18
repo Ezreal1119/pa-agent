@@ -4,6 +4,7 @@ import { XMLValidator } from "fast-xml-parser";
 import type { FileToolConfig } from "./config.js";
 import { inspectImageHeader } from "./vendor/imageTools.js";
 import { parseExcelRange } from "./vendor/excelReadSerialization.js";
+import { decodeOfficeXml } from "./office-xml.js";
 
 /** Check ZIP central directory before a library is allowed to inflate its entries. */
 export async function preflightPackage(file: string, extension: string, config: FileToolConfig): Promise<void> {
@@ -38,8 +39,12 @@ export async function preflightPackage(file: string, extension: string, config: 
     }
     if (!/\.(xml|rels)$/i.test(entry.name)) continue;
     if (data.length > 8 * 1024 * 1024) throw new Error("Office XML part exceeds size limit.");
-    const xml = data.toString("utf8");
-    if (/<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) throw new Error("Invalid or unsafe Office XML.");
+    let xml: string;
+    try { xml = decodeOfficeXml(data); }
+    catch { throw new Error(`Invalid or unsupported Office XML encoding: ${entry.name}.`); }
+    if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error(`Invalid or unsafe Office XML: ${entry.name} (DOCTYPE/ENTITY is forbidden).`);
+    const valid = XMLValidator.validate(xml);
+    if (valid !== true) throw new Error(`Invalid or unsafe Office XML: ${entry.name} (${valid.err.code}, line ${valid.err.line}, column ${valid.err.col}).`);
     if (/^xl\/worksheets\/[^/]+\.xml$/i.test(entry.name)) {
       sheets++; cells += [...xml.matchAll(/<(?:\w+:)?c(?:\s|>)/g)].length;
       if (sheets > config.maxSheets || cells > config.maxCells) throw new Error("Workbook exceeds sheet or cell limit.");

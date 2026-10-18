@@ -116,6 +116,10 @@ FILE_WORKER_IMAGE=product-expert-files:ubuntu24
 
 关联以 message-attachments-v1 custom entry 保存到现有 JSONL，记录 run、轮次、消息时间、最终 SDK 消息 ID 和附件快照，不引入 SQLite，不把原始图片或二进制写入日志。用户原文不改写；仅组装模型请求时在对应 user 消息添加 Files attached to this message 文件清单。随五轮窗口整轮裁剪，历史消息恢复后仍可识别原附件。系统会话文件目录不再代表最新消息附件；新上传但未发送的文件不进入模型目录。原有旧文件保持兼容，不推测其历史消息归属。
 
+## Office XML 编码检查
+
+预检根据 BOM / XML 字节签名解码 UTF-8、UTF-16LE、UTF-16BE，再进行 XML 和 DOCTYPE/ENTITY 安全检查。部分 Office customXml 元数据虽然声明 UTF-8/us-ascii，实际为带 BOM 的 UTF-16；检查按字节标记处理，不重写原始 ZIP 部件。无效编码、UTF-32、非法 XML、DTD/实体声明继续拒绝；错误指出具体部件与错误类别，不把一般解析错误当作加密/宏/外链证据。此兼容性覆盖元数据预检，不承诺所有文档解析库都支持 UTF-16 主文档。Excel 写入优先使用精确工作表名（包括真实前后空格），保留之前的 trim 名称回退。
+
 ## Excel 写入完整性
 
 写入时先读取完整开标签，单独处理自闭合空单元格/空行，不允许匹配跨越相邻单元格或行。写入后及 ZIP 序列化后分别检查：XML、坐标顺序及行归属、既有行属性、未修改单元格原始 XML、目标值与样式/元数据、工作表外部布局和 dimension 范围。原件不变；校验失败抛错，不发布文件、不登记 generated-file，不返回 ok:true。无法明确识别的结构（如缺省行/单元格坐标、带前缀的 sheetData）明确拒绝，避免猜测写入位置。仍保留公式保护及未修改 ZIP 部件的摘要检查。

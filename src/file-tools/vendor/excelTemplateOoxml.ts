@@ -79,8 +79,10 @@ export async function patchWorkbookTemplateOoxml(
   let requestedCells = 0;
 
   for (const operation of operations) {
-    const sheetName = operation.sheet.trim();
-    const sheet = sheetByName.get(sheetName);
+    const sheetName = operation.sheet;
+    // Trailing whitespace can be part of an actual worksheet name. Prefer the
+    // exact name and retain the old trim fallback for callers adding whitespace.
+    const sheet = sheetByName.get(sheetName) ?? sheetByName.get(sheetName.trim());
     if (!sheet) {
       throw new Error(`Worksheet not found: ${sheetName || "(empty)"}.`);
     }
