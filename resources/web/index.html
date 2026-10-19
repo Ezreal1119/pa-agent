@@ -18,7 +18,6 @@
       <div class="sidebar-bottom">
         <div class="local-card"><span class="local-dot"></span><div>Knowledge workspace<small>Conversations retained for 30 days</small></div><span class="local-symbol">⌁</span></div>
         <a id="contacts-open" class="settings-button" href="/wecom-contacts"><span>♧</span> WeCom contacts <span class="settings-arrow">↗</span></a>
-        <a id="mcp-usage-open" class="settings-button" href="/mcp-usage"><span>◷</span> MCP usage <span class="settings-arrow">↗</span></a>
         <button id="settings-open" class="settings-button"><span>⚙</span> Agent settings <span class="settings-arrow">↗</span></button>
         <button id="logout" class="settings-button"><span>↪</span> Sign out</button>
         <div class="sidebar-foot">PRODUCT EXPERT CLOUD <span>v0.1</span></div>
@@ -109,6 +108,16 @@
       <label for="global-effort">Reasoning level</label>
       <select id="global-effort"><option value="off">Fast · Reasoning off</option><option value="low">Standard · Everyday questions</option><option value="high">Thorough · Complex analysis</option><option value="max">Deep research · Comprehensive analysis</option></select>
       <p id="effort-support" class="settings-help"></p>
+      <section id="mcp-settings" aria-label="MCP settings">
+        <label class="file-tool-option"><span><strong>MCP</strong><small>Changes apply immediately. Existing tasks continue when access is disabled.</small></span><input id="mcp-enabled" type="checkbox" role="switch" aria-label="Enable MCP"></label>
+        <div class="mcp-settings-stats">
+          <div><span>Submitted Task</span><strong id="mcp-submitted">—</strong></div>
+          <div><span>Input Tokens</span><strong id="mcp-input">—</strong></div>
+          <div><span>Output Tokens</span><strong id="mcp-output">—</strong></div>
+          <div><span>Total recorded tokens</span><strong id="mcp-total">—</strong></div>
+        </div>
+        <p id="mcp-settings-error" class="form-error" role="alert" hidden></p>
+      </section>
       <div class="file-tools-heading"><div><strong>Online tools</strong><small>Go online only when external information is needed, not for every question.</small></div></div>
       <p id="web-tools-help" class="settings-help"></p>
       <div id="web-tool-toggles" class="file-tool-toggles">

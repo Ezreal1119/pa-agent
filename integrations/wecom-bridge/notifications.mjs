@@ -6,7 +6,8 @@ import {splitUtf8, DAY} from './protocol.mjs';
 const escape = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replace(/[\\`*_{}\[\]()#!|]/g,'\\$&');
 const clock = new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 export function notificationText(entry, name) {
-  const lines=['🔔 Product Expert 收到一条新消息','',`对话人：${escape(name || entry.userId)}`,`类型：${entry.chatType==='group'?'群聊':'私聊'}`];
+  const displayName=typeof name==='string'?name.trim():'';
+  const lines=['🔔 Product Expert 收到一条新消息','',`对话人：${escape(displayName || entry.userId)}`,`类型：${entry.chatType==='group'?'群聊':'私聊'}`];
   if(entry.chatType==='group')lines.push(`群聊：${escape(entry.chatId)}`);
   lines.push(`时间：${clock.format(new Date(entry.at))}`,'',...(entry.text || '（仅发送附件）').split('\n').map(line=>`> ${escape(line)}`));
   if(entry.attachments?.length)lines.push('',`附件：${entry.attachments.map(escape).join('、')}`);
@@ -86,7 +87,9 @@ export class MessageObserver {
       const target=this.recipientFor(entry.botId);
       // Reconfiguration takes effect on unsent notifications too; never send old work to another recipient.
       if(entry.notifyTo && target===entry.notifyTo && entry.userId!==target){
-        if(!entry.parts){entry.parts=splitUtf8(notificationText(entry,contact.contact?.name));await this.save();}
+        // Until any chunk is acknowledged, rebuild from the current backend name,
+        // including unsent cached text restored after a crash.
+        if(!entry.parts || !entry.sent){entry.parts=splitUtf8(notificationText(entry,contact.contact?.name));await this.save();}
         for(let index=entry.sent;index<entry.parts.length;index++){
           if(this.closed)return;
           await this.clients.get(entry.botId).sendMessage(entry.notifyTo,{msgtype:'markdown',markdown:{content:entry.parts[index]}});

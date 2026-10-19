@@ -166,3 +166,27 @@ test('legacy backend tool-result metadata restores downloadable cards without pa
  const entries=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);const dropped=new Map(entries.filter(e=>e.customType==='generated-file-v1').map(e=>[e.id,e.parentId]));const remaining=entries.filter(e=>e.customType!=='generated-file-v1');for(const entry of remaining)while(dropped.has(entry.parentId))entry.parentId=dropped.get(entry.parentId);await fs.writeFile(log,remaining.map(e=>JSON.stringify(e)).join('\n')+'\n');
  await f.restart(false);const restored=await(await f.request(`/api/sessions/${id}`)).json();assert.equal(restored.messages.flatMap(m=>m.outputs||[])[0].id,file.id);assert.equal((await f.request(`/api/sessions/${id}/files/${file.id}`)).status,200);
 });
+
+
+test('new workbook and HTML/Java/Markdown outputs use backend cards, safe authenticated downloads, restart and deletion',{timeout:30000},async t=>{
+ const f=await setup(t);const id=await f.create();const preferences=(await(await f.request('/api/agent-settings')).json()).settings;assert.equal(preferences.fileTools.tools.excel_create,false);assert.equal(preferences.fileTools.tools.text_file_create,false);
+ for(const name of Object.keys(preferences.fileTools.tools))preferences.fileTools.tools[name]=['excel_create','text_file_create'].includes(name);
+ assert.equal((await f.request('/api/agent-settings','PUT',preferences)).status,200);
+ f.setHandler((body,res)=>{
+  if(body.messages.at(-1).role==='tool')return reply(res,undefined,'Done.');
+  const question=JSON.stringify(body.messages.findLast(m=>m.role==='user'));
+  assert.ok(body.tools.some(t=>t.function.name==='excel_create'));assert.ok(body.tools.some(t=>t.function.name==='text_file_create'));
+  if(question.includes('Excel'))return reply(res,{name:'excel_create',args:{filename:'comparison.xlsx',sheets:[{name:'Comparison',headers:['Model','Screen'],rows:[['DT610',6],['DT630',6.6]]}]}});
+  const ext=question.includes('HTML')?'html':question.includes('Java')?'java':'md';reply(res,{name:'text_file_create',args:{filename:'output.'+ext,content:ext==='html'?'<script>throw new Error("not executed")</script><h1>Test</h1>':ext==='java'?'public class Example {}':'# Test\n\n中文'} });
+ });
+ const outputs=[];
+ for(const question of ['Export Excel','Export HTML','Export Java','Export Markdown']){
+  const events=frames(await(await f.request(`/api/sessions/${id}/run`,'POST',{text:question})).text());const published=events.find(e=>e.event==='output');const done=events.find(e=>e.event==='done').data;assert.equal(done.failed,false,JSON.stringify(done));assert.ok(published);const file=done.messages.filter(m=>m.role==='assistant').at(-1).outputs[0];assert.equal(file.id,published.data.file.id);outputs.push(file);
+  const response=await f.request(`/api/sessions/${id}/files/${file.id}`);assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),/^attachment;/);assert.equal(response.headers.get('content-type'),'application/octet-stream');assert.equal(response.headers.get('x-content-type-options'),'nosniff');const bytes=Buffer.from(await response.arrayBuffer());if(file.name.endsWith('.html'))assert.match(bytes.toString(),/<script>/);
+ }
+ assert.ok(!JSON.stringify(f.payloads).includes('generated-file-v1'));
+ for(const name of Object.keys(preferences.fileTools.tools))preferences.fileTools.tools[name]=false;assert.equal((await f.request('/api/agent-settings','PUT',preferences)).status,200);
+ await f.restart(false);const restored=await(await f.request(`/api/sessions/${id}`)).json();assert.equal(new Set(restored.messages.flatMap(m=>(m.outputs||[]).map(file=>file.id))).size,4);
+ for(const file of outputs)assert.equal((await f.request(`/api/sessions/${id}/files/${file.id}`)).status,200);
+ assert.equal((await f.request(`/api/sessions/${id}`,'DELETE')).status,200);assert.equal(await fs.stat(path.join(f.dataDir,'files',id)).catch(()=>null),null);
+});

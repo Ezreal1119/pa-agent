@@ -1,6 +1,6 @@
 # Text-only Product Expert MCP
 
-MCP 使用现有 `product-expert.service`，入口为 `/mcp`，采用官方 SDK 的 Streamable HTTP 传输。每次请求必须携带独立的 `Authorization: Bearer <MCP_API_KEY>`，无需管理员登录或 WeCom 凭据。`MCP_ENABLED` 默认关闭，Key 未配置/缺失/错误均返回401（不启动模型、也不增加Token统计）；管理页面和原 Web/WeCom API 的认证规则保持不变。
+MCP 使用现有 `product-expert.service`，入口为 `/mcp`，采用官方 SDK 的 Streamable HTTP 传输。每次请求必须携带独立的 `Authorization: Bearer <MCP_API_KEY>`，无需管理员登录或 WeCom 凭据。`MCP_ENABLED` 仅作尚无保存偏好时的初始值，默认关闭；Web保存的开关优先，Key 未配置/缺失/错误均返回401（不启动模型、也不增加Token统计）；管理页面和原 Web/WeCom API 的认证规则保持不变。
 
 ## 启用与连接
 
@@ -70,7 +70,9 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 ## Token 口径与管理页面
 
-登录 Web 后，左侧 **MCP usage** 打开独立 `/mcp-usage` 页面，可查看累计提交数、输入/输出/总 Token、模型请求数、usage 覆盖及最近50个任务。受管理员认证的 `GET /api/mcp/usage` 还包含按 conversation 的累计用量；MCP 工具不开放其他调用者的任务列表；所有持有同一个Key的客户端共用MCP权限与累计统计。当前为共享Key，只按任务和conversation统计，不将Key映射为真实个人。统计接口只显示认证方式和Key是否配置，不返回Key。
+登录Web后打开 **Agent settings → MCP**，只显示 Submitted Task、Input Tokens、Output Tokens、Total recorded tokens 四项累计和一个开关。开关即时保存到 `.data/web-agent-settings.json`，关闭不会清空统计/任务或取消已开始的运行，但后续 `/mcp` HTTP 请求（含轮询）返回404；重新开启后仍可取回保留期内的结果。无需重启，刷新/重启后保留。Key继续只在.env配置，未配置Key时开启返回400。MCP开关独立于本对话框其他偏好保存，Cancel不会撤销已即时保存的MCP开关。
+
+旧 `/mcp-usage` 链接重定向到工作空间并自动打开Settings；不再保留独立页面。管理GET/PUT `/api/mcp/settings` 受原登录/CSRF约束，PUT只接收 `{ "enabled": true/false }`；GET返回开关、Key是否配置和四项累计（不构建完整任务列表）。原受管理员认证的GET `/api/mcp/usage`仍保留完整调试统计，包括按conversation累计。共享Key不区分真实个人，MCP工具不开放其他调用者列表。
 
 - 累计本次 Agent 工具循环中所有 SDK 模型请求，不只统计最终一条回答；输入含 cacheRead/cacheWrite，输出已有的 reasoning 不再重复相加。
 - 查询任务和取消操作不执行模型；幂等重试不启动新任务。第三方 search/fetch 按次费用、资料库上游内部成本、调用方自身大模型用量不计入本服务模型 Token。

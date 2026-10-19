@@ -625,7 +625,7 @@ test('Agent settings enforce authentication, CSRF, schema and provider capabilit
 test('Agent preferences reject linked or malformed storage without changing other files', async t=>{
  const {AgentSettingsStore}=await import('../dist/web/agent-settings.js');
  const root=await mkdtemp(path.join(tmpdir(),'expert-agent-preferences-'));t.after(()=>rm(root,{recursive:true,force:true}));
- const defaults={effort:'low',libraryLinks:{enabled:true},webTools:{tools:{search:false,fetch:false}},fileTools:{tools:Object.fromEntries(['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read'].map(name=>[name,true]))}};
+ const defaults={effort:'low',libraryLinks:{enabled:true},webTools:{tools:{search:false,fetch:false}},fileTools:{tools:Object.fromEntries(['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read','excel_create','text_file_create'].map(name=>[name,true]))}};
  const store=new AgentSettingsStore(root);const sentinel=path.join(root,'env-fixture');await writeFile(sentinel,'DO_NOT_CHANGE');await symlink(sentinel,store.file);
  await assert.rejects(store.save(defaults),/regular file/);assert.equal(await readFile(sentinel,'utf8'),'DO_NOT_CHANGE');await rm(store.file);
  await writeFile(store.file,'malformed JSON');await assert.rejects(store.load(defaults));
@@ -638,7 +638,7 @@ test('legacy Agent preferences default library links on and persist an explicit 
  const root=await mkdtemp(path.join(tmpdir(),'expert-links-preferences-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const legacy={effort:'high',fileTools:{enabled:false,tools:Object.fromEntries(['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read'].map(name=>[name,name==='pdf_read']))}};
  const store=new AgentSettingsStore(root);await writeFile(store.file,JSON.stringify(legacy));
- const loaded=await store.load({...legacy,libraryLinks:{enabled:true}});assert.deepEqual(loaded,{...legacy,fileTools:{tools:Object.fromEntries(Object.keys(legacy.fileTools.tools).map(name=>[name,false]))},libraryLinks:{enabled:true},webTools:{tools:{search:false,fetch:false}}});
+ const loaded=await store.load({...legacy,libraryLinks:{enabled:true}});assert.deepEqual(loaded,{...legacy,fileTools:{tools:Object.fromEntries([...Object.keys(legacy.fileTools.tools),'excel_create','text_file_create'].map(name=>[name,false]))},libraryLinks:{enabled:true},webTools:{tools:{search:false,fetch:false}}});
  loaded.libraryLinks.enabled=false;await store.save(loaded);
  assert.deepEqual(await new AgentSettingsStore(root).load({...legacy,libraryLinks:{enabled:true}}),loaded);
  assert.equal((await stat(store.file)).mode&0o777,0o600);
@@ -664,11 +664,12 @@ test('master-free preferences preserve legacy effective states and enable a sing
 
 test('all Web pages and fixed scripts use English and settings contain only individual tool switches', async t=>{
  const f=await fixture(t,false);
- for(const route of ['/','/login','/wecom-contacts','/mcp-usage','/app.js','/login.js','/contacts.js','/mcp.js']){
+ for(const route of ['/','/login','/wecom-contacts','/app.js','/login.js','/contacts.js']){
   const response=await f.request(route,'GET',undefined,route==='/login'?{Cookie:''}:{});assert.equal(response.status,200,route);const body=await response.text();assert.doesNotMatch(body,/\p{Script=Han}/u,route);
   if(route.endsWith('.js'))continue;assert.match(body,/<html lang="en-US">/);
   if(route==='/'){assert.ok(!body.includes('id="web-tools-enabled"'));assert.ok(!body.includes('id="file-tools-enabled"'));assert.match(body,/Enable web search/);assert.match(body,/Enable page fetching/);}
   if(route==='/login')assert.match(body,/Sign-in lasts 7 days/);
  }
+ const moved=await f.request('/mcp-usage');assert.equal(moved.status,302);assert.equal(moved.headers.get('location'),'/?settings=mcp');
  const bad=await f.request('/api/auth/login','POST',{account:'wrong',password:'wrong'});assert.equal(bad.status,401);assert.equal((await bad.json()).error,'Incorrect account or password.');
 });

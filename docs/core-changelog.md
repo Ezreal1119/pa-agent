@@ -20,7 +20,7 @@
 - 每轮额外注入 `.data/memory/MEMORY.md`，通过单个 memory 工具的 action=add/edit/delete 管理；产品 Skill MEMORY 和保留的历史 UMS MEMORY 均不由该工具写入，基础工具五个，资料库链接检索独立开关默认开启后为六个（可选文件模块再加最多六个）。带版本检查、同进程写入队列、原子保存和备份。见 2026-10-18 额外记忆记录及后续合并修正。
 - 系统提示及 memory.content 参数说明以软约束要求记忆正文标题从三级（###）起步，不新增硬校验或改写已有记忆。见 2026-10-18 标题规范记录。
 
-- 可选文件模块新增六个专用工具及 Web 上传/下载；受控 session 文件存储、串行任务队列、独立视觉配置和 Ubuntu worker 镜像。开关默认关闭，关闭并恢复旧会话仍为基础工具（资料库链接独立开关开启时六个、关闭时五个）；文件模块最多再加六个，并收窄原生读取路径。见 2026-10-18 文件工具记录。
+- 可选文件模块新增六个专用工具及 Web 上传/下载；受控 session 文件存储、串行任务队列、独立视觉配置和 Ubuntu worker 镜像。开关默认关闭，关闭并恢复旧会话仍为基础工具（资料库链接独立开关开启时六个、关闭时五个）；文件模块最多再加八个（新增两个创建工具默认关闭），并收窄原生读取路径。见 2026-10-18 文件工具记录。
 
 - 附件支持按用户消息绑定（图片/PDF/DOCX/XLSX/PPTX）、待发送区与消息下展示，JSONL custom entry 保存关联；会话过期与手动删除同步清理全部附件，即使工具开关关闭也生效。见 2026-10-18 消息附件记录。
 
@@ -49,7 +49,7 @@
 - 新增可选联网工具 `search` / `fetch`，通过DeepSeek固定HTTP接口按需搜索/读取公开网页；当前Web仅保留两个独立开关，初始均关闭，Web/企微共用，最多再加两个工具。见2026-10-19联网工具及英文界面记录。
 - 新增默认工具 `get_file_link_from_library`，按当前用户原文调用固定资料库 API 返回文件/软件下载链接，Web/企微共用，独立于文件处理开关，Web Agent 设置支持单独启停并持久化，旧设置默认开启。见 2026-10-19 资料库链接工具及开关记录。
 
-- 新增默认关闭、可显式启用的文本 MCP `/mcp`（现已增加MCP_API_KEY Bearer鉴权，见后续记录），三个任务工具复用Core与共享执行队列；逐任务/会话/累计Token持久统计，管理员新增独立MCP usage页面。MCP禁用文件处理及记忆写入。详见2026-10-19文本MCP记录。
+- 新增默认关闭、可显式启用的文本 MCP `/mcp`（现已增加MCP_API_KEY Bearer鉴权，见后续记录），三个任务工具复用Core与共享执行队列；逐任务/会话/累计Token持久统计，管理员Settings现整合MCP四项累计及持久开关（原独立页面重定向）。MCP禁用文件处理及记忆写入。详见2026-10-19文本MCP记录。
 
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
@@ -445,3 +445,33 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 验证：专项回归首轮13/13通过，包括官方SDK客户端携带头完成问答/轮询/取消，新增未授权各种方法/三工具拒绝及零模型和统计、query不能替代、Web认证不可混用、重启轮换后旧Key拒绝/历史结果与Token保留、空Key拒绝但管理员可用、密钥不进入模型payload/管理统计，以及隔离.env读取与格式校验。最终完整回归结果后补。本机模拟模型验证，不代表VPS/真实客户端已部署验收；开发目录ProductExpertCloud，未触碰参考项目/业务知识记忆或VPS。
 
 最终验证补充：包含隔离.env真实读取、全部未授权工具路径和Key轮换的最终完整`npm test` 144/144通过（约26.5秒），日志`.data/debug/mcp/auth-full-tests.log`；前端脚本语法与git diff检查通过。未使用真实模型/生产密钥，未修改实际.env或部署VPS。
+
+
+## 2026-10-19 — MCP整合Settings与通知备注刷新
+
+原因：用户要求MCP合并到Settings，仅显示提交数/输入/输出/总Token和可自由启停；企微后台有姓名时通知直接显示姓名。
+
+界面/接口：移除MCP侧栏独立入口和旧静态页面/脚本，Agent Settings增加MCP区四项累计（Submitted Task、Input Tokens、Output Tokens、Total recorded tokens）和即时保存switch。旧/mcp-usage重定向/?settings=mcp并自动打开Settings。新增管理员GET/PUT /api/mcp/settings；GET仅读紧凑累计，不构建任务/会话列表，PUT仅接受enabled布尔，原Cookie/CSRF/Host/Origin检查不变。Key仍只在.env配置，未配置Key不能开启；MCP Bearer鉴权保留。
+
+持久化/兼容性：mcp.enabled作为可选字段写入现有.data/web-agent-settings.json，不改变文件权限和原子保存，已有文件不含字段时沿用MCP_ENABLED初始值，保存偏好后优先于env。普通Agent设置保存保留旧客户端未传的MCP值，两条保存路径共用configuring互斥。单独切MCP不销毁Runtime、不拒绝正在执行的Web/企微或取消已开始的MCP任务；关闭后新MCP请求（包括新轮询）404，重开可取回保留结果。四项累计及历史保持；完整管理统计/api/mcp/usage保留。
+
+企微：原逻辑已在发送前读取联系人name，有备注就不附发送者ID，未备注保留ID帮助识别。此次修正未发出任何片段但已缓存parts的任务在重启后仍可能复用旧ID的边界，未确认发送前按最新name重建parts，去除首尾空白。已有成功片段保持原文/进度，不回改已发送消息。联系人页增加备注用于未来通知的英文说明，群/私同人按Bot ID+User ID规则不变，Web会话标题不作为联系人备注。
+
+验证：新增MCP开关即时生效/保存重启/旧客户端保存不覆盖/鉴权/schema/无Key拒绝/累计保留及既有任务继续测试；企微补充缓存旧ID重启后新备注测试，以及真实本机HTTP管理员修改备注→Bridge联系人接口→私聊/群聊/改名后通知均使用名称且不含User ID。使用隔离数据、模拟模型/企微传输；未向实际用户推送、未改真实.env/联系人/知识或VPS。最终验证结果后补。
+
+最终验证补充：完整`npm test` 148/148通过（约28.7秒），日志`.data/debug/mcp/settings-full-tests.log`；前端/Bridge语法和git diff检查通过。首轮定向发现既有英文页面测试把旧/mcp-usage预期为200，已按新的302跳转契约修正，生产路由未改回旧页面。隔离浏览器确认侧栏不再有MCP入口，Settings内仅四项累计与开关，关→刷新保持关→重新开即时保存且累计1420不变，截图`.data/debug/mcp/settings-merged.png`（虚构统计）。测试tab和60219隔离服务已关闭。没有对生产域名进行启停、备注或推送操作。
+
+
+## 2026-10-19 — 新建Excel与UTF-8文本输出
+
+原因：用户要求从零输出Excel对比表，并输出HTML/MD/Java等文本文件；复用既有受控附件交付，不开放通用磁盘写入。
+
+工具：新增excel_create(filename,sheets)及text_file_create(filename,content)，Web Settings独立开关且初始关闭；Core/FileTools默认仍仅原六项，旧六项偏好迁移补两项false，FILE_TOOLS_ENABLED=true不误开新能力。原有工具注册、模板patch的逐XML改动/公式保护保持。可选表头/矩形数据/多表/列宽/数字格式/冻结/筛选；新建Excel单元格仅字面文字、有限数值、布尔/null，=前缀也为文字，不提供公式/宏/外链对象。每表≤5000行/200列、≤20表且遵守配置总单元格/表数；生成后Office预检、ExcelJS逐格核对才发布。文本UTF-8保持内容/换行，≤262144字符且编码≤1MiB，拒绝NUL/非法UTF-8，不编译/运行/部署源码。
+
+文件边界：输入/输出扩展名白名单分开，上传仍原五类；输出允许xlsx或受限文本/源码后缀。无输入创建任务使用独立work目录，统一worker/队列/超时/取消；文本不加载Excel/Office解析模块，无新依赖或转换器要求。发布随机UUID磁盘名，model只给展示名，不可指定目录/覆盖/写.env等点文件，拒绝符号链接/硬链接/超单文件及会话配额，补充输出200文件上限。产物400，失败清临时目录且不登记输出。HTML按原octet-stream+attachment/nosniff/CSP下载，不在Agent域内执行。
+
+交付：复用generated-file-v1/run关联、实时output事件和前端下载卡片，扩展旧工具结果恢复白名单以恢复两种creator输出。Web/企微受控file下载及Bridge generic file发送复用，无需模型文字含文件名，文件模块关闭/重启仍可下载既有输出，会话删除/30天到期同步删除。MCP textOnly即使Web全开八文件工具仍不注册/执行文件写入。Skill模板增加新建指导与text文件Skill，均无需专属MEMORY，不改业务Skill和记忆。
+
+验证：新增5项真实文件creator测试（多表/样式/每值/Unicode/空值/文字公式、21种文本扩展、无模板/无转换器/无视觉、路径/覆盖/schema/符号链接/限额/超时取消/默认关闭旧偏好/过期）及Web真实SDK+模拟模型下载卡片/HTTP安全头/关闭重启恢复/删除，企微全链路文本提问→Core→真实xlsx/html/java/md字节→模拟发送。MCP测试扩大到Web八工具全开，仍无文件工具。完整npm test155/155通过（约21.8秒）；后续production专项和浏览器验证后补。未调用真实模型/企微、未修改实际.env/业务资料/记忆/联系人或VPS，未提交推送。
+
+最终验证补充：`npm run test:file-create`实际以NODE_ENV=production、空FILE_WORKER_IMAGE执行，5/5通过（约6.8秒），不依赖MarkItDown/视觉；日志`.data/debug/file-create/production-tests.log`。完整155/155结果不变（此后仅补文档/npm便捷命令，无运行逻辑改动）。浏览器隔离测试确认两项初始关闭，单独开启保存后，纯文字提问生成comparison.xlsx和example.html，最终文字不含文件名但均有下载卡片；刷新恢复两张卡片，Settings两开关仍开启，其他六项仍关闭。截图settings.png/web-outputs.png统一`.data/debug/file-create/`，内容和用量为虚构夹具。前端语法及git diff检查通过；测试tab和65284隔离服务已关闭。未在真实VPS/Linux或真实企微/模型验收新工具，也未修改实际用户设置、业务资料或部署状态。

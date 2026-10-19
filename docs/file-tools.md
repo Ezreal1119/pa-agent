@@ -1,6 +1,6 @@
 # 可选文件工具
 
-实现位于 ProductExpertCloud。patrick-agent 只作为读取来源；未运行其构建、生成器或测试。六个模型工具共用独立执行队列、受控文件存储和视觉接口，不迁入源项目的 Agent Runtime、数据库或权限系统。
+实现位于 ProductExpertCloud。patrick-agent 只作为读取来源；未运行其构建、生成器或测试。八个可选模型工具共用独立执行队列、受控文件存储和视觉接口，不迁入源项目的 Agent Runtime、数据库或权限系统。
 
 ## 开关与兼容性
 
@@ -11,13 +11,13 @@ VISION_LLM_API_KEY=your-key
 VISION_LLM_MODEL=your-vision-model
 ```
 
-首次各文件工具默认由 FILE_TOOLS_ENABLED 决定（false），修改环境变量后重启。英文 Web “Agent settings”仅有六个独立开关，无总开关，任意一项开启即启动文件模块并只注册所选工具；全部关闭则不加载file-skills、不启动文件任务或文件缓存清理定时器。偏好保存到 `.data/web-agent-settings.json` 的 `fileTools: { tools }`，优先于环境变量的初始值，重启保留，不改写.env。旧配置含enabled=false时迁移为六项全部false；enabled=true时保留单项选择，不会因移除总开关而误开启。基础read/grep/find/ls/memory及独立资料库/联网选择保留。已有附件、输出和工具记录仍可由已登录管理员下载；全部文件工具关闭时隐藏上传入口，上传API返回409。会话过期删除附件的联动保持。
+首次原有六个文件工具默认由 FILE_TOOLS_ENABLED 决定（false），新增excel_create/text_file_create始终默认关闭，修改环境变量后重启。英文 Web “Agent settings”提供八个独立开关，无总开关，任意一项开启即启动文件模块并只注册所选工具；全部关闭则不加载file-skills、不启动文件任务或文件缓存清理定时器。偏好保存到 `.data/web-agent-settings.json` 的 `fileTools: { tools }`，优先于环境变量的初始值，重启保留，不改写.env。旧配置含enabled=false时迁移为全部false；旧设置缺少两个创建项时补false；enabled=true时保留单项选择，不会因移除总开关而误开启。基础read/grep/find/ls/memory及独立资料库/联网选择保留。已有附件、输出和工具记录仍可由已登录管理员下载；全部文件工具关闭时隐藏上传入口，上传API返回409。会话过期删除附件的联动保持。
 
-六项全部启用时共 11 个工具，部分启用为原五项加所选项。独立开关同步限制 SDK 工具注册和直接执行，关闭的文件 Skill 不再自动提供；总开关关闭时保留各项选择，以便下次启用。默认产品 Skill、产品记忆与额外记忆注入（UMS 为按需普通 Skill，无专属记忆加载）、五轮窗口、SDK JSONL、会话重命名/删除和管理员登录沿用现有机制。新增文件 Skill 位于 resources/file-skills，按需读取，无需对应 MEMORY。所有文件 Skill 遵守默认不展示来源的回答规则。
+八个文件工具分别注册/执行，基础五项、独立资料库链接与两个联网工具另计，全部开启最多16项。关闭工具不再自动提供对应文件Skill。默认产品 Skill、产品记忆与额外记忆注入（UMS 为按需普通 Skill，无专属记忆加载）、五轮窗口、SDK JSONL、会话重命名/删除和管理员登录沿用现有机制。新增文件 Skill 位于 resources/file-skills，按需读取，无需对应 MEMORY。所有文件 Skill 遵守默认不展示来源的回答规则。
 
 启用会额外收窄四个原生读取工具的路径，只允许当前 session 文件、两个专家知识根目录及项目 Skill 资源。二进制文件必须使用专用工具，避免原生 read 在主进程直接解码图片。这是启用状态下有意增加的访问限制；关闭时恢复原读取行为。
 
-## 六个工具
+## 八个工具
 
 | 工具 | 主要参数 | 输出和边界 |
 | --- | --- | --- |
@@ -26,9 +26,11 @@ VISION_LLM_MODEL=your-vision-model
 | pptx_read | path、slideNumbers、query、offset/maxCharacters | 幻灯片、备注和支持的表格/图表文本；图片像素、精确布局和动画未分析 |
 | excel_read | path、scope=workbook/worksheet、sheet、range、visualAnalysis | 工作簿/工作表、公式与缓存结果、批注、合并单元格；图片分析默认 false；too_large 时缩小范围 |
 | excel_patch_template | sourcePath、outputPath、operations | setCell/setRange/clearCell/clearRange；新文件、内部验证、默认保护原文件和公式单元格，不提供 allowReplaceFormula 参数 |
+| excel_create | filename、sheets[{name,headers,rows,widths?,formats?,freezeHeader?,autoFilter?}] | 无输入模板；新xlsx，表头样式、自动换行/列宽、筛选/冻结、基本数字格式；每个值读回核对，单元格仅文字/数值/布尔/null，不支持公式对象 |
+| text_file_create | filename、content | UTF-8新文本/源码附件；不执行/编译/部署，保持内容及换行，最多262144字符且编码后≤1MiB |
 | image_read | path、question、region | PNG/JPEG/WebP；视觉描述、原始/处理尺寸、缩放/裁剪信息；region 为原图像素坐标 |
 
-路径使用附件列表返回的 inputs/... 或 outputs/...，也可使用允许的知识文件绝对路径。输出只接受新 .xlsx 文件名（可带 outputs/ 前缀），服务端生成实际存储 ID。禁止任意输出目录、覆盖和修改知识库、Skill 记忆。Excel 按指定 XML 部分修改，校验结构、原有内部部分摘要及意外变更后才发布；不计算公式，打开时请求重算。不得把缓存公式结果当作刚计算的结果。
+路径使用附件列表返回的 inputs/... 或 outputs/...，也可使用允许的知识文件绝对路径。模板patch输出接受新.xlsx文件名（可带outputs/前缀）；两个创建工具只接受文件名、不接受目录，服务端生成实际存储 ID。禁止任意输出目录、覆盖和修改知识库、Skill 记忆。Excel 按指定 XML 部分修改，校验结构、原有内部部分摘要及意外变更后才发布；不计算公式，打开时请求重算。不得把缓存公式结果当作刚计算的结果。
 
 ExcelJS 读取失败时按原逻辑回退到只读 OOXML，再回退到 MarkItDown。最后一级失去结构化单元格、范围、批注、公式及图片语义，会明确标注。Word/Excel 图片失败时保留可读文本并报告 unavailable。PDF 没有文字时可显式请求页面视觉分析。视觉结果存在识别误差，缩放后的概览不能保证小字完整；可对重要区域逐块读取。
 
@@ -139,3 +141,35 @@ Web 通过新增 SSE output 事件及时收到 `{ runId, file }`，在本轮回�
 ## 验证边界
 
 本机自动测试、真实模型验证、Ubuntu 容器验证分别记录在 dev-history/2026-10-18-file-tools.md。小型夹具通过不能证明所有复杂业务文档均可完整转换，也不能代替真实 VPS 的长期负载验收。
+
+
+## 从零创建 Excel / 文本文件
+
+Web Agent settings分别开启 **Create Excel** / **Create text file** 后，Web和企微后续请求生效；关闭时不注册工具，直接执行也拒绝。两个创建工具默认关闭，旧六项设置/FILE_TOOLS_ENABLED=true不会自动打开它们。创建不需要附件、MarkItDown、视觉模型或额外依赖，ExcelJS已在项目中；模板patch原逻辑不改。所有输出沿用generated-file-v1登记、回答下载卡片、Bridge file回传、重启恢复与会话删除/30天清理，模型最终文字不必包含文件名或路径。MCP仍为文本问答profile，不开放这两个文件工具。
+
+例子：
+
+```json
+{
+  "filename": "DT610-DT630.xlsx",
+  "sheets": [{
+    "name": "Comparison",
+    "headers": ["Feature", "DT610", "DT630"],
+    "rows": [["Example", "Value A", "Value B"]],
+    "widths": [24, 36, 36],
+    "formats": ["text", "text", "text"]
+  }]
+}
+```
+
+上述仅说明工具格式，不是产品事实。每张表最多5000条数据行/200列、20张表，另受FILE_MAX_SHEETS/FILE_MAX_CELLS总量（默认50000单元格，含表头）限制。rows、widths/formats若提供，列数必须和headers一致；工作表名长度≤31且不重名。formats可选general/text/integer/decimal/percent，默认冻结表头并启用筛选。所有字符串（包括以=开头的文字）写为文字；不提供公式对象、宏、超链接对象或执行代码接口。创建后经Office包预检及ExcelJS逐格读回核对才发布，不承诺模型所填业务数据自动真实。
+
+```json
+{"filename":"comparison.md","content":"# Comparison\n\nComplete UTF-8 text here.\n"}
+```
+
+文本输出允许.txt/.md/.html/.htm/.java/.json/.csv/.xml/.yaml/.yml/.css/.js/.ts/.py/.sql/.c/.h/.cpp/.hpp/.go/.rs。只保存和校验UTF-8字节（无NUL），不检查代码编译、JSON/HTML语法或程序运行结果。输入上传白名单仍为原PDF/DOCX/PPTX/XLSX/图片，不因文本输出而扩大。内容保持原样，不自动执行/编译/预览、转换编码或添加Markdown围栏。HTML同其他输出按application/octet-stream+Content-Disposition:attachment下载，保留nosniff/CSP，不在Agent域名内作为页面运行。
+
+统一写入会话work临时任务后发布到outputs/<随机UUID>.<后缀>，展示文件名和实际磁盘名分离；拒绝绝对/相对目录、点文件、未知格式、覆盖、软/硬链接和超配额。单文件沿用FILE_MAX_BYTES且文本另限1MiB，单会话最多200文件/100MiB（可配置字节配额），串行队列与超时/取消沿用。Excel在受限worker中生成并验证，文本worker不加载Excel/Office模块；产物权限400。2核2G场景建议保持串行和现有systemd内存上限，大表仍可能被限额/OOM拒绝。
+
+专项验证：`npm run test:file-create` 以production配置运行新工具的隔离文件回归；完整`npm test`另含Web下载/恢复/删除、Core注册和模拟企微回传。本机生成夹具/模拟模型不等于真实模型选择工具或企微平台接受所有源码后缀的验收。

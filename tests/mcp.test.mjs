@@ -52,7 +52,7 @@ test('official MCP client works with Bearer authentication; fast text replies in
  assert.equal((await fetch(f.base+'/api/mcp/usage')).status,401);assert.equal((await fetch(f.base+'/api/sessions')).status,401);assert.equal((await fetch(f.base+'/mcp-usage',{redirect:'manual'})).status,302);
  const usage=await(await f.admin('/api/mcp/usage')).json();assert.equal(usage.authentication,'bearer');assert.equal(usage.totals.totalTokens,107);assert.equal(usage.totals.submitted,1);assert.equal(usage.totals.started,1);assert.equal(usage.totals.completed,1);
  for(let n=0;n<3;n++)assert.equal((await result(client,task.task_id)).answer,'Expert answer');assert.equal(f.requests.length,1);assert.equal((await(await f.admin('/api/mcp/usage')).json()).totals.totalTokens,107);
- const page=await(await f.admin('/mcp-usage')).text();assert.match(page,/MCP usage/);assert.doesNotMatch(page,/\p{Script=Han}/u);
+ const page=await(await f.admin('/mcp-usage')).text();assert.match(page,/id="mcp-settings"/);assert.ok(!page.includes('id="mcp-usage-open"'));assert.doesNotMatch(page,/\p{Script=Han}/u);
 });
 
 test('long tasks return opaque handles, survive disconnect and reconnect, accept only text and reject other channel IDs',{timeout:20000},async t=>{
@@ -79,9 +79,9 @@ test('token accounting includes every tool-loop/cache input and output reasoning
 });
 
 test('MCP cannot execute memory/file mutations or read configuration even with file tools enabled for Web',{timeout:20000},async t=>{
- const f=await fixture(t);const client=await f.client();let mode='memory';const results=[];
+ const f=await fixture(t);f.options.fileTools.tools=['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read','excel_create','text_file_create'];await f.restart();const client=await f.client();let mode='memory';const results=[];
  f.setHandler((body,res)=>{
-  assert.ok(!body.tools.some(t=>['memory','excel_read','excel_patch_template','bash','write','edit'].includes(t.function.name)));
+  assert.ok(!body.tools.some(t=>['memory','excel_read','excel_patch_template','excel_create','text_file_create','bash','write','edit'].includes(t.function.name)));
   if(body.messages.at(-1).role==='tool'){results.push(body.messages.at(-1).content);return reply(res);}
   const tool=mode==='memory'?{name:'memory',args:{action:'add',content:'MALICIOUS_WRITE'}}:mode==='file'?{name:'excel_patch_template',args:{sourcePath:'/etc/passwd',outputPath:'x.xlsx',operations:[]}}:{name:'read',args:{path:path.join(f.root,'.env')}};
   reply(res,{tool});
@@ -202,4 +202,30 @@ test('MCP key reads from startup env configuration without public serialization 
  assert.equal(mcpConfig({apiKey:'option-key'},{MCP_API_KEY:'env-key'}).apiKey,'option-key');
  assert.equal(mcpConfig({},{MCP_ENABLED:'true'}).apiKey,'');
  assert.throws(()=>mcpConfig({},{MCP_API_KEY:'bad key'}),/MCP_API_KEY/);
+});
+
+
+test('MCP toggle in Settings applies immediately, survives restart, preserves all four totals and old settings saves',{timeout:20000},async t=>{
+ const f=await fixture(t);const client=await f.client();const task=(await call(client,'ask_product_expert',{question:'Record one task'})).structuredContent;
+ const original=(await(await f.admin('/api/agent-settings')).json()).settings;
+ let settings=await(await f.admin('/api/mcp/settings')).json();assert.equal(settings.enabled,true);assert.deepEqual(settings.totals,{submitted:1,inputTokens:100,outputTokens:7,totalTokens:107});
+ assert.equal((await fetch(f.base+'/api/mcp/settings')).status,401);
+ assert.equal((await fetch(f.base+'/api/mcp/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:'{"enabled":false}'})).status,403);
+ for(const body of [{},{enabled:'false'},{enabled:false,apiKey:'forbidden'}])assert.equal((await f.admin('/api/mcp/settings','PUT',body)).status,400);
+ settings=await(await f.admin('/api/mcp/settings','PUT',{enabled:false})).json();assert.equal(settings.enabled,false);assert.equal(settings.totals.totalTokens,107);
+ assert.equal((await fetch(f.base+'/mcp',{headers:{Authorization:'Bearer MCP_ACCESS_SECRET'}})).status,404);
+ assert.equal((await f.admin('/api/agent-settings','PUT',original)).status,200); // legacy saves omit the new override
+ assert.equal((await(await f.admin('/api/mcp/settings')).json()).enabled,false);
+ await f.restart();assert.equal((await(await f.admin('/api/mcp/settings')).json()).enabled,false);
+ assert.equal((await f.admin('/api/mcp/settings','PUT',{enabled:true})).status,200);const next=await f.client();assert.equal((await result(next,task.task_id)).answer,'Expert answer');assert.equal(f.requests.length,1);
+ await f.restart();assert.equal((await(await f.admin('/api/mcp/settings')).json()).enabled,true);
+ const disk=JSON.parse(await fs.readFile(path.join(f.dataDir,'web-agent-settings.json'),'utf8'));assert.equal(disk.mcp.enabled,true);assert.ok(!JSON.stringify(disk).includes('MCP_ACCESS_SECRET'));assert.equal((await fs.stat(path.join(f.dataDir,'web-agent-settings.json'))).mode&0o777,0o600);
+ const page=await(await f.admin('/')).text();for(const label of ['Submitted Task','Input Tokens','Output Tokens','Total recorded tokens','Enable MCP'])assert.ok(page.includes(label));assert.ok(!page.includes('mcp-usage-open'));
+});
+
+test('disabling MCP does not cancel existing work or change Web authentication; missing-key enable fails closed',{timeout:20000},async t=>{
+ const f=await fixture(t,{waitMs:0});let finish;f.setHandler((_body,res)=>{finish=()=>reply(res);});const client=await f.client();const task=(await call(client,'ask_product_expert',{question:'Continue this task'})).structuredContent;await until(()=>f.requests.length===1);
+ assert.equal((await f.admin('/api/mcp/settings','PUT',{enabled:false})).status,200);assert.equal((await f.admin('/api/sessions')).status,200);
+ finish();assert.equal((await f.admin('/api/mcp/settings','PUT',{enabled:true})).status,200);assert.equal((await finished(client,task.task_id)).status,'completed');assert.equal(f.requests.length,1);
+ f.options.mcp.apiKey='';await f.restart();assert.equal((await f.admin('/api/mcp/settings','PUT',{enabled:false})).status,200);const refused=await f.admin('/api/mcp/settings','PUT',{enabled:true});assert.equal(refused.status,400);assert.match((await refused.json()).error,/MCP_API_KEY/);assert.equal((await(await f.admin('/api/mcp/settings')).json()).enabled,false);
 });

@@ -125,6 +125,10 @@ export class McpStore {
   async get(id: string) { await this.queue; const task = this.data.tasks[id]; if (!task) throw new Error("MCP task not found or expired."); return structuredClone(task); }
   tasks() { return Object.values(structuredClone(this.data.tasks)); }
   hasSession(sessionId: string) { return Object.values(this.data.conversations).some(entry => entry.sessionId === sessionId); }
+  async usageTotals() {
+    await this.queue;
+    return { submitted: this.data.totals.submitted, inputTokens: this.data.totals.inputTokens, outputTokens: this.data.totals.outputTokens, totalTokens: this.data.totals.inputTokens + this.data.totals.outputTokens };
+  }
   async summary() {
     await this.queue;
     const conversations = Object.entries(this.data.conversations).map(([id, c]) => {

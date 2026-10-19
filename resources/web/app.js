@@ -4,6 +4,7 @@ const state = { token: '', status: null, current: null, busy: false, rounds: 0, 
 const dialog = $('settings-dialog');
 const sessionDialog = $('session-dialog');
 let sessionAction = null;
+let mcpEnabled = false; let mcpSaving = false;
 const effortLabels = { off: 'Fast', low: 'Standard', high: 'Thorough', max: 'Deep research', 'provider-default': 'Provider default' };
 const statusLabels = { running: 'Running', completed: 'Completed', failed: 'Failed', stopped: 'Stopped', interrupted: 'Interrupted' };
 const countLabel = (value, noun) => `${value} ${noun}${value === 1 ? '' : 's'}`;
@@ -18,6 +19,8 @@ const fileToolOptions = [
   ['pptx_read', 'Read PowerPoint', 'Read PPTX slides, speaker notes, and text'],
   ['excel_read', 'Read Excel', 'Read XLSX workbooks, cells, and formulas'],
   ['excel_patch_template', 'Fill Excel template', 'Update selected cells and save a new workbook'],
+  ['excel_create', 'Create Excel', 'Create a new workbook from headers and data rows'],
+  ['text_file_create', 'Create text file', 'Export HTML, Markdown, Java, and other text files without running them'],
   ['image_read', 'Read image', 'Read image content with the vision model'],
 ];
 function stopClock(run) {
@@ -306,10 +309,25 @@ function newChat() {
   renderMessages([]); updateRounds(0); resetContext(); showRuns(); stopClock(); note(); void refreshSessions().catch(error => toast(error.message)); $('question').focus();
   state.pendingIds = []; renderFiles([]);
 }
+function renderMcpSettings(data) {
+  mcpEnabled = data.enabled; $('mcp-enabled').checked = mcpEnabled;
+  $('mcp-settings-error').hidden = true;
+  for (const [id, key] of [['mcp-submitted', 'submitted'], ['mcp-input', 'inputTokens'], ['mcp-output', 'outputTokens'], ['mcp-total', 'totalTokens']]) $(id).textContent = Number(data.totals[key] || 0).toLocaleString('en-US');
+}
+$('mcp-enabled').addEventListener('change', async () => {
+  if (mcpSaving) return;
+  mcpSaving = true; $('mcp-enabled').disabled = true; $('settings-save').disabled = true; $('mcp-settings-error').hidden = true;
+  try {
+    renderMcpSettings(await api('/api/mcp/settings', { method: 'PUT', body: JSON.stringify({ enabled: $('mcp-enabled').checked }) }));
+    toast(`MCP ${mcpEnabled ? 'enabled' : 'disabled'}.`);
+  } catch (error) { $('mcp-enabled').checked = mcpEnabled; $('mcp-settings-error').textContent = error.message; $('mcp-settings-error').hidden = false; }
+  finally { mcpSaving = false; $('mcp-enabled').disabled = false; $('settings-save').disabled = false; }
+});
 async function openSettings() {
   if (state.busy) return toast('Wait for the current run to finish or stop it first.');
   try {
-    const data = await api('/api/agent-settings');
+    const [data, mcp] = await Promise.all([api('/api/agent-settings'), api('/api/mcp/settings')]);
+    renderMcpSettings(mcp);
     $('global-effort').value = data.settings.effort; $('global-effort').disabled = !data.reasoningSupported;
     $('effort-support').textContent = data.reasoningSupported ? 'Fast, Standard, Thorough, and Deep research. Lower levels suit simple questions.' : 'This model uses the provider’s default reasoning settings. Tool switches remain available.';
     $('web-search-enabled').checked = data.settings.webTools.tools.search;
@@ -405,13 +423,13 @@ for (const id of ['logout', 'logout-top']) $(id).addEventListener('click', async
 });
 for (const id of ['settings-close', 'settings-cancel']) $(id).addEventListener('click', () => dialog.close());
 $('settings-form').addEventListener('submit', async event => {
-  event.preventDefault(); $('settings-save').disabled = true; $('settings-error').hidden = true;
+  event.preventDefault(); if (mcpSaving) return; $('settings-save').disabled = true; $('mcp-enabled').disabled = true; $('settings-error').hidden = true;
   try {
     const tools = Object.fromEntries([...$('file-tool-toggles').querySelectorAll('input')].map(input => [input.dataset.fileTool, input.checked]));
     await api('/api/agent-settings', { method: 'PUT', body: JSON.stringify({ effort: $('global-effort').value, webTools: { tools: { search: $('web-search-enabled').checked, fetch: $('web-fetch-enabled').checked } }, libraryLinks: { enabled: $('library-links-enabled').checked }, fileTools: { tools } }) });
     dialog.close(); await refreshStatus(); toast('Agent settings saved. Changes apply to subsequent requests.');
   } catch (error) { $('settings-error').textContent = error.message; $('settings-error').hidden = false; }
-  finally { $('settings-save').disabled = false; }
+  finally { $('settings-save').disabled = false; $('mcp-enabled').disabled = false; }
 });
 $('stop').addEventListener('click', async () => { if (state.uploadAbort) { state.uploadAbort.abort(); return; } state.cancelBeforeRun = true; if (!state.current) return note('Cancelling this run…'); $('stop').disabled = true; try { await api(`/api/sessions/${state.current}/stop`, { method: 'POST', body: '{}' }); note('Stopping this run…'); } catch (error) { toast(error.message); } finally { $('stop').disabled = false; } });
 document.addEventListener('keydown', event => {
@@ -423,6 +441,7 @@ document.addEventListener('keydown', event => {
     await refreshStatus(); await refreshSessions();
     const saved = localStorage.getItem('product-expert-session');
     if (saved && state.status.configured) await openSession(saved).catch(() => localStorage.removeItem('product-expert-session'));
+    if (new URLSearchParams(location.search).get('settings') === 'mcp') await openSettings();
   } catch (error) { $('connection-text').textContent = 'Service connection failed'; note(error.message, true); }
 })();
 

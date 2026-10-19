@@ -3,7 +3,6 @@ import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { setWorkerScope, type WorkerScope } from "./workspace.js";
 import { setVisionBridge, type VisionResult } from "./vision-bridge.js";
-import { preflightPackage } from "./preflight.js";
 import type { RuntimeTool, ToolContext } from "./bridge.js";
 import type { FileToolName } from "./config.js";
 import path from "node:path";
@@ -33,8 +32,9 @@ for await (const line of readline.createInterface({ input: process.stdin, crlfDe
 }
 async function execute(message: { scope: WorkerScope; name: FileToolName; input: Record<string, unknown> }) {
   const { scope, name, input } = message; if (name === "image_read" && input.region) scope.region = input.region as WorkerScope["region"]; scope.visualRequested = input.visualAnalysis !== undefined && input.visualAnalysis !== "off" && input.visualAnalysis !== false; setWorkerScope(scope);
+  if (name === "excel_create" || name === "text_file_create") return (await import("./create.js")).createOutput(name, input, scope);
   const extension = path.extname(scope.input);
-  if ([".docx", ".pptx", ".xlsx"].includes(extension)) await preflightPackage(scope.input, extension, scope.config);
+  if ([".docx", ".pptx", ".xlsx"].includes(extension)) await (await import("./preflight.js")).preflightPackage(scope.input, extension, scope.config);
   const context: ToolContext = {
     runId: "isolated-file-job", toolOutputMaxChars: scope.config.maxOutputChars, visualEnabled: input.visualAnalysis === true,
     settings: { model: { baseUrl: "", modelName: "" }, visionModel: { mode: "dedicated", baseUrl: "", modelName: "configured-vision" }, execution: { forceFullPdfVisualAnalysis: false, fullPdfVisionBatchPages: 1, fullPdfVisionMaxConcurrentBatches: 1 } },

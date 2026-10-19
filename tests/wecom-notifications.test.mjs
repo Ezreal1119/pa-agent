@@ -70,3 +70,27 @@ test('partial long-notification delivery resumes after restart without resending
  await f.observer.enqueue(who(),{text:'中文字'.repeat(3500),attachments:[]});await f.observer.idle();assert.equal(f.messages.length,1);assert.equal(f.observer.entries[0].sent,1);
  failSecond=false;f.advance(6000);await f.restart();await f.observer.idle();assert.equal(f.messages.length,2);assert.equal(new Set(f.messages.map(m=>m.text)).size,2);assert.ok(f.observer.entries[0].done);
 });
+
+
+test('unsent cached notification text is rebuilt with the current display name after restart',async t=>{
+ const f=await setup(t);f.connect(false);await f.observer.enqueue(who('raw-user-id'),{text:'Queued message',attachments:[]});
+ const entry=f.observer.entries[0];entry.parts=[notificationText(entry,'')];await f.observer.save();
+ f.setAlias('  胡涵  ');await f.restart();f.connect(true);f.observer.pump();await f.observer.idle();
+ assert.equal(f.messages.length,1);assert.match(f.messages[0].text,/对话人：胡涵/);assert.ok(!f.messages[0].text.includes('raw-user-id'));
+});
+
+test('names saved through the real administrator API reach private/group Bridge notifications without User IDs',async t=>{
+ const {createWebServer}=await import('../dist/web/server.js');const {AgentApi}=await import('../integrations/wecom-bridge/api.mjs');const {once}=await import('node:events');
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-named-http-'));const token='fixture-bridge-token-'.repeat(3);
+ const app=await createWebServer({cwd:root,dataDir:path.join(root,'data'),bridgeToken:token,admin:{account:'test',password:'test-pass'}});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const base=`http://127.0.0.1:${app.server.address().port}`;
+ const directory=path.join(root,'outbox');await fs.mkdir(directory);let connected=false;const messages=[];const api=new AgentApi(base,token);
+ const observer=await new MessageObserver({directory,api,clients:new Map([['bot',{async sendMessage(_target,body){messages.push(body.markdown.content);}}]]),isConnected:()=>connected,recipientFor:()=> 'owner',log:{warn(){}}}).open();
+ t.after(async()=>{await observer.close();await app.close();await fs.rm(root,{recursive:true,force:true});});
+ const auth=await(await fetch(base+'/api/auth/status')).json();const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':auth.token},body:JSON.stringify({account:'test',password:'test-pass'})});assert.equal(login.status,200);
+ const headers={'Content-Type':'application/json','X-Local-Token':auth.token,Cookie:login.headers.get('set-cookie').split(';')[0]};
+ const contact=await api.json('/contacts','POST',{botId:'bot',userId:'raw-user-id',chatType:'single',at:Date.now()});
+ const rename=async name=>{const response=await fetch(`${base}/api/wecom-contacts/${contact.contact.id}`,{method:'PATCH',headers,body:JSON.stringify({name})});assert.equal(response.status,200);};
+ await rename('胡涵');await observer.enqueue(who('raw-user-id'),{text:'Private question',attachments:[]});connected=true;observer.pump();await observer.idle();
+ await observer.enqueue(who('raw-user-id','group'),{text:'Group question',attachments:[]});await observer.idle();assert.equal(messages.length,2);assert.ok(messages.every(text=>text.includes('对话人：胡涵')&&!text.includes('raw-user-id')));
+ await rename('新备注');await observer.enqueue(who('raw-user-id'),{text:'After rename',attachments:[]});await observer.idle();assert.match(messages[2],/对话人：新备注/);assert.ok(!messages[2].includes('raw-user-id'));
+});

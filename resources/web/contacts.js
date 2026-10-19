@@ -22,7 +22,7 @@ function render() {
   const reported = contacts.reduce((n, c) => n + (c.stats?.reportedRequests || 0), 0);
   const total = contacts.reduce((n, c) => n + (c.stats?.inputTokens || 0) + (c.stats?.outputTokens || 0), 0);
   $('contacts-summary').replaceChildren(stat('Contacts', number(contacts.length)), stat('Recorded questions', number(questions)), stat('Recorded tokens', reported ? number(total) : 'Not recorded'));
-  $('contacts-status').textContent = contacts.length ? `Contacts: ${contacts.length}${query ? `; matching: ${visible.length}` : ''}. Save an empty name to clear it.` : 'No contacts yet. Incoming WeCom messages register contacts automatically; identities from existing conversations are also imported.';
+  $('contacts-status').textContent = contacts.length ? `Contacts: ${contacts.length}${query ? `; matching: ${visible.length}` : ''}. Names appear as the sender in future notifications; no User ID is shown when named. Save an empty name to clear it.` : 'No contacts yet. Incoming WeCom messages register contacts automatically; identities from existing conversations are also imported.';
   for (const contact of visible) {
     const form = document.createElement('form'); form.className = 'contact-row';
     const detail = document.createElement('div'); detail.className = 'contact-detail';

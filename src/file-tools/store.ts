@@ -3,16 +3,16 @@ import { constants, realpathSync, existsSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
-import { FILE_EXTENSIONS, type FileToolConfig } from "./config.js";
+import { FILE_EXTENSIONS, OUTPUT_EXTENSIONS, type FileToolConfig } from "./config.js";
 
 export interface ManagedFile { id: string; name: string; path: string; direction: "inputs" | "outputs"; bytes: number; sha256: string; createdAt: string; messageScoped?: boolean; }
 const locks = new Map<string, Promise<unknown>>();
 const activeJobs = new Set<string>();
 export const inside = (root: string, file: string) => { const relative = path.relative(root, file); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); };
-export function safeName(input: string): string {
+export function safeName(input: string, direction: "inputs" | "outputs" = "inputs"): string {
   const name = input.normalize("NFC").trim();
   if (!name || name.length > 160 || /[/\\\x00-\x1f\x7f]/.test(name) || name === "." || name === ".." || name.startsWith(".")) throw new Error("Invalid file name.");
-  if (!FILE_EXTENSIONS.has(path.extname(name).toLowerCase())) throw new Error("Unsupported file type.");
+  if (!(direction === "outputs" ? OUTPUT_EXTENSIONS : FILE_EXTENSIONS).has(path.extname(name).toLowerCase())) throw new Error("Unsupported file type.");
   return name;
 }
 export async function safeDirectory(directory: string): Promise<void> {
@@ -43,7 +43,7 @@ export class FileStore {
       await this.checkExistingDirectory(dir);
       const stat = await fs.lstat(manifest); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024) throw new Error("Invalid file manifest.");
       const value: unknown = JSON.parse(await fs.readFile(manifest, "utf8"));
-      if (!Array.isArray(value) || value.some(file => !file || typeof file !== "object" || !/^[a-f0-9-]{36}$/.test(file.id) || !["inputs", "outputs"].includes(file.direction) || file.path !== `${file.direction}/${file.id}${path.extname(file.name).toLowerCase()}` || safeName(file.name) !== file.name || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || !/^[a-f0-9]{64}$/.test(file.sha256))) throw new Error("Invalid file manifest.");
+      if (!Array.isArray(value) || value.some(file => !file || typeof file !== "object" || !/^[a-f0-9-]{36}$/.test(file.id) || !["inputs", "outputs"].includes(file.direction) || file.path !== `${file.direction}/${file.id}${path.extname(file.name).toLowerCase()}` || safeName(file.name, file.direction) !== file.name || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || !/^[a-f0-9]{64}$/.test(file.sha256))) throw new Error("Invalid file manifest.");
       return value as ManagedFile[];
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   }
@@ -123,12 +123,18 @@ export class FileStore {
         cleanup: async () => { try { await fs.rm(dir, { recursive: true, force: true }); } finally { activeJobs.delete(dir); } } };
     } catch (error) { activeJobs.delete(dir); await fs.rm(dir, { recursive: true, force: true }); throw error; }
   }
+  async creationJob(sessionId: string, extension: string) {
+    if (!OUTPUT_EXTENSIONS.has(extension)) throw new Error("Unsupported output type.");
+    const dir = path.join(this.directory(sessionId), "work", randomUUID()); await safeDirectory(dir); activeJobs.add(dir);
+    return { dir, input: path.join(dir, "no-source"), output: path.join(dir, `result${extension}`), display: "new output",
+      cache: async () => {}, cleanup: async () => { try { await fs.rm(dir, { recursive: true, force: true }); } finally { activeJobs.delete(dir); } } };
+  }
   async publish(sessionId: string, inputName: string, resultPath: string): Promise<ManagedFile> {
-    const name = safeName(inputName); if (path.extname(name).toLowerCase() !== ".xlsx") throw new Error("Output must be a new .xlsx filename.");
+    const name = safeName(inputName, "outputs");
     return serial(this.directory(sessionId), async () => {
-      const files = await this.list(sessionId); if (files.some(file => file.direction === "outputs" && file.name === name)) throw new Error("Output filename already exists; overwriting is not allowed.");
-      const stat = await fs.lstat(resultPath); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > this.config.maxFileBytes || files.reduce((sum, file) => sum + file.bytes, stat.size + await this.cacheBytes(sessionId)) > this.config.sessionQuotaBytes) throw new Error("Output exceeds file or session quota.");
-      const bytes = await fs.readFile(resultPath); const id = randomUUID(); const relative = `outputs/${id}.xlsx`; const target = path.join(this.directory(sessionId), relative); await safeDirectory(path.dirname(target));
+      const files = await this.list(sessionId); if (files.length >= 200) throw new Error("Session file count limit reached."); if (files.some(file => file.direction === "outputs" && file.name === name)) throw new Error("Output filename already exists; overwriting is not allowed.");
+      const stat = await fs.lstat(resultPath); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > this.config.maxFileBytes || files.reduce((sum, file) => sum + file.bytes, stat.size + await this.cacheBytes(sessionId)) > this.config.sessionQuotaBytes) throw new Error("Output exceeds file or session quota.");
+      const bytes = await fs.readFile(resultPath); const id = randomUUID(); const relative = `outputs/${id}${path.extname(name).toLowerCase()}`; const target = path.join(this.directory(sessionId), relative); await safeDirectory(path.dirname(target));
       await fs.copyFile(resultPath, target, constants.COPYFILE_EXCL); await fs.chmod(target, 0o400);
       const file: ManagedFile = { id, name, path: relative, direction: "outputs", bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString() };
       try { await this.writeManifest(sessionId, [...files, file]); return file; } catch (error) { await fs.rm(target, { force: true }); throw error; }

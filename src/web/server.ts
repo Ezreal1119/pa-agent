@@ -73,6 +73,7 @@ export async function createWebServer(options: WebOptions = {}) {
     webConfig.tools = WEB_TOOL_NAMES.filter(name => agentSettings.webTools.tools[name]); webConfig.enabled = webConfig.tools.length > 0;
   };
   applyAgentSettings();
+  mcpOptions.enabled = agentSettings.mcp?.enabled ?? mcpOptions.enabled;
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
   const auth = new WebAuth(adminAccount, adminPassword);
@@ -271,7 +272,7 @@ export async function createWebServer(options: WebOptions = {}) {
     // association without asking the model or parsing its answer/path text.
     for (const run of tools.values()) for (const call of run.calls) {
       const result = call.result as { details?: { ok?: boolean; file?: { id?: string } } } | null;
-      if (call.name === "excel_patch_template" && call.status === "completed" && result?.details?.ok === true && result.details.file?.id) addOutput(run.round, result.details.file.id);
+      if (["excel_patch_template", "excel_create", "text_file_create"].includes(call.name) && call.status === "completed" && result?.details?.ok === true && result.details.file?.id) addOutput(run.round, result.details.file.id);
     }
     const view = (role: string, text: string, timestamp: number, round: number) => {
       const toolRun = tools.get(round);
@@ -350,7 +351,7 @@ export async function createWebServer(options: WebOptions = {}) {
       const url = new URL(req.url ?? "/", "http://localhost");
       const method = req.method;
       if (url.pathname === "/mcp") {
-        if (!mcpOptions.enabled) throw new HttpError(404, "MCP is disabled. Set MCP_ENABLED=true and restart the service.");
+        if (!mcpOptions.enabled) throw new HttpError(404, "MCP is disabled. Enable it in Agent settings.");
         // MCP uses its own Bearer key, independent of browser login/CSRF and WeCom credentials.
         try { originPolicy.check(req, (server.address() as import("node:net").AddressInfo).port); }
         catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
@@ -416,6 +417,22 @@ export async function createWebServer(options: WebOptions = {}) {
         }
         throw new HttpError(405, "WeCom contacts only support listing contacts and updating display names.");
       }
+      if (url.pathname === "/mcp-usage" && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/?settings=mcp" }); res.end(); return; }
+      if (url.pathname === "/api/mcp/settings") {
+        if (method !== "GET" && method !== "PUT") throw new HttpError(405, "MCP settings support GET and PUT only.");
+        if (method === "PUT") {
+          if (configuring) throw new HttpError(409, "Agent settings are being updated. Please wait.");
+          configuring = true;
+          try {
+            const body = await readBody(req);
+            if (!body || Object.keys(body).length !== 1 || typeof body.enabled !== "boolean") throw new HttpError(400, "Provide the MCP enabled switch only.");
+            if (body.enabled && !mcpAccess.configured) throw new HttpError(400, "Set MCP_API_KEY in .env and restart the service before enabling MCP.");
+            const next = { ...agentSettings, mcp: { enabled: body.enabled } };
+            await agentSettingsStore.save(next); agentSettings = next; mcpOptions.enabled = body.enabled;
+          } finally { configuring = false; }
+        }
+        return json(res, 200, { enabled: mcpOptions.enabled, keyConfigured: mcpAccess.configured, totals: await mcpStore.usageTotals() });
+      }
       if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "bearer", keyConfigured: mcpAccess.configured, ...await mcpStore.summary() });
       if (url.pathname === "/api/config") throw new HttpError(410, "Model connections are configured in .env. Restart the service after making changes.");
       if (url.pathname === "/api/agent-settings") {
@@ -426,12 +443,14 @@ export async function createWebServer(options: WebOptions = {}) {
         try {
           let next;
           try { next = validateAgentSettings(await readBody(req)); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, redact(error)); }
+          next.mcp ??= agentSettings.mcp;
+          if (next.mcp?.enabled && !mcpAccess.configured) throw new HttpError(400, "Set MCP_API_KEY in .env and restart the service before enabling MCP.");
           if (!isDeepSeekModel(settings) && next.effort !== agentSettings.effort) throw new HttpError(400, "This model does not support reasoning-level changes. Tool switches remain available.");
           if (WEB_TOOL_NAMES.some(name => next.webTools.tools[name]) && !webConfig.apiKey) throw new HttpError(400, "Online tools require a DeepSeek key. Direct DeepSeek connections reuse API_KEY; otherwise set DEEPSEEK_API_KEY in .env and restart the service.");
           await agentSettingsStore.save(next);
           for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
           runtime?.dispose(); runtime = undefined; initializing = undefined;
-          agentSettings = next; applyAgentSettings();
+          agentSettings = next; applyAgentSettings(); mcpOptions.enabled = next.mcp?.enabled ?? mcpOptions.enabled;
           return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey) });
         } finally { configuring = false; }
       }
@@ -699,8 +718,6 @@ export async function createWebServer(options: WebOptions = {}) {
       const assets: Record<string, [string, string]> = {
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
-        "/mcp-usage": [path.join(resourcesDir, "web/mcp.html"), "text/html; charset=utf-8"],
-        "/mcp.js": [path.join(resourcesDir, "web/mcp.js"), "text/javascript; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
