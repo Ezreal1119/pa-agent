@@ -192,9 +192,17 @@ test('MCP requires its own header key for all methods; rejects missing/incorrect
  assert.equal((await fetch(f.base+'/api/sessions',{headers:{Authorization:'Bearer MCP_ROTATED_SECRET'}})).status,401);
  f.options.mcp.apiKey='';await f.restart();assert.equal((await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_ROTATED_SECRET'},body})).status,401);
  const after=await(await f.admin('/api/mcp/usage')).json();assert.equal(after.keyConfigured,false);assert.equal(after.totals.totalTokens,107);assert.equal(f.requests.length,1);
- // Read the real startup .env path in an isolated fixture; no programmatic key override.
- await fs.appendFile(path.join(f.root,'.env'),'\nMCP_API_KEY=MCP_FILE_SECRET\n');delete f.options.mcp.apiKey;await f.restart();
- const fromEnv=await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_FILE_SECRET'},body});assert.equal(fromEnv.status,200,await fromEnv.clone().text());assert.equal(f.requests.length,1);
+ // dotenv/config may have loaded the deployment .env into process.env on import.
+ // Verify its precedence with fake values, then isolate the disk-only case and restore it.
+ await fs.appendFile(path.join(f.root,'.env'),'\nMCP_API_KEY=MCP_FILE_SECRET\n');delete f.options.mcp.apiKey;
+ const inheritedKey=process.env.MCP_API_KEY;
+ try {
+  process.env.MCP_API_KEY='MCP_PROCESS_SECRET';await f.restart();
+  const diskOverridden=await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_FILE_SECRET'},body});assert.equal(diskOverridden.status,401);
+  const fromProcess=await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_PROCESS_SECRET'},body});assert.equal(fromProcess.status,200,await fromProcess.clone().text());
+  delete process.env.MCP_API_KEY;await f.restart();
+  const fromEnv=await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_FILE_SECRET'},body});assert.equal(fromEnv.status,200,await fromEnv.clone().text());assert.equal(f.requests.length,1);
+ } finally { if(inheritedKey===undefined)delete process.env.MCP_API_KEY;else process.env.MCP_API_KEY=inheritedKey; }
 });
 
 test('MCP key reads from startup env configuration without public serialization or accidental anonymous fallback',()=>{

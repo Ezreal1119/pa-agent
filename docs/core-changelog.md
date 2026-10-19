@@ -475,3 +475,12 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 验证：新增5项真实文件creator测试（多表/样式/每值/Unicode/空值/文字公式、21种文本扩展、无模板/无转换器/无视觉、路径/覆盖/schema/符号链接/限额/超时取消/默认关闭旧偏好/过期）及Web真实SDK+模拟模型下载卡片/HTTP安全头/关闭重启恢复/删除，企微全链路文本提问→Core→真实xlsx/html/java/md字节→模拟发送。MCP测试扩大到Web八工具全开，仍无文件工具。完整npm test155/155通过（约21.8秒）；后续production专项和浏览器验证后补。未调用真实模型/企微、未修改实际.env/业务资料/记忆/联系人或VPS，未提交推送。
 
 最终验证补充：`npm run test:file-create`实际以NODE_ENV=production、空FILE_WORKER_IMAGE执行，5/5通过（约6.8秒），不依赖MarkItDown/视觉；日志`.data/debug/file-create/production-tests.log`。完整155/155结果不变（此后仅补文档/npm便捷命令，无运行逻辑改动）。浏览器隔离测试确认两项初始关闭，单独开启保存后，纯文字提问生成comparison.xlsx和example.html，最终文字不含文件名但均有下载卡片；刷新恢复两张卡片，Settings两开关仍开启，其他六项仍关闭。截图settings.png/web-outputs.png统一`.data/debug/file-create/`，内容和用量为虚构夹具。前端语法及git diff检查通过；测试tab和65284隔离服务已关闭。未在真实VPS/Linux或真实企微/模型验收新工具，也未修改实际用户设置、业务资料或部署状态。
+
+
+## 2026-10-19 — MCP临时.env测试隔离修正
+
+原因：用户VPS npm test在mcp.test.mjs原197行得到401而非200。本机注入虚构MCP_API_KEY后精确复现同一断言；src/config.ts导入dotenv/config会将部署.env载入process.env，而服务端正确使用显式options > 进程环境 > cwd临时.env的优先级，旧测试删除options.apiKey后错误假设仅临时.env生效。
+
+修正/影响：仅修改测试，保留生产鉴权和配置优先级。用虚构进程Key显式验证它覆盖临时.env，再临时移除本测试进程的MCP_API_KEY验证磁盘读取，finally恢复原值。既不覆盖真实.env，也不打印/发送真实密钥；查询仅使用隔离本地服务，无新模型请求。避免部署环境中已配置Key导致假失败，并保留错误Key拒绝验证。验证结果后补。
+
+验证补充：修复前以虚构MCP_API_KEY注入进程，精确复现原197行401≠200（.data/debug/mcp/env-repro.log）；修复后带同样注入`npm run test:mcp`15/15通过，进一步同时设置MCP_ENABLED=true和虚构进程Key运行完整`npm test`155/155通过（约22.1秒，.data/debug/mcp/env-full-tests.log）。git diff检查通过。本次仅测试与记录改动，生产运行代码/真实配置不变，未提交推送或部署。
