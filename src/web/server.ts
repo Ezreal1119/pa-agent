@@ -9,7 +9,7 @@ import { AgentRuntime } from "../agent/runtime.js";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_SKILLS, ON_DEMAND_SKILLS, loadRunKnowledge } from "../agent/knowledge.js";
 import { REASONING_MODES, isReasoningMode, isDeepSeekModel, applyDeepSeekReasoning, type ReasoningMode } from "../agent/reasoning.js";
-import { getRunMetrics, saveRunMetric, sdkTokens, visionTokens, type RunMetric } from "./run-metrics.js";
+import { getRunMetrics, readRunMetrics, RUN_METRICS_TYPE, saveRunMetric, sdkTokens, visionTokens, type RunMetric } from "./run-metrics.js";
 import { getToolRuns, publicRunMetrics } from "./tool-calls.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
@@ -27,12 +27,20 @@ import { SessionRetention } from "../agent/retention.js";
 import { queueState } from "../file-tools/runner.js";
 import { pipeline } from "node:stream/promises";
 
+import { webToolConfig, WEB_TOOL_NAMES, type WebToolOptions } from "../web-tools/config.js";
+
+import { mcpConfig, type McpOptions } from "../mcp/config.js";
+import { McpStore } from "../mcp/store.js";
+import { McpService } from "../mcp/service.js";
+import { handleMcp } from "../mcp/http.js";
+import { runMcpAgent } from "../mcp/runner.js";
+
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
-type RecordState = { id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+type RecordState = { channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
+export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -43,12 +51,11 @@ export async function createWebServer(options: WebOptions = {}) {
     if (error.code === "ENOENT") return {} as Record<string, string>;
     throw error;
   });
+  const mcpOptions = mcpConfig(options.mcp, { ...diskEnv, ...process.env });
   const originPolicy = new WebOriginPolicy(options.publicUrl ?? process.env.WEB_PUBLIC_URL ?? diskEnv.WEB_PUBLIC_URL ?? "");
   const fileConfig = fileToolConfig(dataDir, options.fileTools, { ...diskEnv, ...process.env });
   const agentSettingsStore = new AgentSettingsStore(dataDir);
-  let agentSettings = await agentSettingsStore.load({ effort: "low", fileTools: { enabled: fileConfig.enabled, tools: Object.fromEntries(FILE_TOOL_NAMES.map(name => [name, fileConfig.tools.includes(name)])) as Record<typeof FILE_TOOL_NAMES[number], boolean> } });
-  const applyAgentSettings = () => { fileConfig.enabled = agentSettings.fileTools.enabled; fileConfig.tools = FILE_TOOL_NAMES.filter(name => agentSettings.fileTools.tools[name]); };
-  applyAgentSettings();
+  let agentSettings = await agentSettingsStore.load({ effort: "low", libraryLinks: { enabled: true }, webTools: { tools: Object.fromEntries(WEB_TOOL_NAMES.map(name => [name, Boolean(options.webTools?.enabled && (options.webTools.tools?.includes(name) ?? true))])) as Record<typeof WEB_TOOL_NAMES[number], boolean> }, fileTools: { tools: Object.fromEntries(FILE_TOOL_NAMES.map(name => [name, fileConfig.enabled && fileConfig.tools.includes(name)])) as Record<typeof FILE_TOOL_NAMES[number], boolean> } });
   const fileStore = new FileStore(fileConfig);
   const settings: ModelSettings = {
     apiKey: options.model?.apiKey ?? process.env.API_KEY ?? diskEnv.API_KEY ?? "",
@@ -58,6 +65,12 @@ export async function createWebServer(options: WebOptions = {}) {
     maxTokens: options.model?.maxTokens ?? Number(process.env.MAX_TOKENS ?? diskEnv.MAX_TOKENS ?? 16384),
   };
   const csrf = randomBytes(24).toString("hex");
+  const webConfig = webToolConfig(options.webTools, settings, { ...diskEnv, ...process.env });
+  const applyAgentSettings = () => {
+    fileConfig.tools = FILE_TOOL_NAMES.filter(name => agentSettings.fileTools.tools[name]); fileConfig.enabled = fileConfig.tools.length > 0;
+    webConfig.tools = WEB_TOOL_NAMES.filter(name => agentSettings.webTools.tools[name]); webConfig.enabled = webConfig.tools.length > 0;
+  };
+  applyAgentSettings();
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
   const auth = new WebAuth(adminAccount, adminPassword);
@@ -75,19 +88,21 @@ export async function createWebServer(options: WebOptions = {}) {
   let initializing: Promise<AgentRuntime> | undefined;
   let configuring = false;
   let openingSessions = 0;
+  let mcp: McpService | undefined;
   const configured = () => Boolean(settings.apiKey && settings.baseUrl && settings.modelId);
   const redact = (error: unknown) => {
     let message = error instanceof Error ? error.message : String(error);
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
+    if (webConfig.apiKey) message = message.split(webConfig.apiKey).join("[REDACTED]");
     if (adminPassword) message = message.split(adminPassword).join("[REDACTED]");
     if (fileConfig.vision.apiKey) message = message.split(fileConfig.vision.apiKey).join("[REDACTED]");
     return message.slice(0, 2000);
   };
   const getRuntime = async () => {
-    if (!configured()) throw new HttpError(409, "请在 .env 配置 BASE_URL、MODEL_ID 和 API_KEY，并重启服务。");
+    if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
-      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, fileTools: fileConfig };
+      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, webTools: webConfig };
       initializing = AgentRuntime.create(config).then(value => runtime = value).catch(error => { initializing = undefined; throw error; });
     }
     return initializing;
@@ -113,8 +128,60 @@ export async function createWebServer(options: WebOptions = {}) {
     if (item?.running || item?.opening || item?.mutating) throw new Error("Session is busy; retry expiration later.");
     await fileStore.remove(id);
     await bridge.remove(id);
+    await mcp?.removeSession(id);
     item?.session?.dispose(); records.delete(id);
   });
+  const mcpStore = new McpStore(dataDir, mcpOptions.retainedTaskLimit);
+  mcp = new McpService(mcpStore, mcpOptions, {
+    redact,
+    recover: async (task, needsAnswer) => {
+      const files = await recoveryFiles(); const file = files.get(task.sessionId);
+      if (!file) return {};
+      let metrics = recoveryMetrics.get(task.sessionId);
+      let manager: SessionManager | undefined;
+      if (!metrics) {
+        manager = SessionManager.open(file, sessionsDir, cwd);
+        metrics = new Map(readRunMetrics(manager).map(run => [run.id, run]));
+        // Startup groups tasks by session; retain only compact metrics, never every SDK conversation.
+        recoveryMetrics.clear(); recoveryMetrics.set(task.sessionId, metrics);
+      }
+      const metric = metrics.get(task.id);
+      if (!metric || metric.mcpTaskId !== task.id) return {};
+      if (!needsAnswer) return { metric };
+      manager ??= SessionManager.open(file, sessionsDir, cwd);
+      let round = 0; let answer = "";
+      for (const entry of manager.getBranch()) {
+        if (entry.type !== "message") continue;
+        const message = entry.message;
+        if (message.role === "user") round++;
+        if (round === metric.round && message.role === "assistant") answer = message.content.filter(part => part.type === "text").map(part => part.text).join("");
+      }
+      return { metric, answer: { answer: answer.slice(0, 256000), ...(answer.length > 256000 ? { truncated: true } : {}), ...(metric.status !== "completed" ? { error: "This task did not finish successfully before the service restarted. Recorded usage is preserved." } : {}) } };
+    },
+    run: async (task, question, signal, update) => {
+      if (configuring) throw new Error("Agent settings are being updated. Please retry later.");
+      const item: RecordState = records.get(task.sessionId) ?? { channel: "mcp", id: task.sessionId, running: false, title: question.slice(0, 36), updated: new Date().toISOString() };
+      if (item.running || item.mutating || item.opening) throw new Error("This MCP conversation is busy.");
+      records.set(item.id, item); item.channel = "mcp"; item.running = true; item.cancelled = false;
+      const local = new AbortController(); const abort = AbortSignal.any([signal, local.signal]);
+      item.cancelQueued = () => local.abort(new Error("This run was stopped."));
+      let release: (() => void) | undefined;
+      try {
+        release = await runGate.acquire(abort); abort.throwIfAborted();
+        const session = await getSession(item); abort.throwIfAborted(); item.activeRunId = task.id;
+        return await runMcpAgent(session, task, question, abort, { modelId: settings.modelId, effort: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default", update, redact });
+      } catch (error) {
+        if (abort.aborted) return { answer: "", error: redact(abort.reason ?? error), status: "cancelled" };
+        throw error;
+      } finally {
+        item.persistedFile = item.session?.sessionFile ?? item.persistedFile; item.session?.dispose(); item.session = undefined; item.activeRunId = undefined; item.cancelQueued = undefined; item.running = false; item.updated = new Date().toISOString(); release?.();
+      }
+    },
+  });
+  let recoveryIndex: Map<string, string> | undefined;
+  const recoveryMetrics = new Map<string, Map<string, RunMetric>>();
+  async function recoveryFiles() { return recoveryIndex ??= new Map((await savedSessions()).map(session => [session.id, session.path])); }
+  await mcp.start(); recoveryMetrics.clear(); recoveryIndex = undefined;
   await retention.cleanup(); retention.start();
   async function savedSessions() {
     if (!await fs.stat(sessionsDir).catch(() => undefined)) return [];
@@ -122,7 +189,7 @@ export async function createWebServer(options: WebOptions = {}) {
     return sessions.filter(s => s.modified.getTime() >= Date.now() - MONTH);
   }
   async function findRecord(id: string) {
-    if (deletedIds.has(id) || !/^[a-zA-Z0-9-]{8,80}$/.test(id)) throw new HttpError(404, "会话不存在。");
+    if (deletedIds.has(id) || !/^[a-zA-Z0-9-]{8,80}$/.test(id)) throw new HttpError(404, "Conversation not found.");
     const cached = records.get(id);
     if (cached) {
       const file = cached.persistedFile;
@@ -130,12 +197,12 @@ export async function createWebServer(options: WebOptions = {}) {
       if (!cached.running && !cached.mutating && file && (!stat || stat.mtimeMs < Date.now() - MONTH)) {
         await retention.cleanup();
         if (!stat) { await fileStore.remove(id); cached.session?.dispose(); records.delete(id); }
-        throw new HttpError(404, "会话已过期，请新建会话。");
+        throw new HttpError(404, "This conversation has expired. Start a new conversation.");
       }
       return cached;
     }
     const saved = (await savedSessions()).find(s => s.id === id);
-    if (!saved || deletedIds.has(id)) throw new HttpError(404, "会话不存在或已过期，请新建会话。");
+    if (!saved || deletedIds.has(id)) throw new HttpError(404, "This conversation was not found or has expired. Start a new conversation.");
     const current = records.get(id);
     if (current) return current;
     const item: RecordState = { id, persistedFile: saved.path, running: false, title: saved.name ?? saved.firstMessage.slice(0, 36), updated: saved.modified.toISOString() };
@@ -143,18 +210,19 @@ export async function createWebServer(options: WebOptions = {}) {
     return item;
   }
   async function getSession(item: RecordState): Promise<AgentSession> {
-    if (deletedIds.has(item.id)) throw new HttpError(404, "会话已删除。");
-    if (item.mutating) throw new HttpError(409, "会话信息正在更新，请稍后。");
+    if (deletedIds.has(item.id)) throw new HttpError(404, "This conversation was deleted.");
+    if (item.mutating) throw new HttpError(409, "This conversation is being updated. Please wait.");
     if (item.session) return item.session;
     if (item.opening) return item.opening;
-    if (configuring) throw new HttpError(409, "正在更新 Agent 设置，请稍后。");
+    if (configuring) throw new HttpError(409, "Agent settings are being updated. Please wait.");
     openingSessions++;
     item.opening = (async () => {
       try {
         const engine = await getRuntime();
         const saved = (await savedSessions()).find(s => s.id === item.id);
         const manager = saved ? SessionManager.open(saved.path, sessionsDir, cwd) : SessionManager.create(cwd, sessionsDir, { id: item.id });
-        const session = await engine.createSession(manager);
+        const textOnly = item.channel === "mcp" || mcpStore.hasSession(item.id) || manager.getEntries().some(entry => entry.type === "custom" && entry.customType === RUN_METRICS_TYPE && Boolean((entry.data as Partial<RunMetric>)?.mcpTaskId));
+        const session = await engine.createSession(manager, { textOnly });
         // Replay persisted snapshots after a restart; cursors make this idempotent.
         await wecomContacts.recoverSession(item.id, getRunMetrics(session));
         return item.session = session;
@@ -168,14 +236,14 @@ export async function createWebServer(options: WebOptions = {}) {
     const file = item.session?.sessionFile ?? (await savedSessions()).find(s => s.id === item.id)?.path;
     if (!file) return undefined;
     const relative = path.relative(sessionsDir, file);
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !file.endsWith(".jsonl")) throw new HttpError(400, "会话文件路径不正确。");
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !file.endsWith(".jsonl")) throw new HttpError(400, "Invalid conversation file path.");
     const info = await fs.lstat(file).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
     if (info) {
-      if (!info.isFile() || info.isSymbolicLink()) throw new HttpError(400, "会话文件必须为普通文件。");
+      if (!info.isFile() || info.isSymbolicLink()) throw new HttpError(400, "Conversation history must be stored in a regular file.");
       const actual = await fs.realpath(file);
       const root = await fs.realpath(sessionsDir);
       const actualRelative = path.relative(root, actual);
-      if (actualRelative === ".." || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) throw new HttpError(400, "会话文件超出存储目录。");
+      if (actualRelative === ".." || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) throw new HttpError(400, "The conversation file is outside its storage directory.");
     }
     return { file, exists: Boolean(info) };
   }
@@ -216,7 +284,7 @@ export async function createWebServer(options: WebOptions = {}) {
     const flush = () => {
       const toolRun = tools.get(round);
       if (!hasAnswer && (toolRun?.calls.length || outputs.has(round))) {
-        const placeholder = view("assistant", outputs.has(round) ? "本轮已生成文件，可在下方下载。" : "本轮尚无文字回答，可查看工具调用记录。", toolRun?.calls.at(-1)?.requestedAt ?? Date.now(), round);
+        const placeholder = view("assistant", outputs.has(round) ? "Files are ready to download below." : "No text answer yet. You can inspect the tool calls.", toolRun?.calls.at(-1)?.requestedAt ?? Date.now(), round);
         output.push(placeholder); lastAnswer.set(round, placeholder);
       }
     };
@@ -233,22 +301,22 @@ export async function createWebServer(options: WebOptions = {}) {
     for (const [round, files] of outputs) {
       const answer = lastAnswer.get(round); if (!answer) continue;
       answer.outputs = [...files.values()];
-      if (answer.run && answer.run.status !== "completed") answer.outputNotice = answer.run?.status === "running" ? "文件已生成，本轮仍在继续。" : "文件已生成；本轮回答未完整完成，仍可下载。";
+      if (answer.run && answer.run.status !== "completed") answer.outputNotice = answer.run?.status === "running" ? "File ready; the run is still in progress." : "Files are ready to download, although the run did not finish successfully.";
     }
     return output;
   }
   async function listSessions() {
     await retention.cleanup();
-    const list = new Map((await savedSessions()).filter(s => !deletedIds.has(s.id)).map(s => [s.id, { id: s.id, title: s.name ?? s.firstMessage.slice(0, 36) ?? "新对话", updated: s.modified.toISOString(), running: false }]));
+    const list = new Map((await savedSessions()).filter(s => !deletedIds.has(s.id)).map(s => [s.id, { id: s.id, title: s.name ?? s.firstMessage.slice(0, 36) ?? "New conversation", updated: s.modified.toISOString(), running: false }]));
     for (const r of records.values()) list.set(r.id, { id: r.id, title: r.title, updated: r.updated, running: r.running });
     return [...list.values()].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 100);
   }
   async function readBody(req: IncomingMessage) {
-    if (!(req.headers["content-type"] ?? "").startsWith("application/json")) throw new HttpError(415, "请使用 JSON 请求。");
+    if (!(req.headers["content-type"] ?? "").startsWith("application/json")) throw new HttpError(415, "Send the request as JSON.");
     const parts: Buffer[] = []; let size = 0;
     for await (const part of req) {
       size += part.length;
-      if (size > 65536) throw new HttpError(413, "请求过长，请缩短问题。");
+      if (size > 65536) throw new HttpError(413, "The request is too large. Shorten your question.");
       parts.push(part);
     }
     try {
@@ -256,7 +324,7 @@ export async function createWebServer(options: WebOptions = {}) {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
       return value;
     }
-    catch { throw new HttpError(400, "请求格式不正确。"); }
+    catch { throw new HttpError(400, "Invalid request format."); }
   }
   function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -267,7 +335,7 @@ export async function createWebServer(options: WebOptions = {}) {
     let secureCookies: boolean;
     try { secureCookies = originPolicy.check(req, port, machine); }
     catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
-    if (!machine && !["GET", "HEAD"].includes(req.method ?? "") && req.headers["x-local-token"] !== csrf) throw new HttpError(403, "页面已过期，请刷新后重试。");
+    if (!machine && !["GET", "HEAD"].includes(req.method ?? "") && req.headers["x-local-token"] !== csrf) throw new HttpError(403, "This page has expired. Refresh and try again.");
     return secureCookies;
   }
   const server = http.createServer(async (req, res) => {
@@ -278,10 +346,17 @@ export async function createWebServer(options: WebOptions = {}) {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const method = req.method;
+      if (url.pathname === "/mcp") {
+        if (!mcpOptions.enabled) throw new HttpError(404, "MCP is disabled. Set MCP_ENABLED=true and restart the service.");
+        // Public MCP only: no login, API token, or browser CSRF token. Keep Host/Origin validation.
+        try { originPolicy.check(req, (server.address() as import("node:net").AddressInfo).port); }
+        catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
+        await handleMcp(req, res, mcp!); return;
+      }
       const machine = url.pathname.startsWith("/api/wecom/");
       const secureCookies = validRequest(req, machine);
       if (machine) {
-        if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "企微 API 凭据无效或未配置。");
+        if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "WeCom API credentials are invalid or not configured.");
         const route = url.pathname.slice("/api/wecom".length);
         const owned = route.match(/^\/sessions\/([\w-]+)(?:\/(run|stop|files)(?:\/([a-f0-9-]{36}))?)?$/);
         const allowed = route === "/contacts" && method === "POST" || route === "/status" && method === "GET" || route === "/sessions" && method === "POST" || owned && (
@@ -289,8 +364,8 @@ export async function createWebServer(options: WebOptions = {}) {
           ["run", "stop"].includes(owned[2] ?? "") && method === "POST" && !owned[3] ||
           owned[2] === "files" && (method === "GET" || method === "POST" && !owned[3])
         );
-        if (!allowed) throw new HttpError(403, "企微 API 不支持此操作。");
-        if (owned && !bridge.owns(owned[1]!)) throw new HttpError(404, "企微会话不存在。");
+        if (!allowed) throw new HttpError(403, "This operation is not supported by the WeCom API.");
+        if (owned && !bridge.owns(owned[1]!)) throw new HttpError(404, "WeCom conversation not found.");
         if (route === "/contacts") {
           try { return json(res, 200, { contact: await wecomContacts.record(await readBody(req)) }); }
           catch (error) { throw new HttpError(400, redact(error)); }
@@ -301,18 +376,18 @@ export async function createWebServer(options: WebOptions = {}) {
       const authenticated = machine || auth.authenticated(req);
       if (method === "GET" && url.pathname === "/api/auth/status") return json(res, 200, { token: csrf, configured: auth.configured, authenticated });
       if (method === "POST" && url.pathname === "/api/auth/login") {
-        if (!auth.configured) throw new HttpError(503, "请在 .env 配置 ADMIN_ACCOUNT 和 ADMIN_PASSWORD，重启服务后登录。");
+        if (!auth.configured) throw new HttpError(503, "Set ADMIN_ACCOUNT and ADMIN_PASSWORD in .env, then restart the service to sign in.");
         const retryAfter = auth.retryAfter(req);
-        if (retryAfter) { res.setHeader("Retry-After", retryAfter); throw new HttpError(429, "登录尝试过于频繁，请一分钟后再试。"); }
+        if (retryAfter) { res.setHeader("Retry-After", retryAfter); throw new HttpError(429, "Too many sign-in attempts. Try again in one minute."); }
         const body = await readBody(req);
-        if (typeof body.account !== "string" || typeof body.password !== "string" || body.account.length > 256 || body.password.length > 4096) throw new HttpError(400, "请输入有效的账号和密码。");
-        if (!auth.login(req, res, body.account.trim(), body.password, secureCookies)) throw new HttpError(401, "账号或密码不正确。");
+        if (typeof body.account !== "string" || typeof body.password !== "string" || body.account.length > 256 || body.password.length > 4096) throw new HttpError(400, "Enter a valid account and password.");
+        if (!auth.login(req, res, body.account.trim(), body.password, secureCookies)) throw new HttpError(401, "Incorrect account or password.");
         return json(res, 200, { ok: true });
       }
       const publicAsset = ["/login", "/login.js", "/style.css"].includes(url.pathname) && (method === "GET" || method === "HEAD");
       if (!authenticated && !publicAsset) {
-        if (["/", "/wecom-contacts"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
-        throw new HttpError(401, "请先登录。");
+        if (["/", "/wecom-contacts", "/mcp-usage"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
+        throw new HttpError(401, "Please sign in first.");
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
@@ -329,35 +404,37 @@ export async function createWebServer(options: WebOptions = {}) {
           let contact;
           try { contact = await wecomContacts.rename(contactMatch[1], await readBody(req)); }
           catch (error) { throw new HttpError(400, redact(error)); }
-          if (!contact) throw new HttpError(404, "企微联系人不存在。");
+          if (!contact) throw new HttpError(404, "WeCom contact not found.");
           return json(res, 200, { contact });
         }
-        throw new HttpError(405, "企微联系人仅支持查看列表与修改备注。");
+        throw new HttpError(405, "WeCom contacts only support listing contacts and updating display names.");
       }
-      if (url.pathname === "/api/config") throw new HttpError(410, "模型连接参数仅通过 .env 管理，修改后请重启服务。");
+      if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "none", ...await mcpStore.summary() });
+      if (url.pathname === "/api/config") throw new HttpError(410, "Model connections are configured in .env. Restart the service after making changes.");
       if (url.pathname === "/api/agent-settings") {
-        if (method === "GET") return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings) });
-        if (method !== "PUT") throw new HttpError(405, "Agent 设置接口支持 GET/PUT。");
-        if (configuring || initializing && !runtime || openingSessions > 0 || [...records.values()].some(item => item.running || item.opening || item.mutating)) throw new HttpError(409, "请等待当前任务结束，再修改 Agent 设置。");
+        if (method === "GET") return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey) });
+        if (method !== "PUT") throw new HttpError(405, "Agent settings support GET and PUT only.");
+        if (configuring || initializing && !runtime || openingSessions > 0 || [...records.values()].some(item => item.running || item.opening || item.mutating)) throw new HttpError(409, "Wait for the current run to finish before changing agent settings.");
         configuring = true;
         try {
           let next;
           try { next = validateAgentSettings(await readBody(req)); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, redact(error)); }
-          if (!isDeepSeekModel(settings) && next.effort !== agentSettings.effort) throw new HttpError(400, "当前模型不支持思考强度调整，工具开关仍可设置。");
+          if (!isDeepSeekModel(settings) && next.effort !== agentSettings.effort) throw new HttpError(400, "This model does not support reasoning-level changes. Tool switches remain available.");
+          if (WEB_TOOL_NAMES.some(name => next.webTools.tools[name]) && !webConfig.apiKey) throw new HttpError(400, "Online tools require a DeepSeek key. Direct DeepSeek connections reuse API_KEY; otherwise set DEEPSEEK_API_KEY in .env and restart the service.");
           await agentSettingsStore.save(next);
           for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
           runtime?.dispose(); runtime = undefined; initializing = undefined;
           agentSettings = next; applyAgentSettings();
-          return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings) });
+          return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey) });
         } finally { configuring = false; }
       }
       if (method === "GET" && url.pathname === "/api/sessions") return json(res, 200, { sessions: await listSessions() });
       if (method === "POST" && url.pathname === "/api/sessions") {
-        if (configuring) throw new HttpError(409, "正在更新 Agent 设置，请稍后。");
+        if (configuring) throw new HttpError(409, "Agent settings are being updated. Please wait.");
         openingSessions++;
         try {
           const session = await (await getRuntime()).createSession();
-          const item: RecordState = { id: session.sessionId, session, running: false, title: "新对话", updated: new Date().toISOString() };
+          const item: RecordState = { id: session.sessionId, session, running: false, title: "New conversation", updated: new Date().toISOString() };
           records.set(item.id, item);
           if (machine) await bridge.register(item.id);
           return json(res, 201, { id: item.id });
@@ -368,16 +445,16 @@ export async function createWebServer(options: WebOptions = {}) {
         const item = await findRecord(attachmentMatch[1]!);
         if (method === "GET" && !attachmentMatch[2]) return json(res, 200, { files: await fileStore.list(item.id) });
         if (method === "GET" && attachmentMatch[2]) {
-          let opened; try { opened = await fileStore.open(item.id, attachmentMatch[2]); } catch { throw new HttpError(404, "附件不存在或不属于当前会话。"); }
+          let opened; try { opened = await fileStore.open(item.id, attachmentMatch[2]); } catch { throw new HttpError(404, "The attachment was not found or does not belong to this conversation."); }
           res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": opened.file.bytes, "Content-Disposition": `attachment; filename="download${path.extname(opened.file.name)}"; filename*=UTF-8''${encodeURIComponent(opened.file.name).replaceAll("'", "%27")}`, "ETag": `"${opened.file.sha256}"` });
           await pipeline(opened.handle.createReadStream(), res); return;
         }
         if (method === "POST" && !attachmentMatch[2]) {
-          if (!fileConfig.enabled || !fileConfig.tools.length) throw new HttpError(409, "文件工具已关闭，请在 Agent 设置中启用。");
-          if (item.running || item.mutating || configuring) throw new HttpError(409, "请等待当前运行结束后上传。");
-          if (!(req.headers["content-type"] ?? "").startsWith("application/octet-stream")) throw new HttpError(415, "请发送文件二进制数据。");
-          if (Number(req.headers["content-length"] ?? 0) > fileConfig.maxFileBytes) throw new HttpError(413, "附件超过大小限制。");
-          const session = await getSession(item); if (item.running || item.mutating) throw new HttpError(409, "会话正在执行。");
+          if (!fileConfig.enabled || !fileConfig.tools.length) throw new HttpError(409, "Enable at least one file tool in Agent settings before uploading.");
+          if (item.running || item.mutating || configuring) throw new HttpError(409, "Wait for the current run to finish before uploading.");
+          if (!(req.headers["content-type"] ?? "").startsWith("application/octet-stream")) throw new HttpError(415, "Send the file as binary data.");
+          if (Number(req.headers["content-length"] ?? 0) > fileConfig.maxFileBytes) throw new HttpError(413, "The attachment exceeds the size limit.");
+          const session = await getSession(item); if (item.running || item.mutating) throw new HttpError(409, "This conversation is running.");
           item.mutating = true;
           try {
             const target = await managedFile(item);
@@ -390,31 +467,31 @@ export async function createWebServer(options: WebOptions = {}) {
             return json(res, 201, { file });
           } finally { item.mutating = false; }
         }
-        throw new HttpError(405, "附件接口不支持此操作。");
+        throw new HttpError(405, "The attachment API does not support this operation.");
       }
       const toolsMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/runs\/([\w-]+)\/tools$/);
       if (method === "GET" && toolsMatch) {
         const item = await findRecord(toolsMatch[1]!);
         const session = await getSession(item);
         const run = [...getToolRuns(session, item.activeRunId).values()].find(r => r.id === toolsMatch[2]);
-        if (!run) throw new HttpError(404, "本轮工具调用记录不存在。");
+        if (!run) throw new HttpError(404, "Tool calls for this run were not found.");
         return json(res, 200, { runId: run.id, round: run.round, count: run.calls.length, calls: run.calls });
       }
       const match = url.pathname.match(/^\/api\/sessions\/([\w-]+)(?:\/(run|stop))?$/);
       if (match) {
         const item = await findRecord(match[1]!);
-        if (item.mutating) throw new HttpError(409, "会话信息正在更新，请稍后。");
+        if (item.mutating) throw new HttpError(409, "This conversation is being updated. Please wait.");
         if (!match[2] && (method === "PATCH" || method === "DELETE")) {
-          if (item.running || item.opening || configuring) throw new HttpError(409, "请先等待该会话执行结束或停止，再修改或删除。");
+          if (item.running || item.opening || configuring) throw new HttpError(409, "Wait for this conversation run to finish or stop it before renaming or deleting.");
           item.mutating = true;
           try {
             if (method === "PATCH") {
               const body = await readBody(req);
-              if (typeof body.title !== "string" || !body.title.trim() || body.title.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(body.title)) throw new HttpError(400, "会话名称需为 1–80 个字符，不能包含换行或控制字符。");
+              if (typeof body.title !== "string" || !body.title.trim() || body.title.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(body.title)) throw new HttpError(400, "Conversation names must be 1–80 characters without line breaks or control characters.");
               const target = await managedFile(item);
-              if (!target) throw new HttpError(404, "会话不存在。");
+              if (!target) throw new HttpError(404, "Conversation not found.");
               const manager = item.session?.sessionManager ?? SessionManager.open(target.file, sessionsDir, cwd);
-              if (!target.exists && manager.getEntries().some(e => e.type === "message" && e.message.role === "assistant")) throw new HttpError(404, "会话文件已不存在，请刷新列表。");
+              if (!target.exists && manager.getEntries().some(e => e.type === "message" && e.message.role === "assistant")) throw new HttpError(404, "The conversation file no longer exists. Refresh the list.");
               manager.appendSessionInfo(body.title.trim());
               if (!target.exists) {
                 // SDK defers empty-session writes until an assistant message. Persist the
@@ -427,6 +504,7 @@ export async function createWebServer(options: WebOptions = {}) {
               return json(res, 200, { id: item.id, title: item.title });
             }
             const target = await managedFile(item);
+            await mcp?.removeSession(item.id);
             await fileStore.remove(item.id);
             if (target?.exists) await fs.unlink(target.file);
             item.session?.dispose(); item.session = undefined;
@@ -445,7 +523,7 @@ export async function createWebServer(options: WebOptions = {}) {
           return json(res, 200, { ok: true });
         }
         if (method === "POST" && match[2] === "run") {
-          if (item.running || configuring) throw new HttpError(409, "当前对话正在执行，请稍后或点击停止。");
+          if (item.running || configuring) throw new HttpError(409, "This conversation is running. Please wait or stop it.");
           item.running = true; item.cancelled = false; item.context = undefined;
           let session: AgentSession;
           let releaseRun: (() => void) | undefined;
@@ -455,25 +533,25 @@ export async function createWebServer(options: WebOptions = {}) {
           res.once("close", cancelWaiting);
           try {
             const body = await readBody(req);
-            if (typeof body.text !== "string" || body.text.length > 12000) throw new HttpError(400, "请输入问题，最多 12000 个字符。");
+            if (typeof body.text !== "string" || body.text.length > 12000) throw new HttpError(400, "Enter a question with at most 12000 characters.");
             let sender;
             if (body.wecomSender !== undefined) {
-              if (!machine) throw new HttpError(403, "仅企微 Bridge 可以指定提问者。");
-              try { sender = observation(body.wecomSender); } catch { throw new HttpError(400, "企微提问者格式不正确。"); }
+              if (!machine) throw new HttpError(403, "Only the WeCom bridge can specify the sender.");
+              try { sender = observation(body.wecomSender); } catch { throw new HttpError(400, "Invalid WeCom sender format."); }
             }
             const ids = body.attachmentIds ?? [];
-            if (!Array.isArray(ids) || ids.length > 20 || ids.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id)) || new Set(ids).size !== ids.length) throw new HttpError(400, "附件 ID 格式错误、重复或数量超过 20 个。");
-            if (ids.length && (!fileConfig.enabled || !fileConfig.tools.length)) throw new HttpError(409, "文件工具已关闭，不能发送新附件。");
+            if (!Array.isArray(ids) || ids.length > 20 || ids.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id)) || new Set(ids).size !== ids.length) throw new HttpError(400, "Attachment IDs must be valid, unique, and no more than 20 per message.");
+            if (ids.length && (!fileConfig.enabled || !fileConfig.tools.length)) throw new HttpError(409, "File tools are disabled. Enable a file tool before sending new attachments.");
             const allFiles = await fileStore.list(item.id);
             const attachments = ids.map(id => allFiles.find(file => file.id === id));
-            if (attachments.some(file => !file)) throw new HttpError(400, "附件不存在或不属于当前会话。");
+            if (attachments.some(file => !file)) throw new HttpError(400, "The attachment was not found or does not belong to this conversation.");
             for (const file of attachments) { const opened = await fileStore.open(item.id, file!.id); await opened.handle.close(); }
-            if (!body.text.trim() && !ids.length) throw new HttpError(400, "请输入问题或添加附件。");
-            const text = body.text.trim() || "请分析本条消息附带的文件。";
+            if (!body.text.trim() && !ids.length) throw new HttpError(400, "Enter a question or attach a file.");
+            const text = body.text.trim() || "Please analyze the files attached to this message.";
             const supportsEffort = isDeepSeekModel(settings);
             let effort: ReasoningMode | "provider-default" = "provider-default";
-            if (body.effort !== undefined && !isReasoningMode(body.effort)) throw new HttpError(400, "思考强度必须为 off、low、high 或 max。");
-            if (!supportsEffort && body.effort !== undefined) throw new HttpError(400, "当前强度按钮仅适配 DeepSeek 模型，其他模型沿用供应商默认设置。");
+            if (body.effort !== undefined && !isReasoningMode(body.effort)) throw new HttpError(400, "Reasoning level must be off, low, high, or max.");
+            if (!supportsEffort && body.effort !== undefined) throw new HttpError(400, "Reasoning controls currently support DeepSeek only. Other models use their provider defaults.");
             if (supportsEffort) effort = body.effort ?? agentSettings.effort;
             try { releaseRun = await runGate.acquire(queuedAbort.signal); }
             catch (error) { throw new HttpError(queuedAbort.signal.aborted ? 499 : 429, (error as Error).message); }
@@ -483,9 +561,9 @@ export async function createWebServer(options: WebOptions = {}) {
             const acceptedAtIso = new Date().toISOString();
             session = await getSession(item);
             await loadRunKnowledge(dataDir);
-            if (res.destroyed) throw new HttpError(499, "页面连接已关闭。");
-            if (item.cancelled) throw new HttpError(409, "本次执行已停止。");
-            if (item.title === "新对话" && !session.sessionName) item.title = text.slice(0, 36);
+            if (res.destroyed) throw new HttpError(499, "The page connection was closed.");
+            if (item.cancelled) throw new HttpError(409, "This run was stopped.");
+            if (item.title === "New conversation" && !session.sessionName) item.title = text.slice(0, 36);
             item.updated = new Date().toISOString();
             let finished = false; let calls = 0;
             const started = acceptedAt;
@@ -502,7 +580,7 @@ export async function createWebServer(options: WebOptions = {}) {
                 const snapshot = structuredClone(metric);
                 statistics = statistics.then(() => wecomContacts.recordRun(snapshot.wecom!, item.id, snapshot));
                 // Do not fail an already running question because of a statistics disk error.
-                statistics = statistics.catch(() => { console.warn("企微统计保存失败，请检查联系人数据与磁盘。"); });
+                statistics = statistics.catch(() => { console.warn("Could not save WeCom statistics. Check contact data and disk space."); });
               }
             };
             if (sender) await wecomContacts.recordRun(sender, item.id, metric);
@@ -574,19 +652,19 @@ export async function createWebServer(options: WebOptions = {}) {
                 saveRunMetric(session, metric);
                 send("tool", { id: event.toolCallId, name: event.toolName, state: event.isError ? "error" : "done", elapsedMs: timing?.elapsedMs });
               }
-              if (event.type === "auto_retry_start") send("notice", { text: "模型请求暂时失败，正在重试…" });
+              if (event.type === "auto_retry_start") send("notice", { text: "The model request failed temporarily. Retrying…" });
             });
             send("start", { id: item.id, title: item.title, run: metric });
             try {
-              if (item.cancelled) throw new Error("本次执行已停止。");
+              if (item.cancelled) throw new Error("This run was stopped.");
               await session.prompt(body.text.trim() ? body.text : text);
               const last = session.messages.findLast(m => m.role === "assistant");
               if (item.cancelled || (last?.role === "assistant" && last.stopReason === "aborted")) {
                 metric.status = "stopped";
-                send("error", { message: "本次执行已停止。" });
+                send("error", { message: "This run was stopped." });
               } else if (last?.role === "assistant" && last.stopReason === "error") {
                 metric.status = "failed";
-                send("error", { message: redact(last.errorMessage ?? "模型执行失败。") });
+                send("error", { message: redact(last.errorMessage ?? "The model run failed.") });
               } else metric.status = "completed";
             } catch (error) {
               metric.status = item.cancelled ? "stopped" : "failed";
@@ -614,6 +692,8 @@ export async function createWebServer(options: WebOptions = {}) {
       const assets: Record<string, [string, string]> = {
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
+        "/mcp-usage": [path.join(resourcesDir, "web/mcp.html"), "text/html; charset=utf-8"],
+        "/mcp.js": [path.join(resourcesDir, "web/mcp.js"), "text/javascript; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
@@ -626,7 +706,7 @@ export async function createWebServer(options: WebOptions = {}) {
       if ((method === "GET" || method === "HEAD") && asset) {
         const data = await fs.readFile(asset[0]); res.writeHead(200, { "Content-Type": asset[1] }); res.end(method === "HEAD" ? undefined : data); return;
       }
-      throw new HttpError(404, "页面或接口不存在。");
+      throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
       json(res, error instanceof HttpError ? error.status : 500, { error: redact(error) });
@@ -634,6 +714,7 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
+    await mcp?.close();
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();

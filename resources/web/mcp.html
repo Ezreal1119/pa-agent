@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en-US">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MCP usage · Product Expert</title><link rel="stylesheet" href="/style.css"><script defer src="/mcp.js"></script></head>
+<body><main class="contacts-page">
+  <header class="contacts-page-header"><a class="brand" href="/"><span class="brand-mark">pe</span><span><strong>Product Expert</strong><small>KNOWLEDGE WORKSPACE</small></span></a><a class="contacts-back" href="/">← Back to workspace</a></header>
+  <span class="eyebrow">TEXT-ONLY EXPERT MCP</span><h1>MCP usage</h1>
+  <p id="mcp-status" class="contacts-description" role="status">Loading MCP statistics…</p>
+  <div id="mcp-summary" class="contacts-summary" aria-label="MCP cumulative usage"></div>
+  <p class="contacts-notice">These totals count MCP agent tasks, including model requests made during tool calls. Polling and cancellation do not run a model. Input includes cached tokens; output already includes provider-counted reasoning tokens. Only reported usage is counted; missing usage is shown separately. This is recorded token usage, not a bill.<br>No authentication is required by the MCP endpoint, so usage cannot be attributed to verified people. Cumulative totals survive task expiry; recent task records and answers are retained for 30 days.</p>
+  <button id="mcp-refresh" class="secondary-button" type="button">Refresh</button>
+  <h2>Recent tasks</h2><p id="mcp-empty" hidden>No MCP tasks recorded yet.</p><div class="mcp-table-wrap"><table id="mcp-tasks"><thead><tr><th>Task / conversation</th><th>Status / model</th><th>Input tokens</th><th>Output tokens</th><th>Usage coverage</th></tr></thead><tbody></tbody></table></div>
+</main></body></html>

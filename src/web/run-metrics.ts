@@ -24,6 +24,7 @@ export interface RunMetric {
   /** Timing only; arguments/results remain in the original SDK messages. */
   toolCalls?: ToolTiming[];
   wecom?: Observation;
+  mcpTaskId?: string;
   usage?: TokenUsage;
 }
 
@@ -33,8 +34,12 @@ export function saveRunMetric(session: AgentSession, metric: RunMetric): void {
 }
 
 export function getRunMetrics(session: AgentSession, activeId?: string): RunMetric[] {
+  return readRunMetrics(session.sessionManager, activeId);
+}
+
+export function readRunMetrics(manager: AgentSession["sessionManager"], activeId?: string): RunMetric[] {
   const runs = new Map<string, RunMetric>();
-  for (const entry of session.sessionManager.getBranch()) {
+  for (const entry of manager.getBranch()) {
     if (entry.type !== "custom" || entry.customType !== RUN_METRICS_TYPE) continue;
     const value = entry.data as Partial<RunMetric> | null;
     if (!value || typeof value.id !== "string" || typeof value.sequence !== "number" || typeof value.startedAt !== "string" || typeof value.status !== "string") continue;

@@ -63,16 +63,20 @@ function reply(res,tool,url='https://files.example/spec.pdf') {
  res.end('data: [DONE]\n\n');
 }
 
-test('shared Web/WeCom Core registers the tool with file processing off, isolates concurrent original prompts, records calls, and restores the tool after restart',{timeout:30000},async t=>{
+test('shared Web/WeCom Core preserves original prompts, isolates concurrency and applies an independent persistent library switch to new and restored sessions',{timeout:30000},async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'library-link-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});
  await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRIVATE_SKILL_SENTINEL');await fs.writeFile(path.join(dataDir,'urovo-product-expert/MEMORY.md'),'PRIVATE_MEMORY_SENTINEL');
- let assertionError;const model=createServer(async(req,res)=>{
+ let enabled=true,binaryEnabled=false;let assertionError;const model=createServer(async(req,res)=>{
   try{
    let text='';for await(const part of req)text+=part;const body=JSON.parse(text);
-   assert.ok(body.tools.some(t=>t.function.name===LIBRARY_LINK_TOOL_NAME));assert.equal(body.tools.length,6);assert.match(JSON.stringify(body.messages),/Copy the full current user prompt verbatim/);
+   assert.equal(body.tools.some(t=>t.function.name===LIBRARY_LINK_TOOL_NAME),enabled);assert.equal(body.tools.length,5+Number(enabled)+Number(binaryEnabled));
+   const system=body.messages.filter(m=>m.role==='system').map(m=>m.content).join('\n');
+   if(enabled)assert.match(system,/Copy the full current user prompt verbatim/);else assert.ok(!system.includes(LIBRARY_LINK_TOOL_NAME));
    const last=body.messages.at(-1);if(last.role==='tool'){
+    if(!enabled){assert.match(last.content,/not found|not available|unknown/i);return reply(res,false);}
     const output=JSON.parse(last.content);assert.equal(output.ok,true);assert.equal(output.response.matches.length,1);return reply(res,false,output.response.matches[0].url);
    }
+   // Also forge a call while disabled: Core must refuse execution without HTTP.
    reply(res,true);
   }catch(error){assertionError=error;res.writeHead(500);res.end('mock assertion failed');}
  });model.listen(0,'127.0.0.1');await once(model,'listening');
@@ -98,4 +102,31 @@ test('shared Web/WeCom Core registers the tool with file processing off, isolate
  const web=(route,body)=>originalFetch(base+route,{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':auth.token,Cookie:cookie},body:JSON.stringify(body)});
  const browserId=(await(await web('/api/sessions',{})).json()).id;const fourth='  请给我工具链接\n保留这句原文。  ';await(await web(`/api/sessions/${browserId}/run`,{text:fourth})).text();if(assertionError)throw assertionError;
  assert.equal(outbound.length,4);assert.equal(outbound.at(-1).prompt,fourth);
+
+ // The admin switch affects both browser and machine API sessions, including restored sessions.
+ const preferences=(await(await originalFetch(base+'/api/agent-settings',{headers:{Cookie:cookie}})).json()).settings;
+ assert.equal(preferences.libraryLinks.enabled,true);assert.ok(Object.values(preferences.fileTools.tools).every(value=>value===false));
+ const save=async(value)=>{
+  const status=await(await originalFetch(base+'/api/auth/status')).json();
+  const login=await originalFetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':status.token},body:JSON.stringify(options.admin)});
+  const headers={'Content-Type':'application/json','X-Local-Token':status.token,Cookie:login.headers.get('set-cookie').split(';')[0]};
+  const response=await originalFetch(base+'/api/agent-settings',{method:'PUT',headers,body:JSON.stringify(value)});assert.equal(response.status,200);return headers;
+ };
+ enabled=false;binaryEnabled=true;preferences.libraryLinks.enabled=false;
+ for(const name of Object.keys(preferences.fileTools.tools))preferences.fileTools.tools[name]=name==='pdf_read';
+ let headers=await save(preferences);
+ await api.run(a,'关闭链接检索后不能调用',[],()=>{});
+ const browserNew=(await(await originalFetch(base+'/api/sessions',{method:'POST',headers,body:'{}'})).json()).id;
+ await(await originalFetch(base+`/api/sessions/${browserNew}/run`,{method:'POST',headers,body:JSON.stringify({text:'网页也不能调用'})})).text();
+ if(assertionError)throw assertionError;assert.equal(outbound.length,4);
+ const disabledCalls=await api.json(`/sessions/${a}`);assert.ok(disabledCalls.runs.at(-1).toolCallCount>=1);
+ await app.close();await start();
+ const restartedAuth=await(await originalFetch(base+'/api/auth/status')).json();
+ const restartedLogin=await originalFetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':restartedAuth.token},body:JSON.stringify(options.admin)});
+ headers={Cookie:restartedLogin.headers.get('set-cookie').split(';')[0]};
+ assert.deepEqual((await(await originalFetch(base+'/api/agent-settings',{headers})).json()).settings,preferences);
+ await api.run(a,'重启并恢复的会话仍然关闭',[],()=>{});if(assertionError)throw assertionError;assert.equal(outbound.length,4);
+ enabled=true;binaryEnabled=false;preferences.libraryLinks.enabled=true;for(const name of Object.keys(preferences.fileTools.tools))preferences.fileTools.tools[name]=false;await save(preferences);
+ await api.run(a,'重新启用后给我文件链接',[],()=>{});if(assertionError)throw assertionError;assert.equal(outbound.length,5);
+ assert.equal(outbound.at(-1).prompt,'重新启用后给我文件链接');
 });

@@ -1,117 +1,126 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en-US">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Product Expert 本地 Agent 测试台：产品知识、UMS 和连续问答。">
-  <title>Product Expert · 测试台</title>
+  <meta name="description" content="Product Expert workspace for product knowledge, UMS, and conversations.">
+  <title>Product Expert · Workspace</title>
   <link rel="stylesheet" href="/style.css">
   <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script>
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="会话导航">
-      <button id="sessions-close" class="sidebar-close" aria-label="关闭会话列表">×</button>
-      <a class="brand" href="/" aria-label="Product Expert 首页"><span class="brand-mark">p<span>e</span></span><span>Product Expert<small>KNOWLEDGE WORKSPACE</small></span></a>
-      <button id="new-chat" class="new-chat"><span>＋</span> 新建对话 <kbd>⌘ K</kbd></button>
-      <div class="section-label">最近对话 <span id="session-count">0</span></div>
-      <nav id="sessions" class="session-list" aria-label="最近对话"><p class="empty-sessions">你的产品探索，从这里开始。</p></nav>
+    <aside class="sidebar" aria-label="Conversation navigation">
+      <button id="sessions-close" class="sidebar-close" aria-label="Close conversations">×</button>
+      <a class="brand" href="/" aria-label="Product Expert home"><span class="brand-mark">p<span>e</span></span><span>Product Expert<small>KNOWLEDGE WORKSPACE</small></span></a>
+      <button id="new-chat" class="new-chat"><span>＋</span> New conversation <kbd>⌘ K</kbd></button>
+      <div class="section-label">Recent conversations <span id="session-count">0</span></div>
+      <nav id="sessions" class="session-list" aria-label="Recent conversations"><p class="empty-sessions">Your product conversations start here.</p></nav>
       <div class="sidebar-bottom">
-        <div class="local-card"><span class="local-dot"></span><div>本地工作空间<small>会话保留 30 天</small></div><span class="local-symbol">⌁</span></div>
-        <a id="contacts-open" class="settings-button" href="/wecom-contacts"><span>♧</span> 企微联系人 <span class="settings-arrow">↗</span></a>
-        <button id="settings-open" class="settings-button"><span>⚙</span> Agent 设置 <span class="settings-arrow">↗</span></button>
-        <button id="logout" class="settings-button"><span>↪</span> 退出登录</button>
+        <div class="local-card"><span class="local-dot"></span><div>Knowledge workspace<small>Conversations retained for 30 days</small></div><span class="local-symbol">⌁</span></div>
+        <a id="contacts-open" class="settings-button" href="/wecom-contacts"><span>♧</span> WeCom contacts <span class="settings-arrow">↗</span></a>
+        <a id="mcp-usage-open" class="settings-button" href="/mcp-usage"><span>◷</span> MCP usage <span class="settings-arrow">↗</span></a>
+        <button id="settings-open" class="settings-button"><span>⚙</span> Agent settings <span class="settings-arrow">↗</span></button>
+        <button id="logout" class="settings-button"><span>↪</span> Sign out</button>
         <div class="sidebar-foot">PRODUCT EXPERT CLOUD <span>v0.1</span></div>
       </div>
     </aside>
     <main class="main-panel">
-      <header class="topbar"><button id="sessions-toggle" class="top-button sessions-toggle" aria-controls="sessions" aria-expanded="false" aria-label="打开会话列表">☰</button><div class="breadcrumb">工作空间 <span>/</span> <strong id="chat-title">新对话</strong></div><div class="top-actions"><button id="inspector-toggle" class="top-button" aria-controls="context-inspector" aria-expanded="false">◫ 调试信息</button><button id="settings-top" class="top-button" aria-label="Agent 设置">⚙</button><button id="logout-top" class="top-button" aria-label="退出登录">↪</button><div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-text">检查配置中</span></div></div></header>
+      <header class="topbar"><button id="sessions-toggle" class="top-button sessions-toggle" aria-controls="sessions" aria-expanded="false" aria-label="Open conversations">☰</button><div class="breadcrumb">Workspace <span>/</span> <strong id="chat-title">New conversation</strong></div><div class="top-actions"><button id="inspector-toggle" class="top-button" aria-controls="context-inspector" aria-expanded="false">◫ Debug information</button><button id="settings-top" class="top-button" aria-label="Agent settings">⚙</button><button id="logout-top" class="top-button" aria-label="Sign out">↪</button><div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-text">Checking configuration</span></div></div></header>
       <div class="workspace">
-        <section class="conversation" aria-label="对话区">
+        <section class="conversation" aria-label="Conversation">
           <div id="chat-scroll" class="chat-scroll">
             <div id="welcome" class="welcome">
               <div class="eyebrow"><span></span> YOUR PRODUCT KNOWLEDGE, CONNECTED</div>
-              <h1>把产品问题，<br><span>问清楚。</span></h1>
-              <p class="welcome-copy">连接产品资料与业务记忆。选型、规格、UMS 操作，<br class="desktop-break">从一个问题开始，找到有依据的答案。</p>
-              <div class="expert-tags"><span><i class="tag-dot blue"></i> UROVO 产品专家</span><span><i class="tag-dot teal"></i> UMS 专家</span></div>
-              <div class="suggestion-label">试试这样问 <span>↘</span></div>
+              <h1>Product questions.<br><span>Clear answers.</span></h1>
+              <p class="welcome-copy">Explore product specifications, selection guidance, and UMS workflows.<br class="desktop-break">Start with a question and get answers grounded in your knowledge base.</p>
+              <div class="expert-tags"><span><i class="tag-dot blue"></i> UROVO product expert</span><span><i class="tag-dot teal"></i> UMS expert</span></div>
+              <div class="suggestion-label">Try a question <span>↘</span></div>
               <div class="suggestions">
-                <button data-prompt="请对比 CT58 和 CT58C 的主要规格、适用场景和选型差异。"><span class="suggestion-icon">⇄</span><strong>比较两款产品</strong><span>CT58 和 CT58C 有哪些选型差异？</span><b>↗</b></button>
-                <button data-prompt="在 UROVO UMS 中，如何创建分组并为组内设备部署应用？请说明前提和操作步骤。"><span class="suggestion-icon">▦</span><strong>了解 UMS 操作</strong><span>如何给一组设备部署应用？</span><b>↗</b></button>
-                <button data-prompt="请根据资料和业务记忆，说明 DT50S 与 DT50 5G 的产品血缘和区别，避免混淆不同型号。"><span class="suggestion-icon">⌕</span><strong>核对产品知识</strong><span>区分 DT50S 与 DT50 5G 的产品血缘</span><b>↗</b></button>
+                <button data-prompt="Compare the CT58 and CT58C: key specifications, use cases, and selection guidance."><span class="suggestion-icon">⇄</span><strong>Compare products</strong><span>How do CT58 and CT58C compare?</span><b>↗</b></button>
+                <button data-prompt="How do I create a device group and deploy an app in UROVO UMS? Explain the prerequisites and steps."><span class="suggestion-icon">▦</span><strong>Explore UMS</strong><span>How do I deploy an app to a device group?</span><b>↗</b></button>
+                <button data-prompt="Using the knowledge base and business memory, explain how DT50S and DT50 5G relate and differ. Keep the model variants distinct."><span class="suggestion-icon">⌕</span><strong>Check product knowledge</strong><span>Understand DT50S vs. DT50 5G</span><b>↗</b></button>
               </div>
             </div>
             <div id="messages" class="messages" aria-live="polite" aria-relevant="additions"></div>
           </div>
           <div class="composer-area">
-            <div id="config-banner" class="config-banner" hidden><span>请在 .env 配置模型连接参数，保存后重启服务。</span><button id="banner-settings">Agent 设置 →</button></div>
+            <div id="config-banner" class="config-banner" hidden><span>Configure the model connection in .env, then restart the service.</span><button id="banner-settings">Agent settings →</button></div>
             <div id="run-note" class="run-note" role="status" hidden></div>
-            <section id="attachment-area" class="attachment-area" aria-label="本条消息附件" hidden>
-              <div class="attachment-heading"><button id="upload-file" type="button">＋ 上传文件</button><span id="file-support"></span><input id="file-input" type="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp" multiple hidden></div>
+            <section id="attachment-area" class="attachment-area" aria-label="Message attachments" hidden>
+              <div class="attachment-heading"><button id="upload-file" type="button">＋ Upload files</button><span id="file-support"></span><input id="file-input" type="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp" multiple hidden></div>
               <div id="attachment-list" class="attachment-list"></div>
               <p id="attachment-hint" class="attachment-hint" hidden></p>
-              <details id="session-files" class="session-files" hidden><summary>会话文件与生成结果</summary><div id="session-file-list" class="attachment-list"></div></details>
+              <details id="session-files" class="session-files" hidden><summary>Conversation files and outputs</summary><div id="session-file-list" class="attachment-list"></div></details>
             </section>
             <div class="run-controls">
-              <button id="global-effort-display" class="global-effort-display" type="button" title="在 Agent 设置中调整，所有会话共用">全局思考强度 · 标准 ⚙</button>
-              <span id="run-clock" class="run-clock" role="timer" aria-label="本轮运行耗时">等待运行</span>
+              <button id="global-effort-display" class="global-effort-display" type="button" title="Adjust in Agent settings; shared across conversations">Reasoning level · Standard ⚙</button>
+              <span id="run-clock" class="run-clock" role="timer" aria-label="Elapsed run time">Ready</span>
             </div>
             <form id="composer" class="composer">
-              <label class="sr-only" for="question">输入产品或 UMS 问题</label><textarea id="question" rows="2" maxlength="12000" placeholder="问一个产品或 UMS 问题，也可以继续追问…"></textarea>
-              <div class="composer-bottom"><span class="composer-label"><span class="sparkle">✳</span> 产品与 UMS 知识库</span><div><span class="keyboard-hint">Enter 发送 · Shift + Enter 换行</span><button id="send" class="send-button" type="submit" aria-label="发送问题">↑</button><button id="stop" class="stop-button" type="button" hidden><span>■</span> 停止</button></div></div>
+              <label class="sr-only" for="question">Enter a product or UMS question</label><textarea id="question" rows="2" maxlength="12000" placeholder="Ask a product or UMS question, or continue the conversation…"></textarea>
+              <div class="composer-bottom"><span class="composer-label"><span class="sparkle">✳</span> Product and UMS knowledge base</span><div><span class="keyboard-hint">Enter to send · Shift + Enter for a new line</span><button id="send" class="send-button" type="submit" aria-label="Send question">↑</button><button id="stop" class="stop-button" type="button" hidden><span>■</span> Stop</button></div></div>
             </form>
-            <div class="composer-foot"><span>基于本地资料作答，重要信息请核验。</span><span id="round-count">上下文 0 / 5 轮</span></div>
+            <div class="composer-foot"><span>Answers use your knowledge base. Verify important details.</span><span id="round-count">Context 0 / 5 turns</span></div>
           </div>
         </section>
-        <aside id="context-inspector" class="inspector" aria-label="调试信息" hidden>
-          <div class="inspector-title"><span>调试信息</span><button id="inspector-close" class="inspector-close" aria-label="关闭调试信息">×</button></div>
-          <p class="inspector-subtitle">看看 Agent 带着什么回答。</p>
+        <aside id="context-inspector" class="inspector" aria-label="Debug information" hidden>
+          <div class="inspector-title"><span>Debug information</span><button id="inspector-close" class="inspector-close" aria-label="Close debug information">×</button></div>
+          <p class="inspector-subtitle">Inspect the context behind each answer.</p>
           <div class="inspector-divider"></div>
-          <div class="mini-heading">默认技能 <span id="default-skill-count">01</span></div>
-          <div id="skill-cards"></div><p id="ordinary-skill-status" class="window-description">ums-expert · 按需读取，无专属记忆</p>
-          <div class="metric"><span>额外记忆 · memory/MEMORY.md</span><strong id="extra-memory-ready">—</strong></div>
-          <div id="injection-status" class="injection-status"><span class="status-ring"></span><div><strong>等待首次执行</strong><small>执行后检查实际请求中的注入份数</small></div></div>
+          <div class="mini-heading">Default skills <span id="default-skill-count">01</span></div>
+          <div id="skill-cards"></div><p id="ordinary-skill-status" class="window-description">ums-expert · On demand; no dedicated memory</p>
+          <div class="metric"><span>Extra memory · memory/MEMORY.md</span><strong id="extra-memory-ready">—</strong></div>
+          <div id="injection-status" class="injection-status"><span class="status-ring"></span><div><strong>Waiting for the first run</strong><small>Inspect injected copies in the actual request after a run</small></div></div>
           <div class="inspector-divider"></div>
-          <div class="mini-heading">对话窗口 <span>05</span></div>
-          <div id="round-dots" class="round-dots" aria-label="最近五轮上下文"><i></i><i></i><i></i><i></i><i></i></div>
-          <p class="window-description">保留最近五轮，包含本轮。<br>技能和记忆各一份，不随轮数叠加。</p>
-          <div class="metric"><span>本轮强度</span><strong id="applied-effort">—</strong></div>
-          <div class="metric"><span>本轮耗时</span><strong id="run-duration">—</strong></div>
-          <div class="metric"><span>工具调用数量</span><strong id="tool-count">0 次</strong></div>
-          <div class="metric"><span>首段文字等待</span><strong id="first-text-time">—</strong></div>
-          <div class="metric"><span>本轮模型请求</span><strong id="request-count">—</strong></div>
-          <div class="metric"><span>最新请求大小</span><strong id="payload-size">—</strong></div>
+          <div class="mini-heading">Conversation window <span>05</span></div>
+          <div id="round-dots" class="round-dots" aria-label="Latest five turns of context"><i></i><i></i><i></i><i></i><i></i></div>
+          <p class="window-description">Keep the latest five turns, including this one.<br>Each skill and memory is injected once per run.</p>
+          <div class="metric"><span>Reasoning level</span><strong id="applied-effort">—</strong></div>
+          <div class="metric"><span>Run time</span><strong id="run-duration">—</strong></div>
+          <div class="metric"><span>Tool calls</span><strong id="tool-count">0 calls</strong></div>
+          <div class="metric"><span>Time to first text</span><strong id="first-text-time">—</strong></div>
+          <div class="metric"><span>Model requests</span><strong id="request-count">—</strong></div>
+          <div class="metric"><span>Latest request size</span><strong id="payload-size">—</strong></div>
           <div class="inspector-divider"></div>
-          <div class="mini-heading">执行动态 <span>↙</span></div>
-          <div id="activity" class="activity"><p>开始提问后，查看工具执行状态。</p></div>
+          <div class="mini-heading">Activity <span>↙</span></div>
+          <div id="activity" class="activity"><p>Tool activity appears when you ask a question.</p></div>
           <div class="inspector-divider"></div>
-          <div class="mini-heading">运行记录 <span>最近 5 次</span></div>
-          <div id="run-history" class="run-history"><p>每轮强度与耗时将随会话保存。</p></div>
-          <div class="model-card"><span class="mini-heading">当前模型</span><strong id="model-name">尚未配置</strong><span id="model-detail">支持 OpenAI 兼容接口</span><button id="model-settings">Agent 设置 <span>↗</span></button></div>
+          <div class="mini-heading">Run history <span>Latest 5 runs</span></div>
+          <div id="run-history" class="run-history"><p>Reasoning levels and run times are saved with the conversation.</p></div>
+          <div class="model-card"><span class="mini-heading">Current model</span><strong id="model-name">Not configured</strong><span id="model-detail">OpenAI-compatible API</span><button id="model-settings">Agent settings <span>↗</span></button></div>
         </aside>
       </div>
     </main>
   </div>
-  <button id="sessions-backdrop" class="panel-backdrop" aria-label="关闭会话列表" hidden></button>
+  <button id="sessions-backdrop" class="panel-backdrop" aria-label="Close conversations" hidden></button>
   <dialog id="session-dialog" aria-labelledby="session-dialog-title">
     <form id="session-form">
-      <div class="dialog-heading"><h2 id="session-dialog-title">重命名会话</h2><button type="button" id="session-dialog-close" class="icon-close" aria-label="关闭会话操作">×</button></div>
+      <div class="dialog-heading"><h2 id="session-dialog-title">Rename conversation</h2><button type="button" id="session-dialog-close" class="icon-close" aria-label="Close conversation actions">×</button></div>
       <p id="session-dialog-copy" class="dialog-copy"></p>
-      <div id="session-title-field"><label for="session-title-input">会话名称</label><input id="session-title-input" maxlength="80" autocomplete="off" required></div>
+      <div id="session-title-field"><label for="session-title-input">Conversation name</label><input id="session-title-input" maxlength="80" autocomplete="off" required></div>
       <p id="session-dialog-error" class="form-error" role="alert" hidden></p>
-      <div class="dialog-actions"><button type="button" id="session-dialog-cancel" class="secondary-button">取消</button><button type="submit" id="session-dialog-save" class="primary-button">保存名称</button></div>
+      <div class="dialog-actions"><button type="button" id="session-dialog-cancel" class="secondary-button">Cancel</button><button type="submit" id="session-dialog-save" class="primary-button">Save name</button></div>
     </form>
   </dialog>
-  <dialog id="settings-dialog" aria-label="Agent 设置">
+  <dialog id="settings-dialog" aria-label="Agent settings">
     <form id="settings-form">
-      <div class="dialog-heading"><div><span class="eyebrow">AGENT PREFERENCES</span><h2>Agent 设置</h2></div><button type="button" id="settings-close" class="icon-close" aria-label="关闭 Agent 设置">×</button></div>
-      <p class="dialog-copy">应用到所有会话的后续请求，保存后重启仍然生效。</p>
-      <label for="global-effort">全局思考强度</label>
-      <select id="global-effort"><option value="off">快速 · 关闭思考</option><option value="low">标准 · 日常问答</option><option value="high">深入 · 复杂分析</option><option value="max">深度研究 · 全面研究</option></select>
+      <div class="dialog-heading"><div><span class="eyebrow">AGENT PREFERENCES</span><h2>Agent settings</h2></div><button type="button" id="settings-close" class="icon-close" aria-label="Close agent settings">×</button></div>
+      <p class="dialog-copy">Applies to subsequent requests in all conversations. Settings survive restarts.</p>
+      <label for="global-effort">Reasoning level</label>
+      <select id="global-effort"><option value="off">Fast · Reasoning off</option><option value="low">Standard · Everyday questions</option><option value="high">Thorough · Complex analysis</option><option value="max">Deep research · Comprehensive analysis</option></select>
       <p id="effort-support" class="settings-help"></p>
-      <div class="file-tools-heading"><div><strong>文件工具</strong><small>关闭总开关后，保留原有的检索与记忆工具。</small></div><label class="tool-toggle"><input id="file-tools-enabled" type="checkbox" role="switch" aria-label="启用文件工具"><span>总开关</span></label></div>
+      <div class="file-tools-heading"><div><strong>Online tools</strong><small>Go online only when external information is needed, not for every question.</small></div></div>
+      <p id="web-tools-help" class="settings-help"></p>
+      <div id="web-tool-toggles" class="file-tool-toggles">
+        <label class="file-tool-option"><span><strong>Web search</strong><code>search</code><small>Search public pages for titles, links, and summaries.</small></span><input id="web-search-enabled" type="checkbox" role="switch" aria-label="Enable web search"></label>
+        <label class="file-tool-option"><span><strong>Read a page</strong><code>fetch</code><small>Read a specific public URL when its content is needed.</small></span><input id="web-fetch-enabled" type="checkbox" role="switch" aria-label="Enable page fetching"></label>
+      </div>
+      <div class="file-tools-heading"><div><strong>Library links</strong><small>Applies to subsequent requests in Web and WeCom.</small></div></div>
+      <label class="file-tool-option"><span><strong>Find file and software links</strong><code>get_file_link_from_library</code><small>Get specification, document, or software download links from the library.</small></span><input id="library-links-enabled" type="checkbox" role="switch" aria-label="Enable library link search"></label>
+      <div class="file-tools-heading"><div><strong>File tools</strong><small>Enable or disable each tool independently.</small></div></div>
       <div id="file-tool-toggles" class="file-tool-toggles"></div>
       <p id="settings-error" class="form-error" role="alert" hidden></p>
-      <div class="dialog-actions"><button type="button" id="settings-cancel" class="secondary-button">取消</button><button type="submit" id="settings-save" class="primary-button">保存并应用 <span>↗</span></button></div>
+      <div class="dialog-actions"><button type="button" id="settings-cancel" class="secondary-button">Cancel</button><button type="submit" id="settings-save" class="primary-button">Save and apply <span>↗</span></button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="alert" hidden></div>

@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileToolConfig, type FileToolConfig, type FileToolOptions } from "./file-tools/config.js";
 
+import { webToolConfig, type WebToolConfig, type WebToolOptions } from "./web-tools/config.js";
+
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -25,6 +27,8 @@ export interface AgentConfig {
   resourcesDir: string;
   model: ModelConfig;
   fileTools: FileToolConfig;
+  libraryLinksEnabled: boolean;
+  webTools: WebToolConfig;
 }
 
 export interface AgentConfigOptions {
@@ -34,6 +38,8 @@ export interface AgentConfigOptions {
   resourcesDir?: string;
   model?: Partial<ModelConfig>;
   fileTools?: FileToolOptions;
+  libraryLinksEnabled?: boolean;
+  webTools?: WebToolOptions;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -54,6 +60,7 @@ function positiveInteger(
 }
 
 export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
+  if (options.libraryLinksEnabled !== undefined && typeof options.libraryLinksEnabled !== "boolean") throw new Error("libraryLinksEnabled must be a boolean");
   const cwd = path.resolve(
     options.cwd ?? process.env.AGENT_CWD ?? process.cwd(),
   );
@@ -75,6 +82,8 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
       options.resourcesDir ?? path.join(packageRoot, "resources"),
     ),
     fileTools: fileToolConfig(dataDir, options.fileTools),
+    libraryLinksEnabled: options.libraryLinksEnabled ?? true,
+    webTools: webToolConfig(options.webTools, { baseUrl, apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY") }),
     model: {
       apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY"),
       baseUrl,

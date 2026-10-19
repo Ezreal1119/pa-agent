@@ -119,7 +119,7 @@ test('busy chat rejects duplicate execution or config changes and stop interrupt
   const preferences=(await(await f.request('/api/agent-settings')).json()).settings;
   assert.equal((await f.request('/api/agent-settings', 'PUT', preferences)).status, 409);
   assert.equal((await f.request(`/api/sessions/${id}/stop`, 'POST', {})).status, 200);
-  const stream = events(await running); assert.ok(stream.some(e => e.event === 'error' && e.data.message.includes('停止')));
+  const stream = events(await running); assert.ok(stream.some(e => e.event === 'error' && e.data.message.includes('stopped')));
   const stopped = stream.find(e => e.event === 'done').data.run; assert.equal(stopped.status, 'stopped'); assert.ok(stopped.elapsedMs >= 0); assert.ok(stopped.finishedAt);
   assert.equal((await (await f.request(`/api/sessions/${id}`)).json()).running, false);
 });
@@ -317,7 +317,7 @@ test('interrupted tool runs retain their association and unknown completion afte
   await f.restart();
   const restored = await (await f.request(`/api/sessions/${id}`)).json();
   assert.equal(restored.runs[0].status, 'interrupted'); assert.equal(restored.runs[0].toolCallCount, 1);
-  assert.equal(restored.messages.at(-1).toolRunId, done.run.id); assert.ok(restored.messages.at(-1).text.includes('尚无文字回答'));
+  assert.equal(restored.messages.at(-1).toolRunId, done.run.id); assert.ok(restored.messages.at(-1).text.includes('No text answer yet'));
   const tools = await (await f.request(`/api/sessions/${id}/runs/${done.run.id}/tools`)).json();
   assert.equal(tools.count, 1); assert.equal(tools.calls[0].status, 'interrupted'); assert.equal(tools.calls[0].result, null); assert.equal(tools.calls[0].elapsedMs, null);
 });
@@ -459,7 +459,7 @@ test('anonymous visitors see login and cannot read or mutate Agent data even wit
   const f = await fixture(t); const id = await createSession(f);
   const anonymous = { Cookie: '' };
   const root = await f.request('/', 'GET', undefined, anonymous); assert.equal(root.status, 302); assert.equal(root.headers.get('location'), '/login');
-  assert.ok((await (await f.request('/login', 'GET', undefined, anonymous)).text()).includes('登录你的工作空间'));
+  assert.ok((await (await f.request('/login', 'GET', undefined, anonymous)).text()).includes('Sign in to your workspace'));
   assert.equal((await f.request('/login.js', 'GET', undefined, anonymous)).status, 200);
   const status = await (await f.request('/api/auth/status', 'GET', undefined, anonymous)).json();
   assert.equal(status.authenticated, false); assert.equal(status.configured, true); assert.ok(status.token); assert.ok(!JSON.stringify(status).includes(f.auth.admin.password));
@@ -596,7 +596,7 @@ test('global effort and individual file toggles reach actual new and restored SD
  const f=await fixture(t,true,'deepseek-flash');const a=await createSession(f);const b=await createSession(f);
  await(await f.request(`/api/sessions/${a}/run`,'POST',{text:'original'})).text();
  const preference=(await(await f.request('/api/agent-settings')).json()).settings;
- preference.effort='high';preference.fileTools.enabled=true;
+ preference.effort='high';
  for(const name of Object.keys(preference.fileTools.tools))preference.fileTools.tools[name]=name==='pdf_read';
  assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
  assert.equal((await(await f.request('/api/status')).json()).reasoning.default,'high');
@@ -606,9 +606,9 @@ test('global effort and individual file toggles reach actual new and restored SD
  }
  await f.restart();assert.deepEqual((await(await f.request('/api/agent-settings')).json()).settings,preference);
  await(await f.request(`/api/sessions/${a}/run`,'POST',{text:'restored preference'})).text();assert.equal(f.requests.at(-1).reasoning_effort,'high');assert.ok(f.requests.at(-1).tools.some(t=>t.function.name==='pdf_read'));assert.equal((await(await f.request(`/api/sessions/${a}`)).json()).messages.filter(m=>m.role==='user').length,3);
- preference.fileTools.enabled=false;assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
+ for(const name of Object.keys(preference.fileTools.tools))preference.fileTools.tools[name]=false;assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
  await(await f.request(`/api/sessions/${a}/run`,'POST',{text:'off'})).text();assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','read']);
- preference.fileTools.enabled=true;preference.fileTools.tools.pdf_read=false;preference.fileTools.tools.image_read=true;preference.effort='off';assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
+ preference.fileTools.tools.pdf_read=false;preference.fileTools.tools.image_read=true;preference.effort='off';assert.equal((await f.request('/api/agent-settings','PUT',preference)).status,200);
  await(await f.request(`/api/sessions/${b}/run`,'POST',{text:'fast with image tool'})).text();assert.equal(f.requests.at(-1).thinking.type,'disabled');assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','image_read','ls','memory','read']);
 });
 
@@ -616,18 +616,59 @@ test('Agent settings enforce authentication, CSRF, schema and provider capabilit
  const f=await fixture(t);const current=(await(await f.request('/api/agent-settings')).json()).settings;
  assert.equal((await f.request('/api/agent-settings','PUT',current,{'X-Local-Token':''})).status,403);
  assert.equal((await f.request('/api/agent-settings','PUT',current,{Cookie:''})).status,401);
- for(const body of [{...current,effort:'bad'},{...current,modelId:'injection'},{...current,fileTools:{enabled:true,tools:{bash:true}}},{...current,fileTools:{...current.fileTools,enabled:'true'}}])assert.equal((await f.request('/api/agent-settings','PUT',body)).status,400);
+ for(const body of [{...current,effort:'bad'},...[null,[],{},true,{enabled:'true',tools:{search:true,fetch:true}},{enabled:true,tools:{search:true}},{enabled:true,tools:{search:true,fetch:true,bash:true}},{enabled:true,tools:{search:'yes',fetch:true}},{enabled:true,tools:{search:true,fetch:true},apiKey:'injection'}].map(webTools=>({...current,webTools})),...[{enabled:'true'},null,[],{},{enabled:true,endpoint:'https://other.example'}].map(libraryLinks=>({...current,libraryLinks})),{...current,modelId:'injection'},{...current,fileTools:{enabled:true,tools:{bash:true}}},{...current,fileTools:{...current.fileTools,enabled:'true'}}])assert.equal((await f.request('/api/agent-settings','PUT',body)).status,400);
  assert.equal((await f.request('/api/agent-settings','PUT',{...current,effort:'high'})).status,400);
  assert.deepEqual((await(await f.request('/api/agent-settings')).json()).settings,current);
- const page=await(await f.request('/')).text();assert.ok(page.includes('Agent 设置'));assert.ok(!page.includes('id="api-key"'));assert.ok(!page.includes('id="base-url"'));assert.ok(!page.includes('data-effort='));
+ const page=await(await f.request('/')).text();assert.ok(page.includes('Agent settings'));assert.ok(!page.includes('id="api-key"'));assert.ok(!page.includes('id="base-url"'));assert.ok(!page.includes('data-effort='));
 });
 
 test('Agent preferences reject linked or malformed storage without changing other files', async t=>{
  const {AgentSettingsStore}=await import('../dist/web/agent-settings.js');
  const root=await mkdtemp(path.join(tmpdir(),'expert-agent-preferences-'));t.after(()=>rm(root,{recursive:true,force:true}));
- const defaults={effort:'low',fileTools:{enabled:false,tools:Object.fromEntries(['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read'].map(name=>[name,true]))}};
+ const defaults={effort:'low',libraryLinks:{enabled:true},webTools:{tools:{search:false,fetch:false}},fileTools:{tools:Object.fromEntries(['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read'].map(name=>[name,true]))}};
  const store=new AgentSettingsStore(root);const sentinel=path.join(root,'env-fixture');await writeFile(sentinel,'DO_NOT_CHANGE');await symlink(sentinel,store.file);
- await assert.rejects(store.save(defaults),/普通文件/);assert.equal(await readFile(sentinel,'utf8'),'DO_NOT_CHANGE');await rm(store.file);
+ await assert.rejects(store.save(defaults),/regular file/);assert.equal(await readFile(sentinel,'utf8'),'DO_NOT_CHANGE');await rm(store.file);
  await writeFile(store.file,'malformed JSON');await assert.rejects(store.load(defaults));
  await rm(store.file);assert.deepEqual(await store.load(defaults),defaults);await store.save(defaults);assert.deepEqual(await store.load(defaults),defaults);
+});
+
+
+test('legacy Agent preferences default library links on and persist an explicit off without rewriting existing switches', async t=>{
+ const {AgentSettingsStore}=await import('../dist/web/agent-settings.js');
+ const root=await mkdtemp(path.join(tmpdir(),'expert-links-preferences-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const legacy={effort:'high',fileTools:{enabled:false,tools:Object.fromEntries(['pdf_read','docx_read','pptx_read','excel_read','excel_patch_template','image_read'].map(name=>[name,name==='pdf_read']))}};
+ const store=new AgentSettingsStore(root);await writeFile(store.file,JSON.stringify(legacy));
+ const loaded=await store.load({...legacy,libraryLinks:{enabled:true}});assert.deepEqual(loaded,{...legacy,fileTools:{tools:Object.fromEntries(Object.keys(legacy.fileTools.tools).map(name=>[name,false]))},libraryLinks:{enabled:true},webTools:{tools:{search:false,fetch:false}}});
+ loaded.libraryLinks.enabled=false;await store.save(loaded);
+ assert.deepEqual(await new AgentSettingsStore(root).load({...legacy,libraryLinks:{enabled:true}}),loaded);
+ assert.equal((await stat(store.file)).mode&0o777,0o600);
+});
+
+test('master-free preferences preserve legacy effective states and enable a single file tool without another switch', async t=>{
+ const {validateAgentSettings}=await import('../dist/web/agent-settings.js');
+ const f=await fixture(t);const original=(await(await f.request('/api/agent-settings')).json()).settings;
+ assert.ok(!('enabled' in original.fileTools));assert.ok(!('enabled' in original.webTools));
+ assert.ok(Object.values(original.fileTools.tools).every(value=>value===false));
+ const legacy={...original,fileTools:{enabled:false,tools:Object.fromEntries(Object.keys(original.fileTools.tools).map(name=>[name,true]))},webTools:{enabled:false,tools:{search:true,fetch:true}}};
+ const migrated=validateAgentSettings(legacy);assert.deepEqual(migrated,original);
+ const on=validateAgentSettings({...legacy,fileTools:{...legacy.fileTools,enabled:true},webTools:{enabled:true,tools:{search:true,fetch:false}}});
+ assert.ok(Object.values(on.fileTools.tools).every(Boolean));assert.deepEqual(on.webTools,{tools:{search:true,fetch:false}});
+ original.fileTools.tools.pdf_read=true;
+ const saved=await f.request('/api/agent-settings','PUT',original);assert.equal(saved.status,200);assert.deepEqual((await saved.json()).settings,original);
+ const status=await(await f.request('/api/status')).json();assert.equal(status.fileTools.enabled,true);assert.deepEqual(status.fileTools.tools,['pdf_read']);
+ const id=await createSession(f);await(await f.request(`/api/sessions/${id}/run`,'POST',{text:'Only PDF should be enabled'})).text();
+ assert.deepEqual(f.requests.at(-1).tools.map(tool=>tool.function.name).sort(),['find','get_file_link_from_library','grep','ls','memory','pdf_read','read']);
+ await f.restart();assert.deepEqual((await(await f.request('/api/agent-settings')).json()).settings,original);
+ const disk=JSON.parse(await readFile(path.join(f.root,'.data/web-agent-settings.json'),'utf8'));assert.ok(!('enabled' in disk.fileTools));assert.ok(!('enabled' in disk.webTools));
+});
+
+test('all Web pages and fixed scripts use English and settings contain only individual tool switches', async t=>{
+ const f=await fixture(t,false);
+ for(const route of ['/','/login','/wecom-contacts','/mcp-usage','/app.js','/login.js','/contacts.js','/mcp.js']){
+  const response=await f.request(route,'GET',undefined,route==='/login'?{Cookie:''}:{});assert.equal(response.status,200,route);const body=await response.text();assert.doesNotMatch(body,/\p{Script=Han}/u,route);
+  if(route.endsWith('.js'))continue;assert.match(body,/<html lang="en-US">/);
+  if(route==='/'){assert.ok(!body.includes('id="web-tools-enabled"'));assert.ok(!body.includes('id="file-tools-enabled"'));assert.match(body,/Enable web search/);assert.match(body,/Enable page fetching/);}
+  if(route==='/login')assert.match(body,/Sign-in lasts 7 days/);
+ }
+ const bad=await f.request('/api/auth/login','POST',{account:'wrong',password:'wrong'});assert.equal(bad.status,401);assert.equal((await bad.json()).error,'Incorrect account or password.');
 });

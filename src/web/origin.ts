@@ -9,9 +9,9 @@ export class WebOriginPolicy {
     if (!value.trim()) return;
     let url: URL;
     try { url = new URL(value.trim()); }
-    catch { throw new Error("WEB_PUBLIC_URL 必须是完整 HTTPS 地址，不能包含路径或账号密码。"); }
+    catch { throw new Error("WEB_PUBLIC_URL must be a complete HTTPS origin without a path or credentials."); }
     if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash || url.hostname.includes("*")) {
-      throw new Error("WEB_PUBLIC_URL 必须是 HTTPS 来源地址，例如 https://urovo-agent.patrick-shenzhen.cn，不含 /login、通配符或账号密码。");
+      throw new Error("WEB_PUBLIC_URL must be an HTTPS origin, such as https://urovo-agent.patrick-shenzhen.cn, without /login, wildcards, or credentials.");
     }
     this.publicUrl = url;
   }
@@ -20,13 +20,13 @@ export class WebOriginPolicy {
     const host = req.headers.host?.toLowerCase();
     const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
     const publicHost = Boolean(this.publicUrl && host === this.publicUrl.host);
-    if (!host || (!local && (machine || !publicHost))) throw new RequestOriginError("访问地址未获允许；域名反代请在 .env 配置 WEB_PUBLIC_URL。");
+    if (!host || (!local && (machine || !publicHost))) throw new RequestOriginError("This host is not allowed. Set WEB_PUBLIC_URL in .env for a reverse-proxy domain.");
     const origins = new Set<string>();
     if (local) origins.add(`http://${host}`);
     // A reverse proxy can preserve the public Host or rewrite it to the local upstream.
     if (!machine && this.publicUrl) origins.add(this.publicUrl.origin);
-    if (req.headers.origin && !origins.has(req.headers.origin)) throw new RequestOriginError("不允许跨站请求。");
-    if (req.headers["sec-fetch-site"] === "cross-site") throw new RequestOriginError("不允许跨站请求。");
+    if (req.headers.origin && !origins.has(req.headers.origin)) throw new RequestOriginError("Cross-site requests are not allowed.");
+    if (req.headers["sec-fetch-site"] === "cross-site") throw new RequestOriginError("Cross-site requests are not allowed.");
     return Boolean(!machine && this.publicUrl && (publicHost || req.headers.origin === this.publicUrl.origin));
   }
 }

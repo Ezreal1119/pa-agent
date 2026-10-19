@@ -22,10 +22,14 @@
     "test:office-xml": "npm run build && NODE_ENV=production FILE_WORKER_IMAGE= node --test tests/office-xml-encoding.test.mjs",
     "web": "npm run build && node dist/web/cli.js",
     "wecom:bridge": "node integrations/wecom-bridge/index.mjs",
-    "test:wecom": "npm run build && node --test tests/wecom-*.test.mjs"
+    "test:wecom": "npm run build && node --test tests/wecom-*.test.mjs",
+    "test:web-tools": "npm run build && node --test tests/web-tools.test.mjs",
+    "test:mcp": "npm run build && node --test tests/mcp.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@napi-rs/canvas": "1.0.2",
     "@wecom/aibot-node-sdk": "1.0.7",
     "dompurify": "^3.4.17",
@@ -35,9 +39,11 @@
     "jszip": "3.10.2",
     "marked": "^18.1.1",
     "pdfjs-dist": "6.1.200",
-    "typebox": "1.3.7"
+    "typebox": "1.3.7",
+    "zod": "4.6.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^24.3.0",
     "pdf-lib": "1.17.1",
     "typescript": "^5.9.2"

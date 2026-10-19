@@ -51,9 +51,9 @@ test('contacts import old single/group identities, persist aliases across sessio
  await Promise.all([store.rename(u.id,{name:'赵芮同'}),store.record({botId:'bot',userId:'u',chatType:'group',chatId:'g2',at:at+1})]);rows=await new WecomContacts(root).list();assert.equal(rows.find(c=>c.id===u.id).name,'赵芮同');
  await fs.unlink(path.join(dir,'bridge-state.json'));assert.equal((await store.list()).find(c=>c.id===u.id).name,'赵芮同');
  await store.rename(u.id,{name:''});assert.equal((await store.list()).find(c=>c.id===u.id).name,'');
- assert.throws(()=>store.rename(u.id,{name:'x\nwrong'}),/备注/);assert.throws(()=>store.record({botId:'bot',userId:'u',chatType:'single',at,name:'untrusted'}),/格式/);
+ assert.throws(()=>store.rename(u.id,{name:'x\nwrong'}),/Display names/);assert.throws(()=>store.record({botId:'bot',userId:'u',chatType:'single',at,name:'untrusted'}),/Invalid/);
  assert.equal((await fs.stat(path.join(dir,'contacts.json'))).mode&0o777,0o600);
- await fs.rename(path.join(dir,'contacts.json'),path.join(dir,'original.json'));await fs.symlink(path.join(dir,'original.json'),path.join(dir,'contacts.json'));await assert.rejects(store.list(),/普通文件/);
+ await fs.rename(path.join(dir,'contacts.json'),path.join(dir,'original.json'));await fs.symlink(path.join(dir,'original.json'),path.join(dir,'contacts.json'));await assert.rejects(store.list(),/regular file/);
 });
 test('slow notification transport never blocks a user run or consumes an Agent slot',async t=>{
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-unblocked-'));const store=await new BridgeStore(directory).open();let finish,ran=0;

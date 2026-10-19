@@ -26,7 +26,7 @@ test('cumulative contact statistics use one cursor per session and reject duplic
  await book.recordRun(b,'session-1',second);await book.recordRun(sender,'session-1',done); // older A run cannot increment A again
  const a=(await book.list()).find(c=>c.userId==='a');assert.equal(a.stats.questions,1);assert.equal(a.stats.inputTokens,100);assert.equal(a.stats.finishedRuns,1);
  const contactB=(await book.list()).find(c=>c.userId==='b');assert.equal(contactB.stats.questions,1);
- await assert.rejects(book.recordRun(sender,'session-1',second),/冲突/);
+ await assert.rejects(book.recordRun(sender,'session-1',second),/conflicts/);
  const disk=JSON.parse(await fs.readFile(path.join(root,'wecom/contacts.json'),'utf8'));assert.equal(Object.keys(disk.cursors).length,1);
  assert.equal((await fs.stat(path.join(root,'wecom/contacts.json'))).mode&0o777,0o600);
 });

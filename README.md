@@ -87,7 +87,7 @@ Both skill templates instruct the model to omit sources, file paths, citation ma
 
 Versioned skill templates live in `resources/skills/`. Deploy the product template and its knowledge/memory under its data directory. Optionally deploy `ums-expert/SKILL.md` and `references/`; the SDK advertises its name, description and actual deployed file path, and the agent reads its body with `read` when the user asks a relevant UMS question. UMS has no dedicated MEMORY loading step, and missing UMS files do not block product runs. An existing UMS MEMORY is retained on disk but no longer automatically read or injected. Runtime edits use the `.data/` copies; templates do not automatically overwrite them. Use configured roots rather than Mac-specific absolute paths when deploying to Linux.
 
-Knowledge, business memories, session history, maintenance backups, and `.env` remain Git-ignored. Only code and generic skill templates belong in Git. New and resumed sessions enable Pi's built-in `read`, `grep`, `find`, and `ls`, plus the narrowly scoped `memory` tool and `get_file_link_from_library` (six tools total). Bash, PowerShell, general edit, and write are unavailable, even if the model requests an old tool from session history. Searches use tool parameters rather than shell commands/pipelines; `find` uses fd and `grep` uses ripgrep, installed or resolved by the SDK. This limits agent capabilities, but is not a filesystem sandbox: readable paths are not confined to the knowledge roots, and OS/container read-only mounts have not been added. Session/log persistence and retention continue to write from application code, independently of model tools.
+Knowledge, business memories, session history, maintenance backups, and `.env` remain Git-ignored. Only code and generic skill templates belong in Git. New and resumed sessions enable Pi's built-in `read`, `grep`, `find`, and `ls`, plus the narrowly scoped `memory` tool. The independent `get_file_link_from_library` switch defaults on (six tools total when on, five when off). Optional `search` / `fetch` online tools default off and add up to two tools when enabled. Bash, PowerShell, general edit, and write are unavailable, even if the model requests an old tool from session history. Searches use tool parameters rather than shell commands/pipelines; `find` uses fd and `grep` uses ripgrep, installed or resolved by the SDK. This limits agent capabilities, but is not a filesystem sandbox: readable paths are not confined to the knowledge roots, and OS/container read-only mounts have not been added. Session/log persistence and retention continue to write from application code, independently of model tools.
 
 ### Shared extra agent memory
 
@@ -144,7 +144,7 @@ Login uses an opaque HttpOnly, SameSite=Strict cookie with a fixed seven-day lif
 
 Model connection settings are read from `.env`/process environment at startup. Edit `API_KEY`, `BASE_URL`, `MODEL_ID` and optional model limits there, then restart; the Web interface does not edit them. The former `/api/config` endpoint returns 410. The key is never returned by status endpoints or stored in browser storage.
 
-**Agent 设置** now contains only global thinking effort and the six file-tool switches, including a master switch. Changes apply to subsequent requests across all sessions and persist in Git-ignored `.data/web-agent-settings.json` (mode 600), without changing `.env`. Saving is rejected while a run, session initialization or upload is active. Cached agents are reopened with the new tool selection; saved histories, names, attachments and pending drafts remain available.
+**Agent settings** provides a reasoning level and individual switches for online tools, library links, and the six file tools. There are no master switches. The login, workspace, contacts, debug panels, and fixed notices use English; user messages, answers, names, and file contents retain their original language. Changes apply to subsequent requests across all sessions and persist in Git-ignored `.data/web-agent-settings.json` (mode 600), without changing `.env`. Saving is rejected while a run, session initialization or upload is active. Cached agents are reopened with the new tool selection; saved histories, names, attachments and pending drafts remain available.
 
 Features: new/resumed conversations, streamed text, sanitized Markdown and tables, stopping a run, copying answers, and a collapsible context inspector. The inspector checks the assembled provider payload and reports the number of skill/memory copies, user rounds, model requests, and serialized request bytes. Request bytes are not token counts and payload assembly does not prove that the upstream model accepted a request. Raw memory contents, reasoning traces, and tool result bodies are not sent to the inspector.
 
@@ -180,11 +180,11 @@ Arguments/results are reconstructed from the original SDK JSONL messages. New We
 
 ## Optional file tools
 
-Initially enable `FILE_TOOLS_ENABLED=true`, or use the Web **Agent 设置** master switch, to add `pdf_read`, `docx_read`, `pptx_read`, `excel_read`, `excel_patch_template`, and `image_read`. The Web composer then offers uploads and authenticated attachment/output downloads. Excel patching creates a new verified workbook; the source and business memories remain protected. Existing skill/memory injection and the five-round context policy continue unchanged.
+Set `FILE_TOOLS_ENABLED=true` for the initial defaults, or enable individual tools in Web **Agent settings**, to add `pdf_read`, `docx_read`, `pptx_read`, `excel_read`, `excel_patch_template`, and `image_read`. The Web composer then offers uploads and authenticated attachment/output downloads. Excel patching creates a new verified workbook; the source and business memories remain protected. Existing skill/memory injection and the five-round context policy continue unchanged.
 
 Install the pinned MarkItDown environment for local development and configure `MARKITDOWN_COMMAND`. Image recognition uses the separate `VISION_LLM_BASE_URL`, `VISION_LLM_API_KEY`, and `VISION_LLM_MODEL` fields. Ubuntu production supports native workers without Docker; use the supplied systemd service for aggregate resource limits and read-only knowledge directories. An explicitly configured worker image still selects the optional container backend. See [native VPS setup](docs/vps-native-deploy.md). See [configuration, API, supported semantics and Ubuntu deployment](docs/file-tools.md).
 
-The initial switch defaults to false. Saved Web preferences override that initial default. Turning off the master switch and saving restores the original five model tools, omits file skills and processing, and preserves existing downloads and tool history. The module does not introduce Bash or arbitrary file writes. Run `npm test` after installing file-converter dependencies; real-model and Linux checks are recorded separately in [validation history](dev-history/2026-10-18-file-tools.md).
+The initial switch defaults to false. Saved Web preferences override that initial default. Turning off all six file tools omits file skills and processing while preserving existing downloads and tool history; base tools and the independent library/online choices remain available. The module does not introduce Bash or arbitrary file writes. Run `npm test` after installing file-converter dependencies; real-model and Linux checks are recorded separately in [validation history](dev-history/2026-10-18-file-tools.md).
 
 ## Per-message attachments
 
@@ -194,7 +194,7 @@ The existing JSONL stores message attachment metadata, and inference receives a 
 
 ## Agent settings API
 
-Authenticated `GET /api/agent-settings` returns `{ settings, reasoningSupported }`. `PUT` accepts the complete settings object with `effort` and `fileTools: { enabled, tools }`; `tools` contains boolean values for all six tool names. Unknown/model/credential fields are rejected. Writes also require the local request token and existing Host/Origin checks. Only enabled tool definitions reach the model, and direct execution of disabled file tools is refused. Their corresponding file skills are loaded only when needed. Turning off the master preserves individual choices for re-enabling later.
+Authenticated `GET /api/agent-settings` returns `{ settings, reasoningSupported, webToolsConfigured }`. `PUT` accepts the complete settings object with `effort`, `libraryLinks: { enabled }`, `fileTools: { tools }`, and `webTools: { tools }`; each tool map contains every tool name in its group with a boolean value. Unknown/model/credential fields are rejected. Writes also require the local request token and existing Host/Origin checks. Only enabled tool definitions reach the model, and direct execution of disabled file tools is refused. Their corresponding file skills are loaded only when needed. The current settings format has no group `enabled` fields. Legacy settings/requests with `enabled: false` migrate every item in that group to false; `enabled: true` preserves each stored choice. Old preferences do not activate tools that were previously blocked by a master switch. Internal Core module flags remain derived from whether any tool is enabled.
 
 Existing model API clients may still provide explicit per-run `effort`. The Web always uses the global setting. Unsupported providers keep their own reasoning default; the UI disables reasoning selection while permitting tool configuration. Settings are outside session retention and contain no model credentials.
 
@@ -238,10 +238,33 @@ Set `WECOM_NOTIFY_USER_ID` in the VPS `.env` to receive other users' incoming me
 企微联系人使用独立页面 `/wecom-contacts`（左侧入口），展示提问次数和输入/输出/总 Token。统计从升级后开始；群聊按本轮发送者归属，失败/停止也计一轮，文件单独上传不算。Token 只累加收到的 usage，缺失会标明；会话删除和30天清理不清零联系人累计。详情见 `docs/wecom-bridge.md` 的“联系人与用量统计”；本次升级需分别重启 Agent 与 Bridge。
 
 
-### 资料库文件 / 工具下载链接
+#
+## 按需联网搜索与网页读取
+
+英文 Agent settings 提供 `search`、`fetch` 两个独立开关，无总开关，初始均关闭。与文件工具、资料库链接开关独立。设置保存到 `.data/web-agent-settings.json` 的 `webTools: { tools: { search, fetch } }`，旧设置缺少此项时默认关闭；Web、企微后续请求及重启恢复会话共用，执行中的任务须先结束才能修改。关闭的工具不注册，也不提供专用调用指导；历史记录和已返回链接保留。所有工具全部开启时最多14个。
+
+- `search({ query, count? })`：固定 POST `https://api.deepseek.com/v1/tools/search`，默认5条、最多10条，固定 `need_content=false`。query 允许整理为必要关键词，1～128个Unicode字符；返回标题、URL、摘要；提示模型只提取必要关键词，后端不自动拼入原始问题、记忆或文档。空结果不算调用错误。
+- `fetch({ url })`：固定 POST `https://api.deepseek.com/v1/tools/fetch`，返回标题与Markdown正文。只允许公开HTTP/HTTPS域名链接，拒绝带账号密码、IP字面量和明显本机/内网主机名；域名实际解析及访问由DeepSeek实施其安全策略。不会从VPS直连目标网站，也不下载文件、注册附件或保证PDF解析成功。输入URL最多8192字符，正文最多60000字符，截断时明确标记。
+
+密钥仅由后端加入DeepSeek请求头。主模型直连 `https://api.deepseek.com` 时复用现有 `API_KEY`；其他模型/代理地址不自动复用其密钥，可选在 `.env` 配置 `DEEPSEEK_API_KEY` 并重启（显式配置优先）。页面只显示是否已配置，不显示密钥，也不保存到偏好文件或工具参数。未配置有效来源时启用请求返回400；不会实际验证密钥有效性直到调用上游。
+
+工具介绍及提示词约束“仅在确需外部信息、核实最新事实、用户要求联网或读取链接时调用，本地知识和上下文足够就直接回答；摘要足够时无需fetch”。这是模型选择的软约束；关闭开关则由后端取消工具注册。网络文本作为外部数据，不作为行为指令。普通回答默认省略参考来源的偏好保持。资料库文件/软件下载链接仍优先使用 `get_file_link_from_library`，与公开网络检索用途不同。
+
+每个接口共用进程级5次/秒滑动窗口，等待队列各32个，等待和请求共用60秒截止时间；跨会话、重建runtime仍共享限速，但无法协调其他进程/客户端对同一DeepSeek账户的使用。支持取消排队及HTTP请求，响应流最多1MiB，不跟随重定向、不自动重试。上游鉴权/余额/限流/不可提取正文等错误明确显示。请求/结果/耗时/次数沿用现有JSONL及“查看工具调用”；Search/Fetch的按次服务费用不冒充模型Token usage，正文作为后续模型输入时仍影响模型Token消耗。
+
+直接Core调用可传 `webTools: { enabled: true, tools: ["search", "fetch"], apiKey?: "..." }`；同样默认关闭。无需新增软件依赖。运行全部验证用 `npm test`，只验证联网工具用 `npm run test:web-tools`。官方参数及支持范围见 [DeepSeek Search & Fetch](https://api-docs.deepseek.com/guides/search/)。
+
+## 资料库文件 / 工具下载链接
 
 默认工具 `get_file_link_from_library` 用于“给我 DT50S 规格书”“获取 UMS 工具下载链接”等请求。工具将当前轮的完整用户正文作为 `prompt`，POST 到 `https://tool-files.patrick-shenzhen.org/api/ai-search`；原样发送，不改写、翻译或拼入记忆/知识/历史/附件内容。实际正文由后端绑定当前 session 的用户消息，不依赖模型正确复述参数。
 
-返回 API 的 JSON 检索结果（包含文件名、URL、匹配说明等），由 Agent 展示下载链接；未精确匹配时说明替代资料，不伪造链接，不自动下载文件或作为生成附件上传。此工具独立于六个二进制文件工具的开关，默认在 Web、企微和 Core 新建/恢复 session 中可用：基础工具6个，文件工具全部启用时12个。无需新增 `.env` 字段、密钥或依赖；请求超时60秒，支持停止取消，返回正文最多256KiB，重定向不跟随。
+返回 API 的 JSON 检索结果（包含文件名、URL、匹配说明等），由 Agent 展示下载链接；未精确匹配时说明替代资料，不伪造链接，不自动下载文件或作为生成附件上传。此工具默认开启，可在 Web 的“Agent 设置 → 资料库链接”中独立开关，与六个二进制文件工具的独立开关互不影响。保存后统一作用于 Web、企微的新建及恢复 session 后续请求，重启仍保留。关闭时不注册该工具，也不注入对应调用提示词；其他检索/记忆工具保留，历史回答中的既有链接不会删除。设置沿用 `.data/web-agent-settings.json`，新增 `libraryLinks: { enabled: boolean }`；旧设置缺少此项时默认开启。直接使用 Core 的调用方可传入 `libraryLinksEnabled: false`。基础工具开启时6个、关闭时5个，六个文件工具另行累加。无需新增 `.env` 字段、密钥或依赖；请求超时60秒，支持停止取消，返回正文最多256KiB，重定向不跟随。
 
 本机回归仍使用 `npm test`。升级按原流程同步代码、build/test 并重启 `product-expert.service`，无需单独修改 Bridge 配置。
+
+
+## Text-only MCP
+
+Enable `MCP_ENABLED=true` in `.env` and restart `product-expert.service` to serve an **unauthenticated** Streamable HTTP MCP at `/mcp`. No additional service is required. Tools: `ask_product_expert`, `get_task_result`, and `cancel_task`; fast answers return directly and longer requests return durable task handles. Only text is accepted, with no file or memory-write tools. Existing Web/WeCom authentication is unchanged.
+
+MCP agent runs share the existing execution gate. Each task reports input/output/total tokens across its model/tool loop, with explicit missing-usage coverage. The administrator's **MCP usage** page shows persistent cumulative totals and recent tasks. `npm run test:mcp` runs isolated protocol and accounting tests; this update adds dependencies, so run `npm ci` when upgrading. Setup, tool contracts, retention and accounting boundaries: [MCP guide](docs/mcp.md).

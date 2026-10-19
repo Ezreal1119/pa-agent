@@ -6,16 +6,29 @@ import { isReasoningMode, type ReasoningMode } from "../agent/reasoning.js";
 import { FILE_TOOL_NAMES, type FileToolName } from "../file-tools/config.js";
 import { safeDirectory } from "../file-tools/store.js";
 
+import { defaultWebToolSettings, WEB_TOOL_NAMES, type WebToolName } from "../web-tools/config.js";
+
 export interface WebAgentSettings {
   effort: ReasoningMode;
-  fileTools: { enabled: boolean; tools: Record<FileToolName, boolean> };
+  libraryLinks: { enabled: boolean };
+  webTools: { tools: Record<WebToolName, boolean> };
+  fileTools: { tools: Record<FileToolName, boolean> };
+}
+/** Legacy enabled=false becomes all-off; current preferences have no master switches. */
+function toolPreferences<T extends string>(input: unknown, names: readonly T[], label: string): { tools: Record<T, boolean> } {
+  const value = input as { enabled?: boolean; tools?: Record<T, boolean> };
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["enabled", "tools"].includes(key)) || value.enabled !== undefined && typeof value.enabled !== "boolean" || !value.tools || typeof value.tools !== "object" || Array.isArray(value.tools) || Object.keys(value.tools).length !== names.length || names.some(name => typeof value.tools![name] !== "boolean")) throw new Error(`Provide a boolean switch for every ${label} tool.`);
+  return { tools: Object.fromEntries(names.map(name => [name, value.enabled !== false && value.tools![name]])) as Record<T, boolean> };
 }
 export function validateAgentSettings(input: unknown): WebAgentSettings {
   const value = input as WebAgentSettings;
-  if (!value || typeof value !== "object" || Object.keys(value).some(key => !["effort", "fileTools"].includes(key)) || !isReasoningMode(value.effort)) throw new Error("请选择有效的全局思考强度。");
-  const files = value.fileTools;
-  if (!files || typeof files !== "object" || Object.keys(files).some(key => !["enabled", "tools"].includes(key)) || typeof files.enabled !== "boolean" || !files.tools || typeof files.tools !== "object" || Object.keys(files.tools).length !== FILE_TOOL_NAMES.length || FILE_TOOL_NAMES.some(name => typeof files.tools[name] !== "boolean")) throw new Error("请提供文件工具总开关和六个独立开关。");
-  return { effort: value.effort, fileTools: { enabled: files.enabled, tools: Object.fromEntries(FILE_TOOL_NAMES.map(name => [name, files.tools[name]])) as Record<FileToolName, boolean> } };
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["effort", "fileTools", "libraryLinks", "webTools"].includes(key)) || !isReasoningMode(value.effort)) throw new Error("Select a valid reasoning level.");
+  const fileTools = toolPreferences(value.fileTools, FILE_TOOL_NAMES, "file");
+  const links = value.libraryLinks;
+  // Settings saved before the library switch existed retain their enabled behavior.
+  if (links !== undefined && (!links || typeof links !== "object" || Array.isArray(links) || Object.keys(links).some(key => key !== "enabled") || typeof links.enabled !== "boolean")) throw new Error("Provide a valid library link tool switch.");
+  const webTools = value.webTools === undefined ? defaultWebToolSettings() : toolPreferences(value.webTools, WEB_TOOL_NAMES, "online");
+  return { effort: value.effort, webTools, libraryLinks: { enabled: links?.enabled ?? true }, fileTools };
 }
 export class AgentSettingsStore {
   readonly file: string;
@@ -26,12 +39,12 @@ export class AgentSettingsStore {
   }
   private async check() {
     const stat = await fs.lstat(this.file).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
-    if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 8192)) throw new Error("Agent 设置文件必须为普通文件。");
+    if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 8192)) throw new Error("Agent settings must be stored in a regular file.");
   }
   async load(fallback: WebAgentSettings): Promise<WebAgentSettings> {
     await this.check();
     try { return validateAgentSettings(JSON.parse(await fs.readFile(this.file, "utf8"))); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return structuredClone(fallback); throw error; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return validateAgentSettings(fallback); throw error; }
   }
   async save(settings: WebAgentSettings): Promise<void> {
     await safeDirectory(path.dirname(this.file)); await this.check();

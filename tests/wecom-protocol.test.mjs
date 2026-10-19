@@ -69,6 +69,6 @@ test('durable bridge store rejects duplicate processes and corrupt state without
 });
 test('shared run gate enforces capacity, bounds waiting and removes aborted jobs',async()=>{
  const gate=new RunGate(1,1);const a=new AbortController(), b=new AbortController();const release=await gate.acquire(a.signal);const pending=gate.acquire(b.signal);
- assert.deepEqual(gate.snapshot(),{active:1,waiting:1,limit:1,queueLimit:1});await assert.rejects(gate.acquire(new AbortController().signal),/队列/);
- b.abort();await assert.rejects(pending,/取消/);assert.equal(gate.snapshot().waiting,0);release();assert.equal(gate.snapshot().active,0);
+ assert.deepEqual(gate.snapshot(),{active:1,waiting:1,limit:1,queueLimit:1});await assert.rejects(gate.acquire(new AbortController().signal),/queue/);
+ b.abort();await assert.rejects(pending,/cancelled/);assert.equal(gate.snapshot().waiting,0);release();assert.equal(gate.snapshot().active,0);
 });
