@@ -265,6 +265,6 @@ Set `WECOM_NOTIFY_USER_ID` in the VPS `.env` to receive other users' incoming me
 
 ## Text-only MCP
 
-Enable `MCP_ENABLED=true` in `.env` and restart `product-expert.service` to serve an **unauthenticated** Streamable HTTP MCP at `/mcp`. No additional service is required. Tools: `ask_product_expert`, `get_task_result`, and `cancel_task`; fast answers return directly and longer requests return durable task handles. Only text is accepted, with no file or memory-write tools. Existing Web/WeCom authentication is unchanged.
+Set `MCP_ENABLED=true` and a dedicated `MCP_API_KEY` in `.env`, then restart `product-expert.service` to serve a Bearer-authenticated Streamable HTTP MCP at `/mcp`. Clients must send `Authorization: Bearer <your key>` on every request; missing, incorrect or unconfigured keys return HTTP401. No additional service is required. Tools: `ask_product_expert`, `get_task_result`, and `cancel_task`; fast answers return directly and longer requests return durable task handles. Only text is accepted, with no file or memory-write tools. Existing Web/WeCom authentication is unchanged.
 
 MCP agent runs share the existing execution gate. Each task reports input/output/total tokens across its model/tool loop, with explicit missing-usage coverage. The administrator's **MCP usage** page shows persistent cumulative totals and recent tasks. `npm run test:mcp` runs isolated protocol and accounting tests; this update adds dependencies, so run `npm ci` when upgrading. Setup, tool contracts, retention and accounting boundaries: [MCP guide](docs/mcp.md).

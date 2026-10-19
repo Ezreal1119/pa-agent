@@ -9,7 +9,7 @@ async function refresh() {
     if(response.status===401){location.assign('/login');return;}
     const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load MCP usage.');
     const t=data.totals;
-    $('mcp-status').textContent=`${data.enabled?'Enabled':'Disabled'} · Endpoint: /mcp · Authentication: none · Tracking since ${new Date(data.since).toLocaleString('en-US')}`;
+    $('mcp-status').textContent=`${data.enabled?'Enabled':'Disabled'} · Endpoint: /mcp · Authentication: Bearer key (${data.keyConfigured?'configured':'not configured'}) · Tracking since ${new Date(data.since).toLocaleString('en-US')}`;
     $('mcp-summary').replaceChildren(stat('Submitted tasks',number(t.submitted)),stat('Input tokens',number(t.inputTokens)),stat('Output tokens',number(t.outputTokens)),stat('Total recorded tokens',number(t.totalTokens)),stat('Reported / model requests',`${number(t.reportedRequests)} / ${number(t.requests)}`),stat('Requests missing usage',number(t.missingRequests)));
     const body=$('mcp-tasks').querySelector('tbody');body.replaceChildren();$('mcp-empty').hidden=data.recentTasks.length>0;
     for(const task of data.recentTasks){

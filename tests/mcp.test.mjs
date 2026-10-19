@@ -28,13 +28,13 @@ async function fixture(t,mcp={}){
   let text='';for await(const part of req)text+=part;const body=JSON.parse(text);requests.push(body);
   try{if(handler)return handler(body,res);const timer=setTimeout(()=>reply(res),defaultDelay);res.on('close',()=>clearTimeout(timer));}catch(error){res.writeHead(500);res.end(error.message);}
  });model.listen(0,'127.0.0.1');await once(model,'listening');
- const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},fileTools:{enabled:true},mcp:{enabled:true,waitMs:1000,...mcp},model:{apiKey:'MCP_MODEL_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'}};
+ const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},fileTools:{enabled:true},mcp:{enabled:true,apiKey:'MCP_ACCESS_SECRET',waitMs:1000,...mcp},model:{apiKey:'MCP_MODEL_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'}};
  let app,base,adminHeaders;const clients=[];
  async function start(){
   app=await createWebServer(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');base=`http://127.0.0.1:${app.server.address().port}`;
   const auth=await(await fetch(base+'/api/auth/status')).json();const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':auth.token},body:JSON.stringify(options.admin)});assert.equal(login.status,200);adminHeaders={'Content-Type':'application/json','X-Local-Token':auth.token,Cookie:login.headers.get('set-cookie').split(';')[0]};
  }
- async function client(){const client=new Client({name:'test-mcp-client',version:'1.0.0'});await client.connect(new StreamableHTTPClientTransport(new URL(base+'/mcp')));clients.push(client);return client;}
+ async function client(){const client=new Client({name:'test-mcp-client',version:'1.0.0'});await client.connect(new StreamableHTTPClientTransport(new URL(base+'/mcp'),{requestInit:{headers:{Authorization:`Bearer ${options.mcp.apiKey}`}}}));clients.push(client);return client;}
  const admin=(route,method='GET',body)=>fetch(base+route,{method,headers:adminHeaders,body:body===undefined?undefined:JSON.stringify(body)});
  await start();t.after(async()=>{await Promise.allSettled(clients.map(c=>c.close()));await app.close();model.closeAllConnections();await new Promise(resolve=>model.close(resolve));await fs.rm(root,{recursive:true,force:true});});
  return{root,dataDir,requests,options,client,admin,get base(){return base;},setHandler(fn){handler=fn;},setDelay(ms){defaultDelay=ms;},async restart(){await Promise.allSettled(clients.splice(0).map(c=>c.close()));await app.close();await start();}};
@@ -44,13 +44,13 @@ async function result(client,id){const value=await call(client,'get_task_result'
 async function finished(client,id){const deadline=Date.now()+10000;while(Date.now()<deadline){const task=await result(client,id);if(!['queued','running'].includes(task.status))return task;await sleep(10);}throw new Error('Task did not finish');}
 async function until(fn){const deadline=Date.now()+10000;while(Date.now()<deadline){if(await fn())return;await sleep(5);}throw new Error('Condition timed out');}
 
-test('official MCP client works without auth; fast text replies include exact usage and private admin APIs stay protected',{timeout:20000},async t=>{
+test('official MCP client works with Bearer authentication; fast text replies include exact usage and private admin APIs stay protected',{timeout:20000},async t=>{
  const f=await fixture(t);const client=await f.client();const list=await client.listTools();assert.deepEqual(list.tools.map(t=>t.name),['ask_product_expert','get_task_result','cancel_task']);
  const reply=await call(client,'ask_product_expert',{question:'Compare products'});assert.equal(reply.isError,undefined);assert.equal(reply.content[0].text,'Expert answer');const task=reply.structuredContent;
  assert.equal(task.status,'completed');assert.deepEqual(task.usage,{input_tokens:100,output_tokens:7,total_tokens:107,model_requests:1,reported_requests:1,missing_requests:0,coverage:'complete'});
- assert.deepEqual(f.requests[0].tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','read']);assert.ok(!JSON.stringify(f.requests[0]).includes('MCP_MODEL_SECRET'));assert.ok(!JSON.stringify(f.requests[0]).includes('file-skills'));
+ assert.deepEqual(f.requests[0].tools.map(t=>t.function.name).sort(),['find','get_file_link_from_library','grep','ls','read']);assert.ok(!JSON.stringify(f.requests[0]).includes('MCP_MODEL_SECRET'));assert.ok(!JSON.stringify(f.requests[0]).includes('MCP_ACCESS_SECRET'));assert.ok(!JSON.stringify(f.requests[0]).includes('file-skills'));
  assert.equal((await fetch(f.base+'/api/mcp/usage')).status,401);assert.equal((await fetch(f.base+'/api/sessions')).status,401);assert.equal((await fetch(f.base+'/mcp-usage',{redirect:'manual'})).status,302);
- const usage=await(await f.admin('/api/mcp/usage')).json();assert.equal(usage.authentication,'none');assert.equal(usage.totals.totalTokens,107);assert.equal(usage.totals.submitted,1);assert.equal(usage.totals.started,1);assert.equal(usage.totals.completed,1);
+ const usage=await(await f.admin('/api/mcp/usage')).json();assert.equal(usage.authentication,'bearer');assert.equal(usage.totals.totalTokens,107);assert.equal(usage.totals.submitted,1);assert.equal(usage.totals.started,1);assert.equal(usage.totals.completed,1);
  for(let n=0;n<3;n++)assert.equal((await result(client,task.task_id)).answer,'Expert answer');assert.equal(f.requests.length,1);assert.equal((await(await f.admin('/api/mcp/usage')).json()).totals.totalTokens,107);
  const page=await(await f.admin('/mcp-usage')).text();assert.match(page,/MCP usage/);assert.doesNotMatch(page,/\p{Script=Han}/u);
 });
@@ -114,7 +114,7 @@ test('MCP shares the Web run gate and cancels queued work without model usage',{
  const total=(await(await f.admin('/api/mcp/usage')).json()).totals;assert.equal(total.totalTokens,0);assert.equal(total.cancelled,1);assert.equal(total.started,0);
 });
 
-test('timeout and pending capacity are bounded; distinct anonymous conversations run independently',{timeout:20000},async t=>{
+test('timeout and pending capacity are bounded; distinct MCP conversations run independently',{timeout:20000},async t=>{
  const f=await fixture(t,{waitMs:0,pendingLimit:1,taskTimeoutMs:1000});const client=await f.client();
  f.setHandler((_body,res)=>{res.writeHead(200,{'Content-Type':'text/event-stream'});res.flushHeaders();});
  const a=(await call(client,'ask_product_expert',{question:'Timeout'})).structuredContent;
@@ -159,14 +159,47 @@ test('retention and storage reject links/corruption, serialize usage deltas and 
  assert.equal(mcpConfig({},{}).enabled,false);assert.throws(()=>mcpConfig({waitMs:30000},{}));
 });
 
-test('MCP protects Host/Origin and body size without requiring credentials or weakening normal Web CSRF',{timeout:20000},async t=>{
+test('MCP protects Host/Origin and body size with Bearer credentials without weakening normal Web CSRF',{timeout:20000},async t=>{
  const f=await fixture(t);const client=await f.client();assert.equal((await client.listTools()).tools.length,3);
  const list={jsonrpc:'2.0',id:1,method:'tools/list',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientInfo':{name:'test',version:'1'}}}};
- const headers={'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2026-07-28','Mcp-Method':'tools/list'};
+ const headers={Authorization:'Bearer MCP_ACCESS_SECRET','Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2026-07-28','Mcp-Method':'tools/list'};
  assert.equal((await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Origin:'https://evil.example'},body:JSON.stringify(list)})).status,403);
  assert.equal((await fetch(f.base+'/mcp',{method:'POST',headers,body:' '.repeat(65537)})).status,413);
  const csrf=await f.admin('/api/sessions','POST',{});assert.equal(csrf.status,201);
  assert.equal((await fetch(f.base+'/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,403);
  // Backward-compatible stateless calls for 2025 clients are supported by the official SDK.
- const legacy=await fetch(f.base+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}})});assert.equal(legacy.status,200,await legacy.clone().text());
+ const legacy=await fetch(f.base+'/mcp',{method:'POST',headers:{Authorization:'Bearer MCP_ACCESS_SECRET','Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}})});assert.equal(legacy.status,200,await legacy.clone().text());
+});
+
+
+test('MCP requires its own header key for all methods; rejects missing/incorrect/query keys without work or usage, and rotates on restart',{timeout:20000},async t=>{
+ const f=await fixture(t);
+ const body=JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}});
+ const headers={'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'};
+ for(const token of [undefined,'','Basic MCP_ACCESS_SECRET','Bearer wrong','Bearer MCP_ACCESS_SECRET-extra','Bearer MCP_ACCESS_SECRET extra']){
+  const response=await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,...(token?{Authorization:token}:{})},body});
+  assert.equal(response.status,401);assert.match(response.headers.get('www-authenticate'),/^Bearer /);assert.ok(!(await response.text()).includes('MCP_ACCESS_SECRET'));
+ }
+ for(const name of ['ask_product_expert','get_task_result','cancel_task']){const denied=await fetch(f.base+'/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name,arguments:{question:'Do not start this run',task_id:randomUUID()}}})});assert.equal(denied.status,401);}
+ for(const method of ['GET','DELETE'])assert.equal((await fetch(f.base+'/mcp',{method})).status,401);
+ assert.equal((await fetch(f.base+'/mcp?access_token=MCP_ACCESS_SECRET',{method:'POST',headers,body})).status,401);
+ assert.equal((await f.admin('/mcp','POST',{})).status,401);
+ assert.equal(f.requests.length,0);const before=await(await f.admin('/api/mcp/usage')).json();assert.equal(before.totals.submitted,0);assert.equal(before.totals.totalTokens,0);assert.equal(before.keyConfigured,true);assert.ok(!JSON.stringify(before).includes('MCP_ACCESS_SECRET'));
+ const client=await f.client();const answer=(await call(client,'ask_product_expert',{question:'Authenticated question'})).structuredContent;assert.equal(answer.status,'completed');
+ f.options.mcp.apiKey='MCP_ROTATED_SECRET';await f.restart();
+ assert.equal((await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_ACCESS_SECRET'},body})).status,401);
+ const next=await f.client();assert.equal((await result(next,answer.task_id)).usage.total_tokens,107);assert.equal(f.requests.length,1);
+ assert.equal((await fetch(f.base+'/api/sessions',{headers:{Authorization:'Bearer MCP_ROTATED_SECRET'}})).status,401);
+ f.options.mcp.apiKey='';await f.restart();assert.equal((await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_ROTATED_SECRET'},body})).status,401);
+ const after=await(await f.admin('/api/mcp/usage')).json();assert.equal(after.keyConfigured,false);assert.equal(after.totals.totalTokens,107);assert.equal(f.requests.length,1);
+ // Read the real startup .env path in an isolated fixture; no programmatic key override.
+ await fs.appendFile(path.join(f.root,'.env'),'\nMCP_API_KEY=MCP_FILE_SECRET\n');delete f.options.mcp.apiKey;await f.restart();
+ const fromEnv=await fetch(f.base+'/mcp',{method:'POST',headers:{...headers,Authorization:'Bearer MCP_FILE_SECRET'},body});assert.equal(fromEnv.status,200,await fromEnv.clone().text());assert.equal(f.requests.length,1);
+});
+
+test('MCP key reads from startup env configuration without public serialization or accidental anonymous fallback',()=>{
+ assert.equal(mcpConfig({},{MCP_ENABLED:'true',MCP_API_KEY:'env-key'}).apiKey,'env-key');
+ assert.equal(mcpConfig({apiKey:'option-key'},{MCP_API_KEY:'env-key'}).apiKey,'option-key');
+ assert.equal(mcpConfig({},{MCP_ENABLED:'true'}).apiKey,'');
+ assert.throws(()=>mcpConfig({},{MCP_API_KEY:'bad key'}),/MCP_API_KEY/);
 });

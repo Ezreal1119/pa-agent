@@ -30,6 +30,7 @@ import { pipeline } from "node:stream/promises";
 import { webToolConfig, WEB_TOOL_NAMES, type WebToolOptions } from "../web-tools/config.js";
 
 import { mcpConfig, type McpOptions } from "../mcp/config.js";
+import { McpAccess } from "../mcp/auth.js";
 import { McpStore } from "../mcp/store.js";
 import { McpService } from "../mcp/service.js";
 import { handleMcp } from "../mcp/http.js";
@@ -52,6 +53,7 @@ export async function createWebServer(options: WebOptions = {}) {
     throw error;
   });
   const mcpOptions = mcpConfig(options.mcp, { ...diskEnv, ...process.env });
+  const mcpAccess = new McpAccess(mcpOptions.apiKey);
   const originPolicy = new WebOriginPolicy(options.publicUrl ?? process.env.WEB_PUBLIC_URL ?? diskEnv.WEB_PUBLIC_URL ?? "");
   const fileConfig = fileToolConfig(dataDir, options.fileTools, { ...diskEnv, ...process.env });
   const agentSettingsStore = new AgentSettingsStore(dataDir);
@@ -92,6 +94,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const configured = () => Boolean(settings.apiKey && settings.baseUrl && settings.modelId);
   const redact = (error: unknown) => {
     let message = error instanceof Error ? error.message : String(error);
+    if (mcpOptions.apiKey) message = message.split(mcpOptions.apiKey).join("[REDACTED]");
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
     if (webConfig.apiKey) message = message.split(webConfig.apiKey).join("[REDACTED]");
@@ -348,9 +351,13 @@ export async function createWebServer(options: WebOptions = {}) {
       const method = req.method;
       if (url.pathname === "/mcp") {
         if (!mcpOptions.enabled) throw new HttpError(404, "MCP is disabled. Set MCP_ENABLED=true and restart the service.");
-        // Public MCP only: no login, API token, or browser CSRF token. Keep Host/Origin validation.
+        // MCP uses its own Bearer key, independent of browser login/CSRF and WeCom credentials.
         try { originPolicy.check(req, (server.address() as import("node:net").AddressInfo).port); }
         catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
+        if (!mcpAccess.authenticated(req.headers.authorization)) {
+          res.setHeader("WWW-Authenticate", 'Bearer realm="product-expert-mcp"');
+          throw new HttpError(401, "MCP API key is invalid or not configured.");
+        }
         await handleMcp(req, res, mcp!); return;
       }
       const machine = url.pathname.startsWith("/api/wecom/");
@@ -409,7 +416,7 @@ export async function createWebServer(options: WebOptions = {}) {
         }
         throw new HttpError(405, "WeCom contacts only support listing contacts and updating display names.");
       }
-      if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "none", ...await mcpStore.summary() });
+      if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "bearer", keyConfigured: mcpAccess.configured, ...await mcpStore.summary() });
       if (url.pathname === "/api/config") throw new HttpError(410, "Model connections are configured in .env. Restart the service after making changes.");
       if (url.pathname === "/api/agent-settings") {
         if (method === "GET") return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey) });

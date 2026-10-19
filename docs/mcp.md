@@ -1,6 +1,6 @@
 # Text-only Product Expert MCP
 
-MCP 使用现有 `product-expert.service`，入口为 `/mcp`，采用官方 SDK 的 Streamable HTTP 传输。无需管理员登录、Bearer Token 或 WeCom 凭据。`MCP_ENABLED` 默认关闭，启用后即可匿名调用；管理页面和原 Web/WeCom API 的认证规则保持不变。
+MCP 使用现有 `product-expert.service`，入口为 `/mcp`，采用官方 SDK 的 Streamable HTTP 传输。每次请求必须携带独立的 `Authorization: Bearer <MCP_API_KEY>`，无需管理员登录或 WeCom 凭据。`MCP_ENABLED` 默认关闭，Key 未配置/缺失/错误均返回401（不启动模型、也不增加Token统计）；管理页面和原 Web/WeCom API 的认证规则保持不变。
 
 ## 启用与连接
 
@@ -9,7 +9,7 @@ MCP 使用现有 `product-expert.service`，入口为 `/mcp`，采用官方 SDK 
 ```sh
 cd /opt/ProductExpertCloud
 git pull --ff-only
-npm ci
+npm ci --include=dev
 npm run test:mcp
 ```
 
@@ -17,13 +17,20 @@ npm run test:mcp
 
 ```ini
 MCP_ENABLED=true
+MCP_API_KEY=replace-with-your-random-key
 # 已有 HTTPS 域名配置保留；不填 /login 或 /mcp
 WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn
 ```
 
+Key 使用不含空格的可见ASCII字符，建议随机生成32字节（64位十六进制字符串）。只保存在 `.env` 或进程环境；不要提交、放进URL或工具参数。更换Key后重启生效，旧Key立即失效，已有任务/会话及Token累计保留。Key为空只会阻止MCP访问，不阻止管理员Web使用。可以在VPS运行以下命令生成一次，再手动复制到配置：
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
 然后执行 `systemctl restart product-expert.service`。不需要增加 systemd unit，也不需要重启独立 WeCom Bridge。现有反代若已将 `/` 转发到4321端口，无需单独开放4321公网端口。
 
-在支持远程 Streamable HTTP 的 MCP 客户端中填写 URL：`https://urovo-agent.patrick-shenzhen.cn/mcp`，认证选择 None。具体客户端配置字段以该客户端为准；这里不提供只适用于某一客户端的通用 JSON。Host/Origin 仍检查现有本机地址或 `WEB_PUBLIC_URL`，不接受任意浏览器跨站来源。
+在支持远程 Streamable HTTP 的 MCP 客户端中填写 URL：`https://urovo-agent.patrick-shenzhen.cn/mcp`，客户端需支持静态Bearer Key或自定义HTTP请求头，配置 `Authorization: Bearer <与VPS相同的Key>`（不要把尖括号写入实际值）。具体客户端配置字段以该客户端为准；这里不提供只适用于某一客户端的通用 JSON。Host/Origin 仍检查现有本机地址或 `WEB_PUBLIC_URL`，不接受任意浏览器跨站来源。
 
 ## 三个工具
 
@@ -63,7 +70,7 @@ WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn
 
 ## Token 口径与管理页面
 
-登录 Web 后，左侧 **MCP usage** 打开独立 `/mcp-usage` 页面，可查看累计提交数、输入/输出/总 Token、模型请求数、usage 覆盖及最近50个任务。受管理员认证的 `GET /api/mcp/usage` 还包含按 conversation 的累计用量；MCP 工具不开放其他调用者的任务列表。匿名调用无法归属到经验证的真实个人。
+登录 Web 后，左侧 **MCP usage** 打开独立 `/mcp-usage` 页面，可查看累计提交数、输入/输出/总 Token、模型请求数、usage 覆盖及最近50个任务。受管理员认证的 `GET /api/mcp/usage` 还包含按 conversation 的累计用量；MCP 工具不开放其他调用者的任务列表；所有持有同一个Key的客户端共用MCP权限与累计统计。当前为共享Key，只按任务和conversation统计，不将Key映射为真实个人。统计接口只显示认证方式和Key是否配置，不返回Key。
 
 - 累计本次 Agent 工具循环中所有 SDK 模型请求，不只统计最终一条回答；输入含 cacheRead/cacheWrite，输出已有的 reasoning 不再重复相加。
 - 查询任务和取消操作不执行模型；幂等重试不启动新任务。第三方 search/fetch 按次费用、资料库上游内部成本、调用方自身大模型用量不计入本服务模型 Token。

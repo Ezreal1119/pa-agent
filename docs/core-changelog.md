@@ -49,7 +49,7 @@
 - 新增可选联网工具 `search` / `fetch`，通过DeepSeek固定HTTP接口按需搜索/读取公开网页；当前Web仅保留两个独立开关，初始均关闭，Web/企微共用，最多再加两个工具。见2026-10-19联网工具及英文界面记录。
 - 新增默认工具 `get_file_link_from_library`，按当前用户原文调用固定资料库 API 返回文件/软件下载链接，Web/企微共用，独立于文件处理开关，Web Agent 设置支持单独启停并持久化，旧设置默认开启。见 2026-10-19 资料库链接工具及开关记录。
 
-- 新增默认关闭、可显式启用的匿名文本 MCP `/mcp`，三个任务工具复用Core与共享执行队列；逐任务/会话/累计Token持久统计，管理员新增独立MCP usage页面。MCP禁用文件处理及记忆写入。详见2026-10-19文本MCP记录。
+- 新增默认关闭、可显式启用的文本 MCP `/mcp`（现已增加MCP_API_KEY Bearer鉴权，见后续记录），三个任务工具复用Core与共享执行队列；逐任务/会话/累计Token持久统计，管理员新增独立MCP usage页面。MCP禁用文件处理及记忆写入。详见2026-10-19文本MCP记录。
 
 ## 2026-10-16 — 默认专家资源、五轮上下文与 30 天会话保留
 
@@ -432,3 +432,16 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 验证：本机官方MCP客户端+真实Core SDK+模拟模型，新增11项覆盖快答/异步/断开重连/纯文本schema、工具循环缓存与思考Token、幂等与重启增量、取消缺失usage、Web共享排队、超时/容量、不可写记忆/文件及不可读配置、手动删除/30天清理、损坏数据/符号链接、Host/Origin/64KiB限制与2025协议兼容。首轮完整npm test 142/142通过（约15.1秒）；最终收尾及浏览器验证后补。本机模拟验证不等于真实模型、生产域名或VPS部署验收。未修改实际.env/业务知识/用户记忆/设置，未向企微推送，未修改参考patrick-agent/pi-patrick，未提交/推送/部署。
 
 最终验证补充：收尾修正恢复时不回退已记录usage、无本轮助手消息时不复用上一轮答案、释放MCP会话内存，并补充孤立回答清理回归。`npm run test:mcp` 11/11通过；最终完整`npm test` 142/142通过（约14.6秒），日志`.data/debug/mcp/final-full-tests.log`。新增MCP页面/脚本加入全英文检查，前端语法与git diff检查通过。浏览器使用隔离虚构账号、模拟模型完成首页入口→MCP usage独立页→刷新，核对输入1240/输出180/总1420及1/1请求覆盖，截图`.data/debug/mcp/usage-page.png`；测试tab与51082隔离服务均已关闭。未连接生产域名或真实模型，未部署VPS。
+
+
+## 2026-10-19 — MCP独立Bearer Key
+
+原因：用户要求在.env配置Authorization Key，取代此前匿名MCP访问；已确认采用Authorization: Bearer。
+
+行为/兼容性：新增MCP_API_KEY（.env/进程环境，库调用可用mcp.apiKey覆盖），/mcp所有HTTP方法在创建SDK传输前要求正确Bearer头，缺失、错误或Key为空返回401及WWW-Authenticate，不启动任务/模型、不增加Token。Host/Origin校验保留。空Key不导致整个Web启动失败，而是关闭MCP访问；Key格式仅允许无空格可见ASCII，不在错误中回显值。Key更换需重启；旧客户端必须加头，URL/query/Cookie或Web/企微凭据不能替代。原Web登录/CSRF、WeCom认证及任务/会话持久化沿用；现有共享Key不提供个人身份/多租户隔离。
+
+实现：独立McpAccess预计算SHA256并定长timingSafeEqual；Key不传给模型、工具或任务元数据，加入统一错误敏感值替换。管理统计API只返回authentication=bearer和keyConfigured布尔；英文usage页面同步显示认证状态，文档与.env.example更新，原Token统计口径和幂等/取消逻辑不变。未新增依赖、未生成或修改实际.env的密钥。
+
+验证：专项回归首轮13/13通过，包括官方SDK客户端携带头完成问答/轮询/取消，新增未授权各种方法/三工具拒绝及零模型和统计、query不能替代、Web认证不可混用、重启轮换后旧Key拒绝/历史结果与Token保留、空Key拒绝但管理员可用、密钥不进入模型payload/管理统计，以及隔离.env读取与格式校验。最终完整回归结果后补。本机模拟模型验证，不代表VPS/真实客户端已部署验收；开发目录ProductExpertCloud，未触碰参考项目/业务知识记忆或VPS。
+
+最终验证补充：包含隔离.env真实读取、全部未授权工具路径和Key轮换的最终完整`npm test` 144/144通过（约26.5秒），日志`.data/debug/mcp/auth-full-tests.log`；前端脚本语法与git diff检查通过。未使用真实模型/生产密钥，未修改实际.env或部署VPS。
