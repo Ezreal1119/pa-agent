@@ -36,12 +36,17 @@ import { McpService } from "../mcp/service.js";
 import { handleMcp } from "../mcp/http.js";
 import { runMcpAgent } from "../mcp/runner.js";
 
+import { SyncService } from "../knowledge-sync/service.js";
+import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
+import { createConverter, type Converter } from "../knowledge-sync/converter.js";
+import { SyncError } from "../knowledge-sync/core.js";
+
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -103,6 +108,14 @@ export async function createWebServer(options: WebOptions = {}) {
     if (fileConfig.vision.apiKey) message = message.split(fileConfig.vision.apiKey).join("[REDACTED]");
     return message.slice(0, 2000);
   };
+  const syncEnv = { ...diskEnv, ...process.env };
+  const syncTimeout = boundedSetting(options.sync?.timeoutMs ?? syncEnv.SYNC_FILE_TIMEOUT_MS, 1800000, 1000, 7200000, "SYNC_FILE_TIMEOUT_MS");
+  const syncCalls = boundedSetting(syncEnv.SYNC_MAX_MODEL_REQUESTS, 64, 1, 512, "SYNC_MAX_MODEL_REQUESTS");
+  const syncVision = boundedSetting(syncEnv.SYNC_MAX_VISION_REQUESTS, 128, 1, 1024, "SYNC_MAX_VISION_REQUESTS");
+  const synchronize = new SyncService({ dataDir, maxBytes: fileConfig.maxFileBytes, maxBatchMarkdownBytes: boundedSetting(syncEnv.SYNC_MAX_BATCH_MARKDOWN_BYTES, 16777216, 1048576, 134217728, "SYNC_MAX_BATCH_MARKDOWN_BYTES"), timeoutMs: syncTimeout, modelId: () => settings.modelId, redact,
+    planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
+    converter: options.sync?.converter ?? (() => createConverter(structuredClone(fileConfig), syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
+  await synchronize.init();
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
@@ -394,12 +407,31 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       const publicAsset = ["/login", "/login.js", "/style.css"].includes(url.pathname) && (method === "GET" || method === "HEAD");
       if (!authenticated && !publicAsset) {
-        if (["/", "/wecom-contacts", "/mcp-usage"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
+        if (["/", "/wecom-contacts", "/mcp-usage", "/synchronize"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
         throw new HttpError(401, "Please sign in first.");
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
         auth.logout(req, res, secureCookies); return json(res, 200, { ok: true });
+      }
+      if (url.pathname.startsWith("/api/sync/")) {
+        if (machine) throw new HttpError(403, "Maintenance requires administrator login.");
+        const route = url.pathname.slice("/api/sync/".length);
+        if (route === "incoming" && method === "GET") return json(res, 200, { files: await synchronize.incoming(), maxFileBytes: fileConfig.maxFileBytes });
+        if (route === "incoming" && method === "POST") return json(res, 201, await synchronize.upload(url.searchParams.get("name") ?? "", req));
+        if (route === "jobs" && method === "GET") return json(res, 200, { jobs: synchronize.list() });
+        if (route === "jobs" && method === "POST") return json(res, 202, await synchronize.start((await readBody(req)).ids));
+        if (route === "delete-preview" && method === "POST") return json(res, 202, await synchronize.preview((await readBody(req)).prompt));
+        const match = route.match(/^jobs\/([a-f0-9-]{36})(?:\/(stop|resync|cleanup|confirm))?$/);
+        if (match && method === "GET" && !match[2]) return json(res, 200, await synchronize.get(match[1]!));
+        if (match && method === "POST") {
+          const body = await readBody(req);
+          if (match[2] === "stop") return json(res, 200, await synchronize.stop(match[1]!));
+          if (match[2] === "confirm") return json(res, 202, await synchronize.confirm(match[1]!));
+          if (match[2] === "resync") return json(res, 202, await synchronize.resync(match[1]!, body.itemId, body.feedback ?? "", body.forceConvert === true));
+          if (match[2] === "cleanup") return json(res, 200, await synchronize.cleanup(match[1]!, body.itemId));
+        }
+        throw new HttpError(404, "Sync operation not found.");
       }
       if (method === "GET" && url.pathname === "/api/status") {
         const extraMemory = await new ExtraMemoryStore(dataDir).snapshot().then(value => ({ ready: true, bytes: Buffer.byteLength(value.text) })).catch(() => ({ ready: false, bytes: 0 }));
@@ -718,6 +750,8 @@ export async function createWebServer(options: WebOptions = {}) {
       const assets: Record<string, [string, string]> = {
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
+        "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
+        "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
@@ -733,13 +767,15 @@ export async function createWebServer(options: WebOptions = {}) {
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
-      json(res, error instanceof HttpError ? error.status : 500, { error: redact(error) });
+      json(res, error instanceof HttpError || error instanceof SyncError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;
   async function close() {
+    const syncClosing = synchronize.close();
     await mcp?.close();
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
+    await syncClosing;
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
     auth.dispose(); retention.dispose();

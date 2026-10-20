@@ -131,3 +131,9 @@ systemctl status product-expert --no-pager
 ```
 
 若本轮更新 Python 依赖，再执行虚拟环境 pip install；若更新 unit，重新 install、daemon-reload 后 restart。知识库更新也使用管理员权限，不通过 Agent 写入。已有 active runs 时先等其完成，再执行更新；安装或构建失败时先修复，避免启动不完整的版本。`.data/` 和 `.env` 单独备份，不用 Git 备份。
+
+## Synchronize 升级补充
+
+手动知识库维护入口 `/synchronize` 由原 product-expert 服务管理。新增原生 LibreOffice Writer/Calc/Impress、Fontconfig、Noto CJK/Liberation 字体和 ripgrep；安装、环境检查及资源限制见 [Synchronize 部署步骤](synchronize.md#ubuntu-24-原生部署)。运行 `npm run check:sync` 和 `npm run test:sync`。
+
+本次必须调整 unit：移除产品库整个目录的 ReadOnlyPaths，改为保护该库根 SKILL.md/MEMORY.md/SYNC_PROMPT.md；保留 UMS/file-runtime 的只读项，TasksMax=192。保留现有 User/Group（尤其是已选择 root 的部署），然后 daemon-reload/restart。未完成这些调整时发布会因只读目录失败，原件保留。正式启用后不要继续用旧同步脚本或 rsync 直接覆盖该知识库；外部文件只投递到 newly_added。

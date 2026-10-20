@@ -1,0 +1,258 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import JSZip from "jszip";
+import { fixtures } from "./file-fixtures.mjs";
+import { createConverter } from "../dist/knowledge-sync/converter.js";
+import { fileToolConfig } from "../dist/file-tools/config.js";
+import { emptyUsage } from "../dist/knowledge-sync/core.js";
+
+const markitdown =
+  process.env.FILE_TEST_MARKITDOWN ||
+  path.resolve(".data/file-runtime/bin/markitdown");
+const available = await fs.access(markitdown).then(
+  () => true,
+  () => false,
+);
+test(
+  "native PDF/DOCX/PPTX/image conversion renders all pages; vision coverage, token accounting, cache and failure gates",
+  { skip: !available, timeout: 120000 },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-conversion-"));
+    let vision;
+    let mode = "complete";
+    let calls = 0;
+    t.after(async () => {
+      vision?.closeAllConnections();
+      if (vision) await new Promise((r) => vision.close(r));
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    await fixtures(root);
+    const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+    const picture = await loadImage(path.join(root, "image.png"));
+    const canvas = createCanvas(picture.width, picture.height);
+    canvas.getContext("2d").drawImage(picture, 0, 0);
+    await fs.writeFile(
+      path.join(root, "image.jpg"),
+      canvas.toBuffer("image/jpeg"),
+    );
+    await fs.writeFile(
+      path.join(root, "image.webp"),
+      canvas.toBuffer("image/webp"),
+    );
+    vision = createServer(async (req, res) => {
+      let input = "";
+      for await (const c of req) input += c;
+      const body = JSON.parse(input);
+      assert.match(
+        body.messages[1].content[1].image_url.url,
+        /^data:image\/png;base64,/,
+      );
+      calls++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          usage: { prompt_tokens: 100, completion_tokens: 20 },
+          choices: [
+            {
+              finish_reason: mode === "truncated" ? "length" : "stop",
+              message: {
+                content: JSON.stringify({
+                  complete: mode !== "incomplete",
+                  text: "Visual transcription TEST 42",
+                  issues: mode === "incomplete" ? ["unreadable region"] : [],
+                }),
+              },
+            },
+          ],
+        }),
+      );
+    });
+    vision.listen(0, "127.0.0.1");
+    await once(vision, "listening");
+    const cfg = fileToolConfig(
+      path.join(root, ".data"),
+      {
+        markitdown,
+        timeoutMs: 45000,
+        vision: {
+          baseUrl: `http://127.0.0.1:${vision.address().port}/v1`,
+          apiKey: "fixture",
+          model: "fixture",
+        },
+      },
+      {},
+    );
+    const convert = createConverter(
+      cfg,
+      process.env.SYNC_SOFFICE_COMMAND || "soffice",
+      128,
+      async () => () => {},
+    );
+    for (const name of [
+      "sample.pdf",
+      "sample.docx",
+      "sample.pptx",
+      "image.png",
+      "image.jpg",
+      "image.webp",
+    ]) {
+      const usage = emptyUsage();
+      const result = await convert(
+        path.join(root, name),
+        path.join(root, `out-${name}`),
+        new AbortController().signal,
+        usage,
+        async () => {},
+      );
+      assert.match(result.markdown, /TEST 42/);
+      assert.ok(result.coverage.some((c) => c.endsWith("inspected")));
+      assert.ok(usage.input >= 100);
+      assert.ok(usage.output >= 20);
+      assert.equal(usage.recorded, usage.requests);
+      const before = calls;
+      await convert(
+        path.join(root, name),
+        path.join(root, `out-${name}`),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      );
+      assert.equal(calls, before);
+    }
+    const doczip = await JSZip.loadAsync(
+      await fs.readFile(path.join(root, "sample.docx")),
+    );
+    doczip.file(
+      "word/comments.xml",
+      '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="0" w:author="Fixture"><w:p><w:r><w:t xml:space="preserve">COMMENT SENTINEL 123</w:t></w:r></w:p></w:comment></w:comments>',
+    );
+    const docxml = await doczip.file("word/document.xml").async("string");
+    doczip.file(
+      "word/document.xml",
+      Buffer.from(
+        '\ufeff<?xml version="1.0" encoding="UTF-16"?>' + docxml,
+        "utf16le",
+      ),
+    );
+    await fs.writeFile(
+      path.join(root, "utf16.docx"),
+      await doczip.generateAsync({ type: "nodebuffer" }),
+    );
+    const utf16 = await convert(
+      path.join(root, "utf16.docx"),
+      path.join(root, "utf16"),
+      new AbortController().signal,
+      emptyUsage(),
+      async () => {},
+    );
+    assert.match(utf16.markdown, /COMMENT SENTINEL 123/);
+    assert.ok(utf16.coverage.some((c) => c.includes("encoding normalized")));
+    doczip.file(
+      "word/document.xml",
+      docxml.replace(
+        "<w:r>",
+        '<w:r><w:rPr><w:rFonts w:ascii="DefinitelyMissingFont987654"/></w:rPr>',
+      ),
+    );
+    await fs.writeFile(
+      path.join(root, "font.docx"),
+      await doczip.generateAsync({ type: "nodebuffer" }),
+    );
+    await assert.rejects(
+      convert(
+        path.join(root, "font.docx"),
+        path.join(root, "font"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /Missing source font/,
+    );
+    const { PDFDocument } = await import("pdf-lib");
+    const scan = await PDFDocument.create();
+    const image = await scan.embedPng(
+      await fs.readFile(path.join(root, "image.png")),
+    );
+    scan
+      .addPage([300, 200])
+      .drawImage(image, { x: 20, y: 20, width: 160, height: 100 });
+    await fs.writeFile(path.join(root, "scan.pdf"), await scan.save());
+    const scanned = await convert(
+      path.join(root, "scan.pdf"),
+      path.join(root, "scan"),
+      new AbortController().signal,
+      emptyUsage(),
+      async () => {},
+    );
+    assert.match(scanned.markdown, /Visual transcription/);
+    mode = "incomplete";
+    await assert.rejects(
+      convert(
+        path.join(root, "image.png"),
+        path.join(root, "incomplete"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /Unresolved visual/,
+    );
+    mode = "truncated";
+    await assert.rejects(
+      convert(
+        path.join(root, "image.png"),
+        path.join(root, "truncated"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /truncated/,
+    );
+    const noVision = createConverter(
+      { ...cfg, vision: { ...cfg.vision, apiKey: "" } },
+      "soffice",
+      128,
+      async () => () => {},
+    );
+    await assert.rejects(
+      noVision(
+        path.join(root, "sample.pdf"),
+        path.join(root, "novision"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /Vision model is required/,
+    );
+    await assert.rejects(
+      convert(
+        path.join(root, "sample.xlsx"),
+        path.join(root, "hidden"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /hidden sheets|print areas/,
+    );
+    const zip = await JSZip.loadAsync(
+      await fs.readFile(path.join(root, "sample.docx")),
+    );
+    zip.file("word/vbaProject.bin", "unsafe");
+    const active = path.join(root, "active.docx");
+    await fs.writeFile(active, await zip.generateAsync({ type: "nodebuffer" }));
+    await assert.rejects(
+      convert(
+        active,
+        path.join(root, "active"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /Active\/embedded/,
+    );
+  },
+);

@@ -29,7 +29,7 @@ MemoryHigh=900M
 MemoryMax=1100M
 MemorySwapMax=256M
 CPUQuota=150%
-TasksMax=96
+TasksMax=192
 
 NoNewPrivileges=yes
 CapabilityBoundingSet=
@@ -43,7 +43,10 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/opt/ProductExpertCloud/.data
-ReadOnlyPaths=/opt/ProductExpertCloud/.data/urovo-product-expert
+# Synchronize publishes product Markdown; skill and business memory remain protected.
+ReadOnlyPaths=-/opt/ProductExpertCloud/.data/urovo-product-expert/SKILL.md
+ReadOnlyPaths=-/opt/ProductExpertCloud/.data/urovo-product-expert/MEMORY.md
+ReadOnlyPaths=-/opt/ProductExpertCloud/.data/urovo-product-expert/SYNC_PROMPT.md
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/ums-expert
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/file-runtime
 

@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- 新增管理员 Synchronize 独立页面及 `/api/sync/*`：手动导入、维护专用 Pi Agent、完整转换与视觉覆盖、索引校验和事务发布、报告反馈/Re-Sync、自然语言删除预览确认。共享知识读写锁，问答工具排除未发布目录。原生 LibreOffice/fontconfig 依赖、systemd 保护范围调整及 `check:sync`/`test:sync`。见 2026-10-20 记录。
+
 - ProductExpertCloud 默认仅要求 `.data/urovo-product-expert/` 的 `SKILL.md` 和 `MEMORY.md`，每轮读取新快照并在模型请求注入完整内容，缺失时在推理前报错。ums-expert 改为可选普通 Skill，按需读取正文，无专属 MEMORY 加载。详见 2026-10-18 UMS 按需记录。
 - 每次模型上下文最多五轮，包含本次请求；完整保留轮内工具调用关系。过滤历史压缩/分支摘要并关闭自动压缩，避免摘要带回窗口外对话。磁盘历史不按五轮裁剪。
 - 会话文件按最后活动时间保留 30 天，在启动、创建会话及运行中每小时清理。支持显式 cleanup；同进程执行中的 prompt 受保护，过期对象不能静默重建无头日志。仅处理 sessionsDir 内已识别的 JSONL，会话目录由一个服务进程独占使用。
@@ -484,3 +486,21 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 修正/影响：仅修改测试，保留生产鉴权和配置优先级。用虚构进程Key显式验证它覆盖临时.env，再临时移除本测试进程的MCP_API_KEY验证磁盘读取，finally恢复原值。既不覆盖真实.env，也不打印/发送真实密钥；查询仅使用隔离本地服务，无新模型请求。避免部署环境中已配置Key导致假失败，并保留错误Key拒绝验证。验证结果后补。
 
 验证补充：修复前以虚构MCP_API_KEY注入进程，精确复现原197行401≠200（.data/debug/mcp/env-repro.log）；修复后带同样注入`npm run test:mcp`15/15通过，进一步同时设置MCP_ENABLED=true和虚构进程Key运行完整`npm test`155/155通过（约22.1秒，.data/debug/mcp/env-full-tests.log）。git diff检查通过。本次仅测试与记录改动，生产运行代码/真实配置不变，未提交推送或部署。
+
+## 2026-10-20 — Synchronize 产品知识维护
+
+原因：用户要求把资料消化、版本/slot 判断和 Markdown Hub/Vault 索引维护部署到原有 VPS 服务，采用管理员手动开始和报告反馈，避免原件误删与问答读到半完成的知识库。
+
+实现：在 **ProductExpertCloud** 增加 `/synchronize` 英文独立页面，侧栏入口、批量上传/手动 inbox 扫描、开始/停止、历史报告、内容 diff、文字反馈/Re-Sync，以及自然语言删除 Preview → Confirm deletion。`/api/sync/*` 使用现有管理员 Cookie、Origin 和 CSRF；WeCom/MCP 凭证无维护权限。浏览器断开不取消后台任务。没有定时 Sync、网站/微盘采集或普通聊天维护工具。
+
+维护边界：版本管理的 `resources/knowledge-sync/SYNC.md` 作为独立 Pi 会话规范，无五轮裁剪、业务 MEMORY、Bash、任意写工具或联网工具。只读本批候选和产品知识，暂存 Vault 修改，输出结构化方案。后台强制完整候选读完、路径/保护文件边界、目标 slot、产品 Hub 与共享回链、依赖页审阅、旧路径清理、新链接可解析、index/log 维护及基线哈希一致。历史已缺失原件保留为历史信息。分类/版本证据和事实依赖仍由模型判断，不把结构校验描述成业务事实的形式证明。
+
+转换：新增维护专用完整提取入口，不复用聊天截断正文。PDF 逐页渲染、Office 原生 LibreOffice 渲染、图像分区识别；XLSX 全工作表值/公式/备注/合并关系，Office 结构文本补充与 UTF-16 私有副本规范化。逐页/区域覆盖、视觉 usage 和缓存持久化；视觉不完整、截断、缺字体/依赖/配置、受限 XLSX 视觉覆盖、宏/嵌入/外部加载内容等停止入库。未调用模型的真实文件转换和模拟/真实视觉验证区分记录。已成功转换但待审/失败/中断的输入保留，成功才清理原件及前序尝试临时文件；同批重复也不会二次发布。
+
+持久化与兼容性：`.data/knowledge-sync/` 保存 JSON 任务/尝试/报告、JSONL 事件、转换覆盖和恢复事务。发布与普通 Web/WeCom/MCP prompt 共用读写锁；等读者结束后核对基线、备份旧 Markdown、完整发布或回滚。回滚失败封锁知识访问，重启先恢复再开放 HTTP；未完成任务 Interrupted。备份 90 天，报告/反馈/legacy 审计不跟随聊天 30 天清理；旧资料再进入可上传并审查，未加下载黑名单。历史全文按需读取，常驻摘要；批次完整 Markdown 默认 16 MiB、候选索引 8 MiB，超限保留输入不截断。单任务、共享文件队列/模型并发；默认每文件 30 分钟/64 文本请求/128 视觉请求。
+
+普通聊天仍无新增写工具；原生 grep/find/ls 保留工具名，改为在搜索前排除 newly_added/knowledge-sync，直接 read/file-tool 入口同样拒绝未发布路径。文件模块关闭时保留原来的普通读取范围，只额外排除维护目录；不改变 SKILL/MEMORY 注入、五轮上下文、附件/Excel 输出、WeCom/MCP 会话逻辑。新的 prompt 读锁支持排队取消并保留同会话并发拒绝。
+
+运行配置：新增 `SYNC_*` 预算/soffice 配置与 `npm run check:sync`、`npm run test:sync`；systemd 取消整个产品目录的只读挂载，保留 SKILL/MEMORY/SYNC_PROMPT、UMS 和 file-runtime 只读保护，TasksMax=192。部署说明提醒保留用户已有 root/专用用户设置，并停止旧脚本/rsync 覆盖正式知识目录。没有变更本机 .env 或正式知识库，没有推送代码/部署 VPS。
+
+验证：完整 `npm test` 172 项通过、无跳过；Synchronize 定向场景及真实 Pi SDK 的模拟模型工具循环覆盖发布、审查重试、重复、删除预览/过期、启动恢复、清理失败重试、90 天备份、文件变化、目录保护、旧引用、权限和预算。真实本地 PDF/DOCX/PPTX/PNG/JPG/WebP、扫描 PDF、UTF-16 Office/备注、多工作表 Excel/公式/合并转换通过，视觉 API 模拟的结果不当成识别准确性证明。浏览器隔离实例验证导航、选择、开始、报告、Re-Sync、刷新恢复与输入稳定性。真实 DeepSeek Flash 在合成知识库完成一次版本更新和原件清理（8 请求，已记录输入25436/输出2053）；额外真实多版本批次遇到未来日期/遗留引用，保留输入进入 Needs review；真实 qwen3.8-flash 识别合成测试图（输入230/输出58）。Ubuntu24 ARM64、Node24 本地测试容器中原生 PDF/DOCX/PPTX/图片转换通过，2CPU/1100MiB 内存上限下测试组峰值404598784字节；视觉为模拟端点，不代表实际 x86_64 VPS、复杂大文档或并发聊天压测。详情见 `dev-history/2026-10-20-synchronize.md`。

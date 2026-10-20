@@ -268,3 +268,9 @@ Set `WECOM_NOTIFY_USER_ID` in the VPS `.env` to receive other users' incoming me
 Set `MCP_ENABLED=true` and a dedicated `MCP_API_KEY` in `.env`, then restart `product-expert.service` to serve a Bearer-authenticated Streamable HTTP MCP at `/mcp`. Clients must send `Authorization: Bearer <your key>` on every request; missing, incorrect or unconfigured keys return HTTP401. No additional service is required. Tools: `ask_product_expert`, `get_task_result`, and `cancel_task`; fast answers return directly and longer requests return durable task handles. Only text is accepted, with no file or memory-write tools. Existing Web/WeCom authentication is unchanged.
 
 MCP agent runs share the existing execution gate. Each task reports input/output/total tokens across its model/tool loop, with explicit missing-usage coverage. **Agent settings → MCP** shows submitted tasks and input/output/total tokens with an immediate, persistent access toggle. The saved toggle overrides the initial MCP_ENABLED value; disabling access preserves running work and totals. The previous /mcp-usage link redirects to Settings. `npm run test:mcp` runs isolated protocol and accounting tests; this update adds dependencies, so run `npm ci` when upgrading. Setup, tool contracts, retention and accounting boundaries: [MCP guide](docs/mcp.md).
+
+## Synchronize 产品知识库维护
+
+管理员侧栏新增 **Synchronize** → `/synchronize`。支持批量导入、完整转换、版本/slot 判断、候选索引修改和事务发布；报告反馈 **Re-Sync**；自然语言删除先预览再确认。只维护 `urovo-product-expert`，不改 SKILL/MEMORY 或 UMS。失败/疑问保留原件，成功后清理；普通问答不能检索 `newly_added`。
+
+使用、状态、恢复、预算、安全边界、API 与 Ubuntu 新依赖见 [Synchronize 说明](docs/synchronize.md)。依赖检查 `npm run check:sync`，定向验证 `npm run test:sync`，完整回归 `npm test`。部署必须同步本次 systemd 只读挂载调整，保留你现有的 root/专用用户设置。正式启用后停止旧脚本/rsync 对知识库的覆盖同步。没有新增自动采集或定时 Sync。

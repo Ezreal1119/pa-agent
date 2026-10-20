@@ -89,6 +89,7 @@ export class FileStore {
     for (const root of this.config.readRoots) {
       const actualRoot = await fs.realpath(root).catch(() => undefined); if (!actualRoot) continue;
       const actual = await fs.realpath(candidate).catch(() => undefined); if (!actual || !inside(actualRoot, actual)) continue;
+      if ([candidate, actual].some(p => p.split(path.sep).some(part => ["newly_added", "knowledge-sync"].includes(part)))) throw new Error("Unpublished maintenance inputs are not available to chat file tools.");
       if (!FILE_EXTENSIONS.has(path.extname(actual).toLowerCase())) throw new Error("Only supported binary files may be read by file tools.");
       const stat = await fs.lstat(actual); if (!stat.isFile() || stat.nlink !== 1 || stat.size > this.config.maxFileBytes) throw new Error("Invalid or oversized source file.");
       return { absolute: actual, display: actual };

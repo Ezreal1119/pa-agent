@@ -26,6 +26,8 @@ import { registerGeneratedFile } from "../file-tools/outputs.js";
 import { FileTools } from "../file-tools/index.js";
 import { installMessageAttachments, messageAttachments } from "./message-attachments.js";
 import { FileStore } from "../file-tools/store.js";
+import { knowledgeLock } from "../knowledge-sync/core.js";
+import { publishedSearchTools } from "../knowledge-sync/read-tools.js";
 import { guardNativeReads } from "../file-tools/read-guard.js";
 
 // ModelRuntime uses this ID to connect the provider, model, and API key.
@@ -239,9 +241,9 @@ export class AgentRuntime {
       sessionManager,
       settingsManager,
       // No shell or general file mutation tools, including in resumed sessions.
-      // The memory tool can only mutate memory/MEMORY.md; read paths are not sandboxed.
+      // The memory tool can only mutate memory/MEMORY.md; unpublished inputs are excluded.
       tools: ["read", "grep", "find", "ls", ...(options.textOnly ? [] : [MEMORY_TOOL_NAME]), ...onlineTools.map(tool => tool.name), ...(this.config.libraryLinksEnabled ? [LIBRARY_LINK_TOOL_NAME] : []), ...(files ? this.config.fileTools.tools : [])],
-      customTools: [...(options.textOnly ? [] : [createMemoryTool(this.config.dataDir)]), ...onlineTools, ...(this.config.libraryLinksEnabled ? [libraryLinks] : []), ...(files?.tools(sessionManager.getSessionId(), (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file)) ?? [])],
+      customTools: [...publishedSearchTools(this.config.cwd), ...(options.textOnly ? [] : [createMemoryTool(this.config.dataDir)]), ...onlineTools, ...(this.config.libraryLinksEnabled ? [libraryLinks] : []), ...(files?.tools(sessionManager.getSessionId(), (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file)) ?? [])],
       // Uses the SDK's default reasoning level, clamped when the model supports less.
       thinkingLevel: "medium",
     });
@@ -249,6 +251,21 @@ export class AgentRuntime {
     boundSession = session;
     try {
       await installSessionPolicy(session, this.config.dataDir, this.retention);
+      const prompt = session.prompt.bind(session);
+      const abort = session.abort.bind(session);
+      let waitingOrRunning: AbortController | undefined;
+      session.abort = async () => { waitingOrRunning?.abort(); await abort(); };
+      session.prompt = async (text, options) => {
+        if (waitingOrRunning) throw new Error("A prompt is already running in this session.");
+        const controller = new AbortController(); waitingOrRunning = controller;
+        let release: (() => void) | undefined;
+        try {
+          release = await knowledgeLock(path.join(this.config.dataDir, "urovo-product-expert")).read(controller.signal);
+          controller.signal.throwIfAborted();
+          return await prompt(text, options);
+        } finally { release?.(); waitingOrRunning = undefined; }
+      };
+      if (!files && !options.textOnly) guardNativeReads(session, [], this.config.cwd, false);
       installMessageAttachments(session);
       if (options.textOnly) guardNativeReads(session, [path.join(this.config.dataDir, "urovo-product-expert"), path.join(this.config.dataDir, "ums-expert"), path.join(this.config.resourcesDir, "skills")], this.config.cwd);
       if (files) {
