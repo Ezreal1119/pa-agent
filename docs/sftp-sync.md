@@ -77,3 +77,5 @@ Missing configuration or a recoverable SFTP journal problem is shown in Source i
 ## Verification
 
 `npm run test:sftp` covers path-only input, size/path restrictions, complete streaming, content dedup after inbox cleanup, collision protection, retries and partial batches, cancellation, shared locking, pending publication recovery, links and admin HTTP access. Transport fixtures are simulated; real remote validation is recorded separately in the core changelog. VPS/Ubuntu validation must not be inferred from local tests.
+
+Active imports keep the stop-polling timer referenced until completion, then clear it. This prevents Node 22 CLI/test processes from exiting while waiting for a transfer deadline or a cross-process stop request. Regression coverage uses a separate process without a real socket, checks that the deadline is recorded, and requires the process to exit after cleanup. Run the suite using the deployed Node version; Node 25 results alone do not establish Node 22 compatibility. This correction needs only a code update and rebuild, with no `.env`, dependency or systemd change.

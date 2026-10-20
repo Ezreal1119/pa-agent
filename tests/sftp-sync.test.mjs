@@ -152,3 +152,38 @@ test('SFTP shutdown racing task creation never opens a new network connection',a
  assert.equal(result.status,'rejected');assert.match(result.reason.message,/shutting down/);assert.equal(calls,0);
  assert.equal((await f.service.status()).running,undefined);
 });
+
+test('SFTP child process stays alive until a quiet transfer times out, records failure, then exits without a leaked timer',async t=>{
+  const {execFile}=await import('node:child_process');
+  const {promisify}=await import('node:util');
+  const {pathToFileURL}=await import('node:url');
+  const f=await fixture(t,['/quiet.txt']);
+  const script=`
+    import {Readable} from 'node:stream';
+    import {SftpSyncService} from ${JSON.stringify(pathToFileURL(path.resolve('dist/sftp-sync/service.js')).href)};
+    const config=JSON.parse(process.argv[2]);
+    const service=new SftpSyncService({dataDir:process.argv[1],config,connector:async(_config,signal)=>({
+      stat:async()=>({size:10,mtime:1,isFile:()=>true}),
+      read:()=>{
+        const stream=new Readable({read(){}});
+        const abort=()=>stream.destroy(new Error('Transfer deadline reached.'));
+        if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+        return stream;
+      },
+      close(){}
+    })});
+    try {
+      await service.init();
+      const run=await service.start();
+      await service.wait();
+      const report=await service.get(run.id);
+      console.log(JSON.stringify({status:report.status,itemStatus:report.items[0].status,attempts:report.items[0].attempts}));
+    } finally {await service.close();}
+  `;
+  const {stdout}=await promisify(execFile)(process.execPath,['--input-type=module','-e',script,f.dataDir,JSON.stringify({...f.config,fileTimeoutMs:250,attempts:1})],{timeout:15000});
+  assert.deepEqual(JSON.parse(stdout.trim()),{status:'completed_with_errors',itemStatus:'failed',attempts:1});
+  assert.equal((await f.service.status()).reports[0].status,'completed_with_errors');
+  assert.deepEqual(await fs.readdir(f.service.inbox),[]);
+  assert.deepEqual(await fs.readdir(path.join(f.service.root,'work')),[]);
+  assert.equal(await fs.readFile(path.join(f.service.root,'state.json'),'utf8').catch(e=>e.code),'ENOENT');
+});

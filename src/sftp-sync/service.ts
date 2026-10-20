@@ -163,7 +163,9 @@ export class SftpSyncService {
       await this.save(run);await this.event(run,'started');
       const controller=new AbortController(),unlock=release;release=undefined;
       const stopFile=path.join(this.root,`${run.id}.stop`);
-      const watch=setInterval(()=>{void fs.lstat(stopFile).then(()=>controller.abort(new Error('Stopped by administrator.'))).catch(e=>{if(e.code!=='ENOENT')controller.abort(e);});},1000);watch.unref();
+      // An active import must keep the CLI alive even while only unreferenced
+      // deadline/lock timers remain (notably on Node 22). Cleared in finally.
+      const watch=setInterval(()=>{void fs.lstat(stopFile).then(()=>controller.abort(new Error('Stopped by administrator.'))).catch(e=>{if(e.code!=='ENOENT')controller.abort(e);});},1000);
       const task=Promise.resolve().then(()=>this.execute(run,controller.signal)).catch(async e=>{
         run.status=controller.signal.aborted?'stopped':'failed';run.error=this.redact(e);run.finished=now();
         for(const item of run.items)if(['pending','downloading'].includes(item.status)){item.status=controller.signal.aborted?'stopped':'failed';item.error=run.error;}

@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- SFTP活动任务保留停止轮询定时器的进程引用，任务结束再清理，修复Node 22等待停止/超时时进程提前退出及测试连带取消。新增独立子进程回归，详见2026-10-20 Node 22修复记录。
+
 - Synchronize新增Source imports独立Tab及手动SFTP单次拉取；JSONL仅path，凭证在.env，哈希去重、串行原子投递、跨进程锁/停止/恢复，持久报告放.data/logs/sftp_sync。暂不启用定时与企微通知。详见2026-10-20 SFTP记录。
 
 - Web/WeCom聊天附件开放受控UTF-8纯文本（TXT/MD/LOG/JAVA/JSON/CSV/HTML/XML/YAML/PY/JS/TS等），复用read/grep并提供绝对readPath，流式编码校验；聊天30MiB保持，不新增工具，部署需重启主服务与Bridge。见2026-10-20纯文本附件记录。
@@ -619,3 +621,12 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 验证：本机专项11项通过，无跳过，覆盖路径/JSONL、流式字节及去重、源文件被Sync删除后仍去重、同名不覆盖、网络重试成功/耗尽停止余批、单文件失败继续、远端变化、超限/磁盘不足、跨实例锁与停止、关闭与启动竞态不新建连接、已暴露硬链接的中断恢复/冲突、符号链接/配置缺失、管理员HTTP及凭证隔离；含真实本机ssh2服务端验证旧KEX显式开关、错误指纹在密码前拒绝、SFTP只读协议与流结束。完整npm test197项通过、无跳过；构建/前端语法/git diff检查通过。单元网络/文件错误用夹具，无真实模型调用。
 
 真实远端验证独立进行：连接用户指定Serv-U 15.0.1.20，观测主机指纹并固定，不冒充第三方认证；只读取/os/i9100/SQ29MB/SQ29MB修改记录.xlsx。首次下载72681字节，SHA256 ff1569af0cc511c6389a284512ec2a340ff34dc2e10be060a67b348597a0c491，ZIP CRC及XLSX关键结构通过；第二次及CLI再次运行均Unchanged、无重复文件。浏览器在隔离数据根真实点击Run now，验证Downloaded→Incoming files计数1、再次Unchanged及持久报告。所有下载/截图/测试日志在.data/debug/sftp-sync/，其中live与ui各自有独立logs/sftp_sync；未写远端、未请求真实模型、未进行Ubuntu/VPS验收。
+
+
+## 2026-10-20 — SFTP Node 22 活动任务提前退出修复
+
+原因：用户在VPS Node 22.23.2运行测试时，跨实例停止用例等待未完成即收到“Promise resolution is still pending but the event loop has already resolved”，其后六项被连带取消。调查在本机相同Node版本复现原代码3项通过、7项取消；此前197项通过记录来自Node 25.6.0，不能作为Node 22或Ubuntu通过的证据，本条明确纠正验证范围。
+
+行为/兼容性：活动SFTP任务的停止标记轮询不再unref，保证任务在等待停止信号或无其他活动句柄的超时时保持进程存活；成功、失败、取消等路径仍在finally清理轮询并释放锁。保持JSONL、哈希/发布状态、重试、报告及API格式不变，无.env、依赖或systemd改动，不触发知识Sync。新增独立子进程回归：没有真实socket的静默传输须等待超时、写入失败报告、不推进哈希/不发布部分文件，然后自行退出；父测试设置15秒上限检测定时器泄漏，避免仅在测试进程增加保活掩盖问题。docs/sftp-sync.md同步说明部署版本验证和更新方式。
+
+验证：使用Node 22.23.2运行npm run test:sftp，12项全部通过、无取消/跳过；同版本完整npm test198项通过，0失败/取消/跳过，约35.5秒。隔离副本仅恢复旧unref行为时，新子进程用例按预期失败（尚未结束的顶层await提前退出），证明回归能捕获原故障。git diff检查通过。日志.data/debug/sftp-sync-node22-fix/{targeted,full-tests,original-regression}.log。测试在本机macOS/ARM64运行；网络为本机SSH夹具/模拟连接，未使用真实SFTP/模型、未写正式资料或.env、未修改patrick-agent、未部署VPS，也未代替用户提交推送。
