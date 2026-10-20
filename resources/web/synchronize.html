@@ -5,71 +5,195 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Synchronize · Product Expert</title>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/synchronize.css" />
     <script src="/synchronize.js" defer></script>
   </head>
-  <body>
-    <main class="contacts-page sync-page">
-      <header class="contacts-page-header">
-        <a class="brand" href="/"
+  <body class="sync-body">
+    <main class="sync-page">
+      <header class="sync-header">
+        <a class="brand" href="/" aria-label="Product Expert home"
           ><span class="brand-mark">pe</span
           ><span
             ><strong>Product Expert</strong
             ><small>KNOWLEDGE WORKSPACE</small></span
           ></a
-        ><a class="contacts-back" href="/">← Back to workspace</a>
+        >
+        <a class="sync-back" href="/">← Back to workspace</a>
       </header>
-      <span class="eyebrow">KNOWLEDGE MAINTENANCE</span>
-      <h1>Synchronize</h1>
-      <p class="contacts-description">
-        Add product documents, review updates, and maintain your knowledge
-        library.
-      </p>
-      <p id="sync-error" role="alert" class="form-error" hidden></p>
-      <section class="sync-section">
-        <div class="sync-heading">
-          <h2>Incoming files</h2>
-          <button id="refresh" class="secondary-button">Refresh</button>
+      <div class="sync-intro">
+        <div>
+          <p class="sync-eyebrow">KNOWLEDGE MAINTENANCE</p>
+          <h1>Synchronize</h1>
+          <p class="sync-description">
+            Turn new documents into an up-to-date product knowledge library.
+          </p>
         </div>
-        <p>
-          Upload files or place them in newly_added. Originals are removed only
-          after successful publication. Files needing review stay available for
-          Re-Sync.
-        </p>
-        <div class="sync-toolbar">
-          <label class="secondary-button sync-upload"
-            >Upload files<input
-              id="upload"
-              type="file"
-              multiple
-              accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md" /></label
-          ><span id="upload-status" role="status">Up to 30 MB per file</span
-          ><button id="start" class="primary-button">Start Sync</button>
+        <span class="sync-manual"><span></span>Manual sync</span>
+      </div>
+      <nav class="sync-tabs" role="tablist" aria-label="Synchronize sections">
+        <button
+          id="tab-incoming"
+          role="tab"
+          aria-controls="panel-incoming"
+          aria-selected="true"
+        >
+          Incoming files
+          <span id="tab-incoming-count" class="sync-count">0</span>
+        </button>
+        <button
+          id="tab-reports"
+          role="tab"
+          aria-controls="panel-reports"
+          aria-selected="false"
+          tabindex="-1"
+        >
+          Sync reports <span id="tab-report-count" class="sync-count">0</span>
+        </button>
+        <button
+          id="tab-delete"
+          role="tab"
+          aria-controls="panel-delete"
+          aria-selected="false"
+          tabindex="-1"
+        >
+          Delete knowledge
+        </button>
+      </nav>
+      <p id="sync-error" role="alert" class="sync-error" hidden></p>
+      <section
+        id="panel-incoming"
+        role="tabpanel"
+        aria-labelledby="tab-incoming"
+        class="sync-tab-panel"
+      >
+        <div class="sync-panel">
+          <div class="sync-panel-heading">
+            <div>
+              <h2>
+                Incoming files
+                <span id="incoming-count" class="sync-count">0</span>
+              </h2>
+              <p>Choose the documents you want to add or update.</p>
+            </div>
+            <button id="refresh" class="sync-button sync-button-quiet">
+              ↻ Refresh
+            </button>
+          </div>
+          <div id="drop-zone" class="sync-drop-zone">
+            <span class="sync-upload-icon" aria-hidden="true">↑</span>
+            <div class="sync-drop-copy">
+              <strong>Drop documents here</strong
+              ><span
+                >PDF, Word, Excel, PowerPoint, images, TXT and Markdown</span
+              ><small id="upload-status" role="status"
+                >Up to 100 MB per file · README.md is ignored</small
+              >
+            </div>
+            <label class="sync-button sync-upload"
+              >Upload files<input
+                id="upload"
+                type="file"
+                multiple
+                aria-label="Upload files"
+                accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md"
+            /></label>
+          </div>
+          <div class="sync-file-heading">
+            <label
+              ><input
+                id="select-all"
+                type="checkbox"
+                aria-label="Select all incoming files"
+                disabled
+              /><span>File name</span></label
+            ><span>Size</span>
+          </div>
+          <div id="incoming" class="sync-incoming">
+            <div class="sync-empty-files">Loading incoming files…</div>
+          </div>
+          <div class="sync-selection-bar">
+            <span id="selection-status" role="status"
+              >Select files to start a sync.</span
+            ><button
+              id="start"
+              class="sync-button sync-button-primary"
+              disabled
+            >
+              Start Sync <span aria-hidden="true">→</span>
+            </button>
+          </div>
         </div>
-        <div id="incoming" class="sync-incoming"></div>
+        <div class="sync-help-strip">
+          <span>Upload or add files to <code>newly_added/</code>.</span
+          ><span>Clear updates publish automatically.</span
+          ><span>Files needing review stay available for Re-Sync.</span>
+        </div>
       </section>
-      <section class="sync-section">
-        <h2>Sync reports</h2>
-        <div class="sync-reports-layout">
-          <div id="history" class="sync-history"></div>
-          <div id="report" aria-live="polite">
-            <p>Select a report to view its results.</p>
+      <section
+        id="panel-reports"
+        role="tabpanel"
+        aria-labelledby="tab-reports"
+        class="sync-tab-panel"
+        hidden
+      >
+        <div class="sync-panel sync-reports">
+          <div class="sync-panel-heading">
+            <div>
+              <h2>
+                Sync reports <span id="report-count" class="sync-count">0</span>
+              </h2>
+              <p>
+                Track progress, inspect changes and resolve files needing
+                review.
+              </p>
+            </div>
+          </div>
+          <div id="reports-layout" class="sync-reports-layout is-empty">
+            <nav
+              id="history"
+              class="sync-history"
+              aria-label="Sync report history"
+            ></nav>
+            <div id="report" class="sync-report" aria-live="polite">
+              <div class="sync-empty-report">
+                <span aria-hidden="true">≡</span>
+                <h3>No sync reports yet</h3>
+                <p>
+                  Start a sync to see file results and knowledge changes here.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
-      <section class="sync-section">
-        <h2>Delete knowledge</h2>
-        <p>
-          Describe which product documents are legacy. Review the exact files
-          and index changes before confirming deletion.
-        </p>
-        <label for="delete-prompt" class="sr-only">Deletion request</label
-        ><textarea
-          id="delete-prompt"
-          maxlength="16000"
-          rows="3"
-          placeholder="For example: Delete the old DT610 accessory guide and update its references."
-        ></textarea
-        ><button id="preview" class="secondary-button">Preview</button>
+      <section
+        id="panel-delete"
+        role="tabpanel"
+        aria-labelledby="tab-delete"
+        class="sync-tab-panel"
+        hidden
+      >
+        <div class="sync-panel sync-delete">
+          <div class="sync-delete-icon" aria-hidden="true">−</div>
+          <h2>Delete knowledge</h2>
+          <p>
+            Describe the legacy documents you want to remove. You will review
+            the exact files and index changes in Sync reports before confirming.
+          </p>
+          <label for="delete-prompt">Deletion request</label
+          ><textarea
+            id="delete-prompt"
+            maxlength="16000"
+            rows="5"
+            placeholder="For example: Remove the old DT610 accessory guide and update its references."
+          ></textarea>
+          <div class="sync-delete-actions">
+            <small>Nothing is deleted until you confirm the preview.</small
+            ><button id="preview" class="sync-button">
+              Preview deletion <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        </div>
       </section>
     </main>
   </body>

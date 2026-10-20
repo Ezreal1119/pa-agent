@@ -97,7 +97,7 @@ WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn
 若使用 Nginx，在**现有 HTTPS server** 中合并以下 location 配置，证书/域名继续用你已有设置；保留浏览器原始 Origin：
 
 ```nginx
-client_max_body_size 30m;
+client_max_body_size 100m;
 
 location ^~ /api/wecom/ {
     return 404;
@@ -114,7 +114,7 @@ location / {
 }
 ```
 
-`/api/wecom/` 留给同机 Bridge；Web 的普通 API、SSE 和附件通过上方普通代理转发。`client_max_body_size` 与后端的30MiB上传上限配合。参考 [Nginx 官方代理模块文档](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)。已有反代能打开页面时，先更新代码和 `.env`；无需为了来源修复去覆盖现有证书或整段反代配置。
+`/api/wecom/` 留给同机 Bridge；Web 的普通 API、SSE 和附件通过上方普通代理转发。`client_max_body_size 100m` 允许 Synchronize 最高100MiB上传，聊天附件仍由后端单独限制为30MiB。已有30m配置需要改这一行并在 `nginx -t` 通过后reload；无需因此修改.env。参考 [Nginx 官方代理模块文档](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)。已有反代能打开页面时，先更新代码和 `.env`；无需为了来源修复去覆盖现有证书或整段反代配置。
 
 ## 日常更新（VPS root）
 

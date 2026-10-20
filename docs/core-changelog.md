@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Synchronize 后续调整为三个独立 Tab，忽略 README.md；维护上传单独固定100MiB，聊天30MiB保持原配置，无需新增环境变量。见2026-10-20后续记录。
+
 - 新增管理员 Synchronize 独立页面及 `/api/sync/*`：手动导入、维护专用 Pi Agent、完整转换与视觉覆盖、索引校验和事务发布、报告反馈/Re-Sync、自然语言删除预览确认。共享知识读写锁，问答工具排除未发布目录。原生 LibreOffice/fontconfig 依赖、systemd 保护范围调整及 `check:sync`/`test:sync`。见 2026-10-20 记录。
 
 - ProductExpertCloud 默认仅要求 `.data/urovo-product-expert/` 的 `SKILL.md` 和 `MEMORY.md`，每轮读取新快照并在模型请求注入完整内容，缺失时在推理前报错。ums-expert 改为可选普通 Skill，按需读取正文，无专属 MEMORY 加载。详见 2026-10-18 UMS 按需记录。
@@ -504,3 +506,15 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 运行配置：新增 `SYNC_*` 预算/soffice 配置与 `npm run check:sync`、`npm run test:sync`；systemd 取消整个产品目录的只读挂载，保留 SKILL/MEMORY/SYNC_PROMPT、UMS 和 file-runtime 只读保护，TasksMax=192。部署说明提醒保留用户已有 root/专用用户设置，并停止旧脚本/rsync 覆盖正式知识目录。没有变更本机 .env 或正式知识库，没有推送代码/部署 VPS。
 
 验证：完整 `npm test` 172 项通过、无跳过；Synchronize 定向场景及真实 Pi SDK 的模拟模型工具循环覆盖发布、审查重试、重复、删除预览/过期、启动恢复、清理失败重试、90 天备份、文件变化、目录保护、旧引用、权限和预算。真实本地 PDF/DOCX/PPTX/PNG/JPG/WebP、扫描 PDF、UTF-16 Office/备注、多工作表 Excel/公式/合并转换通过，视觉 API 模拟的结果不当成识别准确性证明。浏览器隔离实例验证导航、选择、开始、报告、Re-Sync、刷新恢复与输入稳定性。真实 DeepSeek Flash 在合成知识库完成一次版本更新和原件清理（8 请求，已记录输入25436/输出2053）；额外真实多版本批次遇到未来日期/遗留引用，保留输入进入 Needs review；真实 qwen3.8-flash 识别合成测试图（输入230/输出58）。Ubuntu24 ARM64、Node24 本地测试容器中原生 PDF/DOCX/PPTX/图片转换通过，2CPU/1100MiB 内存上限下测试组峰值404598784字节；视觉为模拟端点，不代表实际 x86_64 VPS、复杂大文档或并发聊天压测。详情见 `dev-history/2026-10-20-synchronize.md`。
+
+## 2026-10-20 — Synchronize Tab 布局、忽略说明文件与独立100MiB上传
+
+原因：用户要求忽略待处理目录中的 README.md，并把 Incoming files、Sync reports、Delete knowledge 分成 Tab，而不是全部堆在一页；维护上传放宽到100MiB，普通对话附件30MiB保持。
+
+行为：扫描按文件名忽略任意大小写的 README.md（包括子目录），已有文件保留；上传 README.md 返回 ignored，不写入待处理目录，也不参加 Sync。维护上传使用独立常量100*1024*1024，列表上报、流式写入上限、错误提示和维护 converter 配置统一使用该值。未修改聊天 FILE_MAX_BYTES、.env 或.env.example。原有转换展开/页数/模型预算不随输入上限扩张。
+
+界面：新增仅供 Synchronize 使用的CSS，移除其对共享样式的布局依赖；改为 Incoming files / Sync reports / Delete knowledge 三个可键盘操作的Tab，一次仅显示一个tabpanel，开始、Re-Sync、删除预览自动切换到报告。上传与选择/启动操作集中，增加全选与拖放；报告历史和详情按宽度响应式排列，状态、Token、差异、反馈分层展示。页面刷新恢复所选Tab/报告，保留轮询期间的选择和反馈。
+
+部署：本次更新无新增env/systemd变更。现有Nginx如限制30m，应改client_max_body_size为100m并检查reload以允许较大维护上传；聊天后端仍单独限制30MiB。部署说明已更新。
+
+验证：构建、前端语法检查与完整 npm test 共173项通过，无跳过。新增真实流式100MiB边界/多一字节拒绝/临时文件清理、31MiB管理员HTTP上传、Sync100MiB与聊天30MiB同时上报、README上传忽略与嵌套大小写说明文件扫描忽略。隔离浏览器验证三个Tab只显示一个区域、刷新恢复、键盘切换、选择/全选、启动自动切报告、切Tab保留反馈，以及Re-Sync后发布和差异展示。界面使用模拟planner/converter及测试资料，没有请求真实模型或修改正式知识库；未部署VPS。详见dev-history/2026-10-20-synchronize-ui.md。

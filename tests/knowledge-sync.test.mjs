@@ -538,3 +538,34 @@ test("cleanup never deletes a changed input and retry does not republish; 90-day
   assert.equal(await fs.stat(journal).catch(() => null), null);
   assert.equal((await f.service.get(job.id)).items[0].plan.changes.length, 4);
 });
+
+test("Sync streams exactly 100 MiB and rejects one extra byte without leaving a partial input", async (t) => {
+  const { SYNC_MAX_FILE_BYTES } = await import(
+    "../dist/knowledge-sync/config.js"
+  );
+  const f = await setup(t, { maxBytes: SYNC_MAX_FILE_BYTES });
+  const chunk = Buffer.alloc(1048576, 0x41);
+  const stream = async function* (overflow = false) {
+    for (let n = 0; n < 100; n++) yield chunk;
+    if (overflow) yield Buffer.from([1]);
+  };
+  const accepted = await f.service.upload("boundary.pdf", stream());
+  assert.equal(accepted.bytes, 100 * 1048576);
+  assert.equal(
+    (await fs.stat(path.join(f.service.inbox, "boundary.pdf"))).size,
+    100 * 1048576,
+  );
+  await assert.rejects(
+    f.service.upload("overflow.pdf", stream(true)),
+    (e) => e.status === 413 && e.message.includes("100 MB"),
+  );
+  assert.deepEqual(await fs.readdir(f.service.inbox), ["boundary.pdf"]);
+  const ignored = await f.service.upload(
+    "readme.MD",
+    (async function* () {
+      yield Buffer.from("Guide");
+    })(),
+  );
+  assert.equal(ignored.ignored, true);
+  assert.deepEqual(await fs.readdir(f.service.inbox), ["boundary.pdf"]);
+});

@@ -24,6 +24,7 @@ import { Publisher } from "./publication.js";
 import { buildPlan, primeIndex } from "./validation.js";
 import type { Converter } from "./converter.js";
 import type { Planner } from "./agent.js";
+import { isIgnoredSyncFile } from "./config.js";
 const extensions = new Set([
   ".pdf",
   ".docx",
@@ -184,7 +185,8 @@ export class SyncService {
       for (const entry of await fs.readdir(await safePath(root, dir), {
         withFileTypes: true,
       })) {
-        if (entry.name.startsWith(".")) continue;
+        if (entry.name.startsWith(".") || isIgnoredSyncFile(entry.name))
+          continue;
         const name = dir ? `${dir}/${entry.name}` : entry.name;
         if (entry.isSymbolicLink()) {
           list.push({
@@ -247,6 +249,18 @@ export class SyncService {
       /^(?:SKILL|MEMORY|SYNC|SYNC_PROMPT)\.md$/i.test(name)
     )
       throw new SyncError("Invalid or unsupported filename.");
+    if (isIgnoredSyncFile(name)) {
+      let bytes = 0;
+      for await (const chunk of stream) {
+        bytes += chunk.length;
+        if (bytes > this.options.maxBytes)
+          throw new SyncError(
+            `File exceeds ${this.options.maxBytes / 1048576} MB upload limit.`,
+            413,
+          );
+      }
+      return { name, ignored: true as const, bytes };
+    }
     await safePath(this.inbox);
     await fs.mkdir(this.inbox, { recursive: true, mode: 0o700 });
     const id = randomUUID();
@@ -257,7 +271,10 @@ export class SyncService {
       for await (const chunk of stream) {
         bytes += chunk.length;
         if (bytes > this.options.maxBytes)
-          throw new SyncError("File exceeds 30 MB upload limit.", 413);
+          throw new SyncError(
+            `File exceeds ${this.options.maxBytes / 1048576} MB upload limit.`,
+            413,
+          );
         await handle.writeFile(chunk);
       }
       if (!bytes) throw new SyncError("Empty file.");

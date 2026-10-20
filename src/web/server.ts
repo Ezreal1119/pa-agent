@@ -37,6 +37,7 @@ import { handleMcp } from "../mcp/http.js";
 import { runMcpAgent } from "../mcp/runner.js";
 
 import { SyncService } from "../knowledge-sync/service.js";
+import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
 import { createConverter, type Converter } from "../knowledge-sync/converter.js";
 import { SyncError } from "../knowledge-sync/core.js";
@@ -112,9 +113,9 @@ export async function createWebServer(options: WebOptions = {}) {
   const syncTimeout = boundedSetting(options.sync?.timeoutMs ?? syncEnv.SYNC_FILE_TIMEOUT_MS, 1800000, 1000, 7200000, "SYNC_FILE_TIMEOUT_MS");
   const syncCalls = boundedSetting(syncEnv.SYNC_MAX_MODEL_REQUESTS, 64, 1, 512, "SYNC_MAX_MODEL_REQUESTS");
   const syncVision = boundedSetting(syncEnv.SYNC_MAX_VISION_REQUESTS, 128, 1, 1024, "SYNC_MAX_VISION_REQUESTS");
-  const synchronize = new SyncService({ dataDir, maxBytes: fileConfig.maxFileBytes, maxBatchMarkdownBytes: boundedSetting(syncEnv.SYNC_MAX_BATCH_MARKDOWN_BYTES, 16777216, 1048576, 134217728, "SYNC_MAX_BATCH_MARKDOWN_BYTES"), timeoutMs: syncTimeout, modelId: () => settings.modelId, redact,
+  const synchronize = new SyncService({ dataDir, maxBytes: SYNC_MAX_FILE_BYTES, maxBatchMarkdownBytes: boundedSetting(syncEnv.SYNC_MAX_BATCH_MARKDOWN_BYTES, 16777216, 1048576, 134217728, "SYNC_MAX_BATCH_MARKDOWN_BYTES"), timeoutMs: syncTimeout, modelId: () => settings.modelId, redact,
     planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
-    converter: options.sync?.converter ?? (() => createConverter(structuredClone(fileConfig), syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
+    converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
   await synchronize.init();
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
@@ -417,8 +418,8 @@ export async function createWebServer(options: WebOptions = {}) {
       if (url.pathname.startsWith("/api/sync/")) {
         if (machine) throw new HttpError(403, "Maintenance requires administrator login.");
         const route = url.pathname.slice("/api/sync/".length);
-        if (route === "incoming" && method === "GET") return json(res, 200, { files: await synchronize.incoming(), maxFileBytes: fileConfig.maxFileBytes });
-        if (route === "incoming" && method === "POST") return json(res, 201, await synchronize.upload(url.searchParams.get("name") ?? "", req));
+        if (route === "incoming" && method === "GET") return json(res, 200, { files: await synchronize.incoming(), maxFileBytes: SYNC_MAX_FILE_BYTES });
+        if (route === "incoming" && method === "POST") { const file=await synchronize.upload(url.searchParams.get("name") ?? "", req);return json(res,"ignored" in file?200:201,file); }
         if (route === "jobs" && method === "GET") return json(res, 200, { jobs: synchronize.list() });
         if (route === "jobs" && method === "POST") return json(res, 202, await synchronize.start((await readBody(req)).ids));
         if (route === "delete-preview" && method === "POST") return json(res, 202, await synchronize.preview((await readBody(req)).prompt));
@@ -752,6 +753,7 @@ export async function createWebServer(options: WebOptions = {}) {
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
         "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
+        "/synchronize.css": [path.join(resourcesDir, "web/synchronize.css"), "text/css; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],

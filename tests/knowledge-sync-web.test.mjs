@@ -17,6 +17,7 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
     admin: { account: "admin", password: "fixture-password" },
     bridgeToken: "bridge-fixture-key-01234567890123456789",
     mcp: { apiKey: "mcp-fixture-key-01234567890123456789" },
+    fileTools: { maxFileBytes: 30 * 1048576 },
     sync: {
       converter: () => async (source) => ({
         markdown: await fs.readFile(source, "utf8"),
@@ -98,6 +99,40 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
       body,
     });
   assert.match(await (await request("/synchronize")).text(), /Incoming files/);
+  assert.equal((await request("/synchronize.css")).status, 200);
+  assert.equal(
+    (await (await request("/api/sync/incoming")).json()).maxFileBytes,
+    100 * 1048576,
+  );
+  assert.equal(
+    (await (await request("/api/status")).json()).fileTools.maxFileBytes,
+    30 * 1048576,
+  );
+  const ignored = await request(
+    "/api/sync/incoming?name=README.md",
+    "POST",
+    "# Directory instructions",
+  );
+  assert.equal(ignored.status, 200);
+  assert.equal((await ignored.json()).ignored, true);
+  const inbox = path.join(root, ".data/urovo-product-expert/newly_added");
+  await fs.mkdir(path.join(inbox, "nested"), { recursive: true });
+  await fs.writeFile(path.join(inbox, "README.md"), "Keep directory guide");
+  await fs.writeFile(path.join(inbox, "nested", "ReadMe.MD"), "Nested guide");
+  assert.deepEqual(
+    (await (await request("/api/sync/incoming")).json()).files,
+    [],
+  );
+  res = await request(
+    "/api/sync/incoming?name=large.pdf",
+    "POST",
+    Buffer.alloc(31 * 1048576, 0x41),
+    { "content-type": "application/octet-stream" },
+  );
+  assert.equal(res.status, 201);
+  assert.equal((await res.json()).bytes, 31 * 1048576);
+  await fs.unlink(path.join(inbox, "large.pdf"));
+
   assert.equal(
     (
       await request("/api/sync/incoming?name=a.md", "POST", "text", {
@@ -165,6 +200,6 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
         path.join(root, ".data/urovo-product-expert/newly_added"),
       )
     ).length,
-    2,
+    4,
   );
 });

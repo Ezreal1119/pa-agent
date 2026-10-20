@@ -1,10 +1,10 @@
 # Synchronize：产品知识库维护
 
-入口：管理员登录后，左下角 **Synchronize**，独立页面 `/synchronize`。维护范围只有 `.data/urovo-product-expert`，不修改 SKILL.md、任何 MEMORY.md 或 UMS。不增加普通聊天工具，不运行定时采集。
+入口：管理员登录后，左下角 **Synchronize**，独立页面 `/synchronize`，通过 **Incoming files / Sync reports / Delete knowledge** 三个 Tab 切换，每次只展示一个区域。开始 Sync、Re-Sync 和删除预览会自动切换到报告，Tab 和报告链接支持刷新恢复。维护范围只有 `.data/urovo-product-expert`，不修改 SKILL.md、任何 MEMORY.md 或 UMS。不增加普通聊天工具，不运行定时采集。
 
 ## 使用
 
-1. **Incoming files** 批量上传，或把文件放到产品库的 `newly_added/` 后 Refresh。支持 PDF、DOCX、XLSX、PPTX、PNG/JPG/WebP、UTF-8 TXT/Markdown，每文件默认 30 MiB。同名上传自动生成不同名称。
+1. **Incoming files** 批量上传，或把文件放到产品库的 `newly_added/` 后 Refresh。支持 PDF、DOCX、XLSX、PPTX、PNG/JPG/WebP、UTF-8 TXT/Markdown，每文件上限 **100 MiB**，独立于聊天附件的 30 MiB，不需要修改 `.env`。扫描和上传会忽略任意大小写的 `README.md`（包含子目录中的说明文件），不删除已有说明文件。同名资料上传自动生成不同名称。
 2. 勾选输入，点击 **Start Sync**。一批最多 50 个文件，完整转换文本的批次内存预算默认 16 MiB（`SYNC_MAX_BATCH_MARKDOWN_BYTES`）；超过时保留转换结果，报告提示分批 Re-Sync，不截断发布。只有一个维护任务执行。提交时固定文件列表与哈希；后来的文件留到下一批。关闭浏览器不取消任务。
 3. **Sync reports** 查看阶段、状态、已记录的文本/视觉 Token、版本依据、产品与 slot、逐文件差异、转换覆盖和清理结果。内容默认中文，控件英文。Token 是供应商实际返回的 usage，不是估算成本；缺失 usage 不补造。
 4. **Needs review / Failed / Interrupted / Stopped** 下填写说明，点 **Re-Sync**。产生独立尝试并保留历史。原件未变化时复用转换；识别错误、遗漏等反馈或 **Reconvert original** 强制重新转换。仅明确的管理员反馈可以授权新产品、旧版本或同版覆盖；仍须通过路径、覆盖与索引校验。
@@ -32,6 +32,12 @@
 候选索引修改合计最多 8 MiB、最多 100 个变更文件；超过时要求缩小任务，不截断发布。
 
 转换在固定命令的独立子进程进行，与聊天文件工具共用串行队列；转换阶段释放队列后逐区域调用视觉模型。文本与视觉请求共享现有模型并发额度。`.env.example` 提供每文件 30 分钟、64 次文本请求、128 次视觉请求预算；同批其他文件等待不计入该文件的活动预算。`FILE_TIMEOUT_MS` 另外限制单次原生转换阶段，默认 120 秒。任务耗时显示实际经过时间（含等待）。
+
+## 本次界面/上传上限升级
+
+本次不需要修改 `.env`，也不需要重新调整 systemd。更新代码、构建并重启原 product-expert 服务即可。
+
+如果反向代理原来配置了 `client_max_body_size 30m`，要使用超过 30 MiB 的 Sync 上传，需要将其改为 `100m`，执行 `nginx -t` 后 reload Nginx。可在现有 server 中修改这一行，保留现有代理和证书配置；聊天 API 仍在后端单独限制为 30 MiB。100 MiB 是输入上传上限，解包、页数、转换和模型预算继续独立生效。
 
 ## Ubuntu 24 原生部署
 

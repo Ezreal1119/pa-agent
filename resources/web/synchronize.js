@@ -7,30 +7,88 @@ let token = "",
   incomingCache = "",
   historyCache = "",
   busy = false,
-  polling = false;
+  polling = false,
+  uploading = false,
+  maxFileBytes = 100 * 1048576;
+const tabNames = ["incoming", "reports", "delete"];
+const requestedTab = new URLSearchParams(location.search).get("tab");
+let activeTab = tabNames.includes(requestedTab)
+  ? requestedTab
+  : selected
+    ? "reports"
+    : "incoming";
+function setTab(name, updateUrl = true) {
+  activeTab = tabNames.includes(name) ? name : "incoming";
+  for (const tab of tabNames) {
+    const isActive = tab === activeTab;
+    const button = $(`tab-${tab}`);
+    button.setAttribute("aria-selected", String(isActive));
+    button.tabIndex = isActive ? 0 : -1;
+    $(`panel-${tab}`).hidden = !isActive;
+  }
+  if (updateUrl) {
+    const url = new URL(location.href);
+    url.searchParams.set("tab", activeTab);
+    url.hash = activeTab === "reports" && selected ? selected : "";
+    window.history.replaceState(null, "", url);
+  }
+}
+const drafts = new Map(),
+  openCards = new Set(),
+  reconvertIds = new Set();
 const statusLabel = (value) =>
   ({
     needs_review: "Needs review",
-    waiting_to_publish: "Waiting to publish",
+    waiting_to_publish: "Publishing",
     awaiting_confirmation: "Awaiting confirmation",
   })[value] || value.charAt(0).toUpperCase() + value.slice(1);
-const drafts = new Map(),
-  openCards = new Set();
 const el = (tag, text, cls) => {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
   if (cls) node.className = cls;
   return node;
 };
-const button = (text, fn, cls = "secondary-button") => {
+const button = (text, fn, cls = "sync-button") => {
   const b = el("button", text, cls);
   b.type = "button";
   b.onclick = () => action(fn);
   return b;
 };
+const badge = (status) => {
+  const span = el("span", statusLabel(status), "sync-badge");
+  span.dataset.status = status;
+  return span;
+};
+const selectedIds = () =>
+  [...$("incoming").querySelectorAll("input:checked")].map((n) => n.value);
+const fileSize = (bytes) =>
+  bytes >= 1048576
+    ? `${(bytes / 1048576).toFixed(1)} MB`
+    : `${(bytes / 1024).toFixed(1)} KB`;
+const dateLabel = (value) =>
+  new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 function error(e) {
   $("sync-error").textContent = e.message || String(e);
   $("sync-error").hidden = false;
+}
+function updateControls() {
+  const checks = [...$("incoming").querySelectorAll("input:not(:disabled)")],
+    count = selectedIds().length;
+  $("start").disabled = busy || uploading || !count;
+  $("preview").disabled = busy;
+  $("select-all").disabled = !checks.length;
+  $("select-all").checked = !!checks.length && count === checks.length;
+  $("select-all").indeterminate = count > 0 && count < checks.length;
+  $("selection-status").textContent = busy
+    ? "A maintenance task is running."
+    : count
+      ? `${count} ${count === 1 ? "file" : "files"} selected`
+      : "Select files to start a sync.";
 }
 async function api(route, method = "GET", body) {
   const response = await fetch(`/api/sync/${route}`, {
@@ -49,6 +107,12 @@ async function api(route, method = "GET", body) {
     location.href = "/login";
     throw Error("Please sign in.");
   }
+  if (response.status === 413) {
+    await response.body?.cancel();
+    throw Error(
+      `File exceeds the ${Math.round(maxFileBytes / 1048576)} MB upload limit. If the file is smaller, check the reverse proxy upload limit.`,
+    );
+  }
   const result = await response.json();
   if (!response.ok) throw Error(result.error || "Request failed.");
   return result;
@@ -64,65 +128,109 @@ async function action(fn) {
 }
 async function choose(job) {
   selected = job.id;
-  location.hash = job.id;
+  setTab("reports");
   jobCache = "";
   await renderJob(job);
   $("report").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 async function incoming() {
-  const checked = new Set(
-    [...$("incoming").querySelectorAll("input:checked")].map((n) => n.value),
+  const checked = new Set(selectedIds());
+  const response = await api("incoming");
+  maxFileBytes = response.maxFileBytes;
+  const files = response.files.filter(
+    (f) => !/(?:^|\/)readme\.md$/i.test(f.name),
   );
-  const { files, maxFileBytes } = await api("incoming");
   const key = JSON.stringify({ files, maxFileBytes });
   if (key === incomingCache) return;
   incomingCache = key;
   $("incoming").replaceChildren();
-  $("upload-status").textContent =
-    `Up to ${(maxFileBytes / 1048576).toFixed(0)} MB per file`;
-  if (!files.length) {
-    $("incoming").append(el("p", "No incoming files."));
-    return;
-  }
+  $("incoming-count").textContent = files.length;
+  $("tab-incoming-count").textContent = files.length;
+  if (!uploading)
+    $("upload-status").textContent =
+      `Up to ${Math.round(maxFileBytes / 1048576)} MB per file · README.md is ignored`;
+  if (!files.length)
+    $("incoming").append(
+      el(
+        "div",
+        "No incoming files. Upload documents to get started.",
+        "sync-empty-files",
+      ),
+    );
   for (const file of files) {
-    const row = el("label", undefined, "sync-input-row");
-    const check = el("input");
+    const row = el("label", undefined, "sync-input-row"),
+      check = el("input");
     check.type = "checkbox";
     check.value = file.id;
     check.checked = checked.has(file.id);
     check.disabled = !!file.error;
+    check.onchange = updateControls;
+    const extension = file.name.split(".").at(-1).toUpperCase(),
+      icon = el("span", extension, "sync-file-icon");
+    icon.setAttribute("aria-hidden", "true");
+    const detail = el("span", undefined, "sync-file-detail");
+    detail.append(
+      el("strong", file.name),
+      el(
+        "small",
+        file.error || `${extension} document`,
+        file.error ? "sync-file-error" : undefined,
+      ),
+    );
     row.append(
       check,
-      el("span", file.name),
-      el("small", file.error || `${(file.bytes / 1024).toFixed(1)} KB`),
+      icon,
+      detail,
+      el("span", fileSize(file.bytes), "sync-file-size"),
     );
     $("incoming").append(row);
   }
+  updateControls();
 }
-async function history() {
+async function loadHistory() {
   const { jobs } = await api("jobs");
   if (!selected && jobs.length)
     selected =
       jobs.find((j) => ["running", "queued", "stopping"].includes(j.status))
         ?.id ?? jobs[0].id;
   busy = jobs.some((j) => ["queued", "running", "stopping"].includes(j.status));
-  $("start").disabled = busy;
-  $("preview").disabled = busy;
+  updateControls();
+  $("report-count").textContent = jobs.length;
+  $("tab-report-count").textContent = jobs.length;
+  $("reports-layout").classList.toggle("is-empty", !jobs.length);
   const key = JSON.stringify({ jobs, selected });
   if (key !== historyCache) {
     historyCache = key;
     $("history").replaceChildren();
     for (const job of jobs) {
       const b = button(
-        `${new Date(job.created).toLocaleString()}\n${job.kind === "delete" ? "Delete" : "Sync"} · ${statusLabel(job.status)}\n${Object.entries(
-          job.counts,
-        )
-          .map(([k, v]) => `${v} ${statusLabel(k)}`)
-          .join(" · ")}`,
+        "",
         async () => choose(await api(`jobs/${job.id}`)),
+        "sync-history-item",
       );
-      b.classList.add("sync-history-item");
-      if (job.id === selected) b.classList.add("selected");
+      b.append(
+        el(
+          "strong",
+          `${job.kind === "delete" ? "Deletion" : "Sync"} · ${job.count} ${job.count === 1 ? "file" : "files"}`,
+        ),
+        el("time", dateLabel(job.created)),
+        badge(job.status),
+      );
+      b.append(
+        el(
+          "small",
+          Object.entries(job.counts)
+            .map(
+              ([status, count]) =>
+                `${count} ${statusLabel(status).toLowerCase()}`,
+            )
+            .join(" · "),
+        ),
+      );
+      if (job.id === selected) {
+        b.classList.add("selected");
+        b.setAttribute("aria-current", "true");
+      }
       $("history").append(b);
     }
   }
@@ -148,16 +256,25 @@ function diff(change) {
     a[a.length - 1 - end] === b[b.length - 1 - end]
   )
     end++;
-  const text = [
-    `@@ line ${prefix + 1} @@`,
-    ...a.slice(prefix, a.length - end).map((l) => `- ${l}`),
-    ...b.slice(prefix, b.length - end).map((l) => `+ ${l}`),
-  ].join("\n");
-  wrapper.append(el("pre", text, "sync-diff"));
+  wrapper.append(
+    el(
+      "pre",
+      [
+        `@@ line ${prefix + 1} @@`,
+        ...a.slice(prefix, a.length - end).map((l) => `- ${l}`),
+        ...b.slice(prefix, b.length - end).map((l) => `+ ${l}`),
+      ].join("\n"),
+    ),
+  );
   return wrapper;
 }
+function metric(label, value) {
+  const box = el("div", undefined, "sync-metric");
+  box.append(el("small", label), el("strong", value));
+  return box;
+}
 async function renderJob(job) {
-  const key = JSON.stringify(job);
+  const key = JSON.stringify({ job, busy });
   if (
     key === jobCache ||
     ($("report").contains(document.activeElement) &&
@@ -167,23 +284,23 @@ async function renderJob(job) {
   jobCache = key;
   const holder = $("report");
   holder.replaceChildren();
-  const head = el("div", undefined, "sync-heading");
-  head.append(
-    el(
-      "h3",
-      `${job.kind === "delete" ? "Deletion preview" : "Sync report"} · ${statusLabel(job.status)}`,
-    ),
+  const head = el("div", undefined, "sync-report-heading"),
+    title = el("div");
+  title.append(
+    el("h3", job.kind === "delete" ? "Deletion preview" : "Sync report"),
+    badge(job.status),
   );
+  head.append(title);
   if (["queued", "running", "stopping"].includes(job.status))
     head.append(button("Stop", () => api(`jobs/${job.id}/stop`, "POST", {})));
-  holder.append(head);
-  if(job.prompt)holder.append(el("p",`Request: ${job.prompt}`));
+  holder.append(head, el("p", dateLabel(job.created), "sync-report-date"));
+  if (job.prompt) holder.append(el("p", job.prompt, "sync-request"));
   if (job.status === "awaiting_confirmation")
     holder.append(
       button(
         "Confirm deletion",
         async () => choose(await api(`jobs/${job.id}/confirm`, "POST", {})),
-        "primary-button",
+        "sync-button sync-button-danger sync-confirm",
       ),
     );
   for (const item of job.items) {
@@ -191,82 +308,134 @@ async function renderJob(job) {
     card.open = openCards.has(item.id) || job.items.length === 1;
     card.ontoggle = () =>
       card.open ? openCards.add(item.id) : openCards.delete(item.id);
-    card.append(el("summary", `${item.name} · ${statusLabel(item.status)}`));
-    card.append(
+    const summary = el("summary");
+    summary.append(
+      el("span", item.name, "sync-card-title"),
+      badge(item.status),
+    );
+    card.append(summary);
+    const content = el("div", undefined, "sync-card-body"),
+      stage = el("div", undefined, "sync-stage");
+    stage.append(
+      el("span", item.stage),
       el(
-        "p",
-        `${item.stage}${item.elapsedMs !== undefined ? ` · ${(item.elapsedMs / 1000).toFixed(1)} s` : ""}`,
+        "span",
+        item.elapsedMs !== undefined
+          ? `${(item.elapsedMs / 1000).toFixed(1)} s`
+          : "",
       ),
     );
+    content.append(stage);
     const u = item.textUsage,
-      v = item.visualUsage;
-    card.append(
-      el(
-        "small",
-        `Model: ${item.model || "—"} · Text input/output: ${u.input}/${u.output} · Vision input/output: ${v.input}/${v.output} · Recorded requests: ${u.recorded + v.recorded}/${u.requests + v.requests}`,
+      v = item.visualUsage,
+      metrics = el("div", undefined, "sync-metrics");
+    metrics.append(
+      metric(
+        "Text tokens · input / output",
+        `${u.input.toLocaleString()} / ${u.output.toLocaleString()}`,
       ),
+      metric(
+        "Vision tokens · input / output",
+        `${v.input.toLocaleString()} / ${v.output.toLocaleString()}`,
+      ),
+      metric(
+        "Requests with recorded usage",
+        `${u.recorded + v.recorded} / ${u.requests + v.requests}`,
+      ),
+      metric("Model", item.model || "—"),
     );
-    if (item.reason) card.append(el("p", item.reason));
-    if (item.summary) card.append(el("p", item.summary));
-    if (item.feedback) card.append(el("p", `Instructions: ${item.feedback}`));
+    content.append(metrics);
+    if (item.reason) content.append(el("p", item.reason));
+    if (item.summary) content.append(el("p", item.summary));
+    if (item.feedback)
+      content.append(
+        el("p", `Your instructions: ${item.feedback}`, "sync-request"),
+      );
     if (item.previous)
-      card.append(el("small", `Previous attempt: ${item.previous}`));
+      content.append(
+        el("p", "Continued from a previous attempt.", "sync-subtle"),
+      );
     if (item.plan) {
-      card.append(
+      const d = item.plan.decision;
+      content.append(
         el(
           "p",
-          `Products: ${item.plan.decision.products.join(", ")} · Slot: ${item.plan.decision.slot}`,
+          `Products: ${d.products.join(", ") || "—"} · Slot: ${d.slot || "—"}`,
+          "sync-subtle",
         ),
       );
-      if (item.plan.decision.versionEvidence)
-        card.append(el("p", item.plan.decision.versionEvidence));
-      for (const c of item.plan.changes) card.append(diff(c));
+      if (d.versionEvidence) content.append(el("p", d.versionEvidence));
+      for (const change of item.plan.changes) content.append(diff(change));
     }
     if (item.coverage) {
-      const d = el("details");
-      d.append(
-        el("summary", `Conversion coverage (${item.coverage.length})`),
+      const details = el("details");
+      details.append(
+        el("summary", `Conversion coverage · ${item.coverage.length} checks`),
         el("pre", item.coverage.join("\n")),
       );
-      card.append(d);
+      content.append(details);
     }
-    if (item.sourceDeleted)
-      card.append(el("p", "Original removed after successful processing."));
-    else if(job.kind==='sync')card.append(el('p','Original retained.'));
-    if (item.cleanupError) {
-      card.append(el("p", `Cleanup pending: ${item.cleanupError}`));
-      card.append(
-        button("Retry cleanup", () =>
-          api(`jobs/${job.id}/cleanup`, "POST", { itemId: item.id }),
+    if (job.kind === "sync")
+      content.append(
+        el(
+          "p",
+          item.sourceDeleted
+            ? "Original removed after successful processing."
+            : "Original retained.",
+          "sync-subtle",
         ),
       );
+    if (item.cleanupError) {
+      content.append(el("p", `Cleanup pending: ${item.cleanupError}`));
+      const b = button("Retry cleanup", () =>
+        api(`jobs/${job.id}/cleanup`, "POST", { itemId: item.id }),
+      );
+      b.disabled = busy;
+      content.append(b);
     }
     if (
       ["needs_review", "failed", "stopped", "interrupted"].includes(item.status)
     ) {
-      const input = el("textarea");
+      const feedback = el("div", undefined, "sync-feedback"),
+        label = el("label", "Instructions for Re-Sync"),
+        input = el("textarea");
+      input.id = `feedback-${item.id}`;
+      label.htmlFor = input.id;
       input.rows = 3;
       input.maxLength = 16000;
-      input.placeholder = "Explain how to handle this file…";
+      input.placeholder =
+        "Explain the correct product, version or how this file should be handled…";
       input.setAttribute("aria-label", `Instructions for ${item.name}`);
       input.value = drafts.get(item.id) || "";
       input.oninput = () => drafts.set(item.id, input.value);
-      const label = el("label");
-      const force = el("input");
+      const actions = el("div", undefined, "sync-feedback-actions"),
+        forceLabel = el("label"),
+        force = el("input");
       force.type = "checkbox";
-      label.append(force, document.createTextNode(" Reconvert original"));
-      const b = button("Re-Sync", async () =>
-        choose(
-          await api(`jobs/${job.id}/resync`, "POST", {
-            itemId: item.id,
-            feedback: input.value,
-            forceConvert: force.checked,
-          }),
-        ),
+      force.checked = reconvertIds.has(item.id);
+      force.onchange = () =>
+        force.checked
+          ? reconvertIds.add(item.id)
+          : reconvertIds.delete(item.id);
+      forceLabel.append(force, document.createTextNode("Reconvert original"));
+      const b = button(
+        "Re-Sync →",
+        async () =>
+          choose(
+            await api(`jobs/${job.id}/resync`, "POST", {
+              itemId: item.id,
+              feedback: input.value,
+              forceConvert: force.checked,
+            }),
+          ),
+        "sync-button sync-button-primary",
       );
       b.disabled = busy;
-      card.append(input, label, b);
+      actions.append(forceLabel, b);
+      feedback.append(label, input, actions);
+      content.append(feedback);
     }
+    card.append(content);
     holder.append(card);
   }
 }
@@ -275,17 +444,70 @@ async function refresh() {
   polling = true;
   try {
     await incoming();
-    await history();
+    await loadHistory();
   } finally {
     polling = false;
   }
 }
+async function uploadFiles(files) {
+  if (uploading) return;
+  const accepted = Array.from(files).filter(
+    (file) => !/^readme\.md$/i.test(file.name),
+  );
+  if (!accepted.length) {
+    $("upload-status").textContent =
+      "README.md is ignored. No documents to upload.";
+    $("upload").value = "";
+    return;
+  }
+  const oversized = accepted.find((file) => file.size > maxFileBytes);
+  if (oversized)
+    throw Error(
+      `${oversized.name} exceeds the ${Math.round(maxFileBytes / 1048576)} MB upload limit.`,
+    );
+  uploading = true;
+  $("upload").disabled = true;
+  updateControls();
+  try {
+    for (const [index, file] of accepted.entries()) {
+      $("upload-status").textContent =
+        `Uploading ${index + 1} of ${accepted.length} · ${file.name}`;
+      await api(`incoming?name=${encodeURIComponent(file.name)}`, "POST", file);
+    }
+  } finally {
+    uploading = false;
+    $("upload").disabled = false;
+    $("upload").value = "";
+    incomingCache = "";
+    updateControls();
+  }
+}
+for (const [index, name] of tabNames.entries()) {
+  const tab = $(`tab-${name}`);
+  tab.onclick = () => setTab(name);
+  tab.onkeydown = (event) => {
+    let next;
+    if (event.key === "ArrowRight") next = (index + 1) % tabNames.length;
+    else if (event.key === "ArrowLeft")
+      next = (index + tabNames.length - 1) % tabNames.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabNames.length - 1;
+    else return;
+    event.preventDefault();
+    setTab(tabNames[next]);
+    $(`tab-${tabNames[next]}`).focus();
+  };
+}
+setTab(activeTab, false);
 $("refresh").onclick = () => action(refresh);
+$("select-all").onchange = () => {
+  for (const input of $("incoming").querySelectorAll("input:not(:disabled)"))
+    input.checked = $("select-all").checked;
+  updateControls();
+};
 $("start").onclick = () =>
   action(async () => {
-    const ids = [...$("incoming").querySelectorAll("input:checked")].map(
-      (n) => n.value,
-    );
+    const ids = selectedIds();
     if (!ids.length) throw Error("Select incoming files first.");
     await choose(await api("jobs", "POST", { ids }));
   });
@@ -295,28 +517,33 @@ $("preview").onclick = () =>
       await api("delete-preview", "POST", { prompt: $("delete-prompt").value }),
     ),
   );
-$("upload").onchange = () =>
-  action(async () => {
-    const input = $("upload");
-    input.disabled = true;
-    try {
-      for (const file of input.files) {
-        $("upload-status").textContent = `Uploading ${file.name}…`;
-        await api(
-          `incoming?name=${encodeURIComponent(file.name)}`,
-          "POST",
-          file,
-        );
-      }
-      input.value = "";
-    } finally {
-      input.disabled = false;
-    }
-  });
+$("upload").onchange = () => action(() => uploadFiles($("upload").files));
+const dropZone = $("drop-zone");
+let dragDepth = 0;
+dropZone.ondragenter = (e) => {
+  e.preventDefault();
+  dragDepth++;
+  dropZone.classList.add("drag-over");
+};
+dropZone.ondragover = (e) => e.preventDefault();
+dropZone.ondragleave = (e) => {
+  e.preventDefault();
+  if (--dragDepth <= 0) {
+    dragDepth = 0;
+    dropZone.classList.remove("drag-over");
+  }
+};
+dropZone.ondrop = (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropZone.classList.remove("drag-over");
+  if (e.dataTransfer?.files.length)
+    action(() => uploadFiles(e.dataTransfer.files));
+};
 (async () => {
   try {
-    const r = await fetch("/api/auth/status");
-    const auth = await r.json();
+    const response = await fetch("/api/auth/status"),
+      auth = await response.json();
     if (!auth.authenticated) {
       location.href = "/login";
       return;
