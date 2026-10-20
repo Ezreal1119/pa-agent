@@ -58,6 +58,7 @@
         >
           Delete knowledge
         </button>
+        <button id="tab-imports" role="tab" aria-controls="panel-imports" aria-selected="false" tabindex="-1">Source imports</button>
       </nav>
       <p id="sync-error" role="alert" class="sync-error" hidden></p>
       <section
@@ -193,6 +194,16 @@
               Preview deletion <span aria-hidden="true">→</span>
             </button>
           </div>
+        </div>
+      </section>
+      <section id="panel-imports" role="tabpanel" aria-labelledby="tab-imports" class="sync-tab-panel" hidden>
+        <div class="sync-panel">
+          <div class="sync-panel-heading">
+            <div><h2>Source imports</h2><p>Pull changed files from your configured SFTP paths. Review them in Incoming files before starting Sync.</p></div>
+            <button id="import-run" class="sync-button sync-button-primary" disabled>Run now →</button>
+          </div>
+          <div class="sftp-status"><p id="import-config" role="status">Checking configuration…</p><small id="import-paths"></small><p class="sync-subtle">Manual only · up to 100 MB per file · scheduling and WeCom notifications are not enabled.</p></div>
+          <div class="sync-reports-layout"><aside id="import-history" class="sync-history" aria-label="Import history"></aside><div id="import-report" class="sync-report"><div class="sync-empty-report"><h3>No imports yet</h3><p>Run an import to see each file's result here.</p></div></div></div>
         </div>
       </section>
     </main>

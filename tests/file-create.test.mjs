@@ -23,11 +23,11 @@ test('new Excel files need no source; all values, text formula literals, styles 
  const zip=await JSZip.loadAsync(bytes);assert.ok(!Object.keys(zip.files).some(name=>/externalLinks|vbaProject/i.test(name)));assert.equal((await fs.stat(path.join(f.tools.store.directory(f.session),result.file.path))).mode&0o777,0o400);
  assert.deepEqual(await fs.readdir(path.join(f.tools.store.directory(f.session),'work')),[]);
 });
-test('UTF-8 text and source formats are exact, downloadable data; input format whitelist stays unchanged',{timeout:30000},async t=>{
+test('UTF-8 text and source formats are exact, downloadable data; text inputs can also be received without changing output formats',{timeout:30000},async t=>{
  const f=await setup(t);const content='中文 😀\r\n  <script>globalThis.DO_NOT_RUN=1</script>\npublic class Test {}\n';
  for(const ext of TEXT_OUTPUT_EXTENSIONS){const result=await f.tools.execute(f.session,'text_file_create',{filename:'result'+ext,content});assert.equal(result.ok,true);assert.equal(result.encoding,'UTF-8');const bytes=await f.bytes(result.file);assert.equal(bytes.toString('utf8'),content);assert.equal(result.file.sha256,createHash('sha256').update(bytes).digest('hex'));assert.ok(result.file.path.endsWith(ext));}
- await assert.rejects(f.tools.store.upload(f.session,'input.md',[Buffer.from('input')]),/Unsupported/);
- const restored=new FileTools(f.config);assert.equal((await restored.store.list(f.session)).length,TEXT_OUTPUT_EXTENSIONS.size);
+ const uploaded=await f.tools.store.upload(f.session,'input.md',[Buffer.from('input')]);assert.equal(uploaded.direction,'inputs');
+ const restored=new FileTools(f.config);assert.equal((await restored.store.list(f.session)).length,TEXT_OUTPUT_EXTENSIONS.size+1);
  const empty=await f.tools.execute(f.session,'text_file_create',{filename:'empty.txt',content:''});assert.equal((await f.bytes(empty.file)).length,0);
 });
 test('creators reject path escapes, overwrite, executable values and malformed workbooks without altering unrelated files',{timeout:30000},async t=>{

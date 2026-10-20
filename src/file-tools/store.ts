@@ -3,7 +3,7 @@ import { constants, realpathSync, existsSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
-import { FILE_EXTENSIONS, OUTPUT_EXTENSIONS, type FileToolConfig } from "./config.js";
+import { BINARY_FILE_EXTENSIONS, FILE_EXTENSIONS, OUTPUT_EXTENSIONS, TEXT_INPUT_EXTENSIONS, type FileToolConfig } from "./config.js";
 
 export interface ManagedFile { id: string; name: string; path: string; direction: "inputs" | "outputs"; bytes: number; sha256: string; createdAt: string; messageScoped?: boolean; }
 const locks = new Map<string, Promise<unknown>>();
@@ -62,11 +62,21 @@ export class FileStore {
       const used = files.reduce((sum, file) => sum + file.bytes, await this.cacheBytes(sessionId)); const id = randomUUID();
       const relative = `inputs/${id}${path.extname(name).toLowerCase()}`; const target = path.join(this.directory(sessionId), relative);
       await safeDirectory(path.dirname(target)); const handle = await fs.open(target, "wx", 0o400); const hash = createHash("sha256"); let bytes = 0; let done = false;
+      const decoder = TEXT_INPUT_EXTENSIONS.has(path.extname(name).toLowerCase()) ? new TextDecoder("utf-8", {fatal: true}) : undefined;
+      const validateText = (chunk?: Uint8Array) => {
+        if (!decoder) return;
+        try {
+          if (chunk?.includes(0)) throw new Error("NUL");
+          decoder.decode(chunk, {stream: chunk !== undefined});
+        } catch { throw new Error("Text attachments must be UTF-8 without NUL bytes. Save the file as UTF-8 and upload again."); }
+      };
       try {
         for await (const chunk of stream) { if (signal?.aborted) throw new Error("Upload cancelled."); bytes += chunk.length;
           if (bytes > this.config.maxFileBytes || used + bytes > this.config.sessionQuotaBytes) throw new Error("File size or session quota exceeded.");
+          validateText(chunk);
           hash.update(chunk); await handle.writeFile(chunk);
         }
+        validateText();
         if (!bytes) throw new Error("File is empty."); await handle.close();
         const file: ManagedFile = { id, name, path: relative, direction: "inputs", bytes, sha256: hash.digest("hex"), createdAt: new Date().toISOString(), messageScoped: true };
         await this.writeManifest(sessionId, [...files, file]); done = true; return file;
@@ -90,7 +100,7 @@ export class FileStore {
       const actualRoot = await fs.realpath(root).catch(() => undefined); if (!actualRoot) continue;
       const actual = await fs.realpath(candidate).catch(() => undefined); if (!actual || !inside(actualRoot, actual)) continue;
       if ([candidate, actual].some(p => p.split(path.sep).some(part => ["newly_added", "knowledge-sync"].includes(part)))) throw new Error("Unpublished maintenance inputs are not available to chat file tools.");
-      if (!FILE_EXTENSIONS.has(path.extname(actual).toLowerCase())) throw new Error("Only supported binary files may be read by file tools.");
+      if (!BINARY_FILE_EXTENSIONS.has(path.extname(actual).toLowerCase())) throw new Error("Only supported binary files may be read by file tools. Use read or grep for text.");
       const stat = await fs.lstat(actual); if (!stat.isFile() || stat.nlink !== 1 || stat.size > this.config.maxFileBytes) throw new Error("Invalid or oversized source file.");
       return { absolute: actual, display: actual };
     }

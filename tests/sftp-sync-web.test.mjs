@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {once} from 'node:events';
+import {createWebServer} from '../dist/web/server.js';
+
+test('SFTP admin UI/API requires login, Origin and CSRF; missing config does not affect chat, secrets stay private',async t=>{
+ const savedEnv=Object.fromEntries(Object.keys(process.env).filter(k=>k.startsWith('SFTP_')).map(k=>[k,process.env[k]]));
+ for(const k of Object.keys(savedEnv))delete process.env[k];
+ t.after(()=>Object.assign(process.env,savedEnv));
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'sftp-web-'));let app;
+ t.after(async()=>{await app?.close();await fs.rm(root,{recursive:true,force:true});});
+ await fs.writeFile(path.join(root,'.env'),'SFTP_HOST=fixture-host\nSFTP_USERNAME=private-username\nSFTP_PASSWORD=private-password\n');
+ app=await createWebServer({cwd:root,dataDir:path.join(root,'.data'),resourcesDir:path.resolve('resources'),admin:{account:'admin',password:'fixture-pass'},bridgeToken:'bridge-fixture-token-12345678901234567890'});
+ app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+ const base=`http://127.0.0.1:${app.server.address().port}`;
+ assert.equal((await fetch(base+'/api/sftp-sync/status')).status,401);
+ assert.equal((await fetch(base+'/api/sftp-sync/status',{headers:{Authorization:'Bearer bridge-fixture-token-12345678901234567890'}})).status,401);
+ assert.equal((await fetch(base+'/api/wecom/sftp-sync/status',{headers:{Authorization:'Bearer bridge-fixture-token-12345678901234567890'}})).status,403);
+ const token=(await(await fetch(base+'/api/auth/status')).json()).token;
+ const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{'X-Local-Token':token,'Content-Type':'application/json'},body:JSON.stringify({account:'admin',password:'fixture-pass'})});
+ const cookie=login.headers.get('set-cookie').split(';')[0],headers={cookie,'X-Local-Token':token,'Content-Type':'application/json'};
+ const state=await(await fetch(base+'/api/sftp-sync/status',{headers})).json();assert.equal(state.configured,false);assert.deepEqual(state.missing,['SFTP_HOST_FINGERPRINT']);
+ assert(!JSON.stringify(state).includes('private-password'));assert(!JSON.stringify(state).includes('private-username'));
+ assert.equal((await fetch(base+'/api/sftp-sync/runs',{method:'POST',headers:{cookie},body:'{}'})).status,403);
+ assert.equal((await fetch(base+'/api/sftp-sync/runs',{method:'POST',headers:{...headers,Origin:'https://bad.example'},body:'{}'})).status,403);
+ assert.equal((await fetch(base+'/api/sftp-sync/runs',{method:'POST',headers,body:'{"path":"/etc/passwd"}'})).status,400);
+ assert.equal((await fetch(base+'/api/sftp-sync/runs',{method:'POST',headers,body:'{}'})).status,409);
+ assert.equal((await fetch(base+'/api/status',{headers})).status,200);
+ const html=await(await fetch(base+'/synchronize',{headers})).text();assert.match(html,/tab-imports/);assert.match(html,/Run now/);
+ const js=await(await fetch(base+'/synchronize.js',{headers})).text();assert.match(js,/"delete", "imports"/);assert.match(js,/api\/sftp-sync/);
+});

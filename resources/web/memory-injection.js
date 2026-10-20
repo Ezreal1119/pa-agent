@@ -62,6 +62,20 @@
   });
   for (const id of ['close', 'cancel']) el(id).addEventListener('click', () => modal.close());
   modal.addEventListener('close', () => clearTimeout(timer));
+  el('download').addEventListener('click', async () => {
+    const button = el('download');
+    button.disabled = true; button.textContent = 'Downloading…'; error();
+    try {
+      const response = await fetch('/api/memory-injection/download');
+      if (response.status === 401) { window.location.replace('/login'); return; }
+      if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Memory download failed.'); }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a'); link.href = url; link.download = 'MEMORY.md';
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { error(err.message); }
+    finally { button.disabled = false; button.textContent = 'Download Memory File'; }
+  });
   el('prompt').addEventListener('input', controls);
   el('form').addEventListener('submit', async event => {
     event.preventDefault();

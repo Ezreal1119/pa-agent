@@ -99,3 +99,8 @@ systemctl status product-expert.service --no-pager
 
 
 侧栏另有独立的 [Memory Injection](memory-injection.md) 对话框，仅在管理员确认预览后维护主MEMORY.md，不属于资料Synchronize任务，也不改MEMORY_EXTRA.md。
+
+
+## Manual source imports
+
+**Source imports** is a separate fourth tab for SFTP ingestion. `Run now` reads `.data/sftp_sync_paths.jsonl` (path-only), downloads changed content into `newly_added`, and records per-file reports in `.data/logs/sftp_sync/`. It does not start knowledge Sync. **Incoming files**, **Sync reports**, and **Delete knowledge** keep their existing roles. Configuration, CLI usage and recovery: [SFTP imports](sftp-sync.md). No timer or WeCom notification is enabled.

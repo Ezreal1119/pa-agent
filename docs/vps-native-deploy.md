@@ -140,3 +140,8 @@ systemctl status product-expert --no-pager
 
 
 主记忆管理员维护入口已提供：部署时须删除主MEMORY.md的单文件ReadOnlyPaths，否则原子保存会失败；不是取消SKILL、UMS或运行依赖的保护。详见 [Memory Injection](memory-injection.md)。无需改.env或安装新依赖。
+
+
+## Optional manual SFTP collection
+
+After updating this feature, run `npm ci` before building; it adds `ssh2` and a cross-process file lock. No Docker, extra systemd service, timer or WeCom configuration is needed. Add the `SFTP_*` credentials/pinned host key to the VPS's existing `.env`, create `.data/sftp_sync_paths.jsonl`, then restart `product-expert.service`. Use **Synchronize → Source imports** or `npm run sftp:sync`. Keep these VPS credentials and `.data/logs/sftp_sync/` state out of Git and Mac data sync. Detailed account example and recovery: [manual SFTP imports](sftp-sync.md).

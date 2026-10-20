@@ -108,7 +108,8 @@ async function refreshStatus() {
   const status = await api('/api/status'); state.token = status.token; state.status = status;
   state.effort = status.reasoning?.default || 'low';
   $('attachment-area').hidden = !status.fileTools?.enabled || !status.fileTools.tools.length;
-  $('file-support').textContent = status.fileTools?.enabled ? `PDF · Word · PPT · Excel · Images / per file ≤ ${bytes(status.fileTools.maxFileBytes)}` : '';
+  if (status.fileTools?.acceptedExtensions) $('file-input').accept = status.fileTools.acceptedExtensions.join(',');
+  $('file-support').textContent = status.fileTools?.enabled ? `PDF · Word · PPT · Excel · Images · Text / per file ≤ ${bytes(status.fileTools.maxFileBytes)}` : '';
   $('connection-text').textContent = status.configured ? 'Connected · Configured' : 'Connected · Setup required';
   $('connection-dot').classList.toggle('ready', status.configured); $('config-banner').hidden = status.configured;
   $('model-name').textContent = status.model.modelId || 'Not configured';

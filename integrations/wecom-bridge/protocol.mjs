@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { FILE_EXTENSIONS } from '../../dist/file-tools/config.js';
 
 export const DAY = 86400000;
 export function identity(botId, body) {
@@ -16,7 +17,7 @@ export function inbound(body) {
     for (const kind of ['image', 'file']) if (value[kind]?.url) media.push({ kind, url: value[kind].url, aeskey: value[kind].aeskey });
     for (const item of value.mixed?.msg_item ?? []) collect(item, quote);
   };
-  if (body.msgtype === 'video') throw new Error('暂不支持视频，请发送 PDF、DOCX、PPTX、XLSX 或图片。');
+  if (body.msgtype === 'video') throw new Error('暂不支持视频，请发送 PDF、DOCX、PPTX、XLSX、图片或 UTF-8 纯文本文件。');
   collect(body); collect(body.quote, true);
   const unique = [...new Map(media.map(item => [item.url, item])).values()];
   if (unique.length > 20) throw new Error('一次最多接收 20 个附件。');
@@ -42,7 +43,7 @@ export function uploadName(name, buffer, index = 1) {
     if (!ext) throw new Error('未取得有效文件名，请重新上传带原始文件名的附件。');
     filename = `wecom-${index}${ext}`;
   }
-  if (!/\.(pdf|docx|pptx|xlsx|png|jpe?g|webp)$/i.test(filename)) throw new Error('支持 PDF、DOCX、PPTX、XLSX、PNG/JPG/WebP；暂不支持旧版 DOC/PPT/XLS。');
+  if (!FILE_EXTENSIONS.has(path.extname(filename).toLowerCase())) throw new Error('支持 PDF、DOCX、PPTX、XLSX、图片和 TXT/MD/LOG/JAVA/JSON/CSV/HTML/XML/YAML/PY/JS/TS 等 UTF-8 纯文本；暂不支持旧版 DOC/PPT/XLS 或可执行文件。');
   return filename;
 }
 export function resultFromDone(done, runId, seenOutputs = []) {

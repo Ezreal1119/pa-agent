@@ -42,6 +42,19 @@ async function fixture(t) {
   return {root, dataDir, main, extra, before, get service() {return service;}, set response(value) {response = value;}, set handler(value) {handler = value;}, async restart() {await service.close(); service = new MemoryInjectionService(options); await service.init();}};
 }
 
+test("download returns saved main-memory bytes exactly, without a model or file mutation; linked files are rejected", async t => {
+  const f = await fixture(t);
+  f.handler = () => {throw new Error("Download must not invoke a model");};
+  const bytes = Buffer.from('\ufeff# 原始记忆\r\n\r\n可下载格式异常的原文以便修复。\r\n');
+  await fs.writeFile(f.main, bytes);
+  assert.deepEqual(await f.service.download(), bytes);
+  assert.deepEqual(await fs.readFile(f.main), bytes);
+  assert.equal(await fs.readFile(f.extra, 'utf8'), 'EXTRA FILE MUST STAY UNCHANGED');
+  await assert.rejects(fs.stat(path.join(f.dataDir, 'memory-injection')), {code:'ENOENT'});
+  await fs.rm(f.main); await fs.symlink(f.extra, f.main);
+  await assert.rejects(f.service.download(), /Linked/);
+});
+
 test("main-memory batch preview is read-only; confirmation preserves metadata/unrelated bytes, backs up and never writes extra memory", async t => {
   const f = await fixture(t);
   f.response = proposal([{action: "update", id: "mem_a", content: "### Corrected Alpha", reason: "更正"}, {action: "delete", id: "mem_b", reason: "删除旧条目"}, addition("New fact")]);
@@ -169,12 +182,21 @@ test("administrator HTTP and real Pi model isolate main-memory preview/confirmat
   const base=`http://127.0.0.1:${app.server.address().port}`;
   const token=(await(await fetch(base+'/api/auth/status')).json()).token;
   for (const key of ['bridge-test-key-01234567890123456789','mcp-test-key']) assert.equal((await fetch(base+'/api/memory-injection/previews',{method:'POST',headers:{'x-local-token':token,Authorization:`Bearer ${key}`,'content-type':'application/json'},body:JSON.stringify({prompt:'attack'})})).status,401);
+  for (const key of ['', 'bridge-test-key-01234567890123456789', 'mcp-test-key']) assert.equal((await fetch(base+'/api/memory-injection/download', {headers: key ? {Authorization:`Bearer ${key}`} : {}})).status, 401);
   const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{'x-local-token':token,'content-type':'application/json'},body:JSON.stringify({account:'admin',password:'secret'})});
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const request=(route,method='GET',body,extra={})=>fetch(base+route,{method,headers:{Cookie:cookie,'x-local-token':token,'content-type':'application/json',...extra},...(body===undefined?{}:{body:JSON.stringify(body)})});
   const home=await(await request('/')).text(); assert.ok(home.indexOf('Memory Injection')<home.indexOf('Synchronize'));
   assert.equal((await request('/memory-injection.js')).status,200);
   assert.equal((await request('/memory-injection.css')).status,200);
+  assert.ok(home.includes('Download Memory File'));
+  let download = await request('/api/memory-injection/download');
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('content-disposition'), 'attachment; filename="MEMORY.md"');
+  assert.match(download.headers.get('content-type'), /text\/markdown/);
+  assert.equal(download.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), Buffer.from(f.before));
+  assert.equal((await request('/api/memory-injection/download?path=MEMORY_EXTRA.md')).status, 400);
   assert.equal((await request('/api/memory-injection/previews','POST',{prompt:'fact'},{'x-local-token':''})).status,403);
   assert.equal((await request('/api/memory-injection/previews','POST',{prompt:'fact'},{Origin:'https://evil.invalid'})).status,403);
   assert.equal(payloads.length,0);
@@ -187,10 +209,13 @@ test("administrator HTTP and real Pi model isolate main-memory preview/confirmat
   assert.ok(!JSON.stringify(payloads).includes('EXTRA FILE MUST STAY UNCHANGED'));
   assert.ok(!JSON.stringify(payloads).includes('PRIVATE SKILL SHOULD NOT ENTER'));
   assert.equal(await fs.readFile(f.main,'utf8'),f.before);
+  assert.equal(await (await request('/api/memory-injection/download')).text(), f.before);
   assert.equal((await request(`/api/memory-injection/previews/${job.id}/confirm`,'POST',{content:'arbitrary override'})).status,400);
   res=await request(`/api/memory-injection/previews/${job.id}/confirm`,'POST',{});assert.equal(res.status,202);
   for(let i=0;i<200;i++){job=await(await request(`/api/memory-injection/previews/${job.id}`)).json();if(job.status!=='committing')break;await new Promise(r=>setTimeout(r,10));}
   assert.equal(job.status,'committed',job.error);
   assert.match(await fs.readFile(f.main,'utf8'),/ADMIN APPROVED FACT/);
+  download = await request('/api/memory-injection/download');
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), await fs.readFile(f.main));
   assert.equal(await fs.readFile(f.extra,'utf8'),'EXTRA FILE MUST STAY UNCHANGED');
 });

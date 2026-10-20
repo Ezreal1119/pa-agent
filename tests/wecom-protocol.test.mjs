@@ -29,6 +29,7 @@ test('text, mixed media, quoted files and voice transcription are extracted with
 test('UTF-8 splitting respects Chinese/emoji byte limits and file names are constrained', () => {
  const text='中文😀'.repeat(10000);const parts=splitUtf8(text);assert.ok(parts.length>1);assert.equal(parts.join(''),text);assert.ok(parts.every(p=>Buffer.byteLength(p)<=18000));
  assert.equal(uploadName('../../标书.xlsx',Buffer.alloc(1)),'标书.xlsx');
+ for (const extension of ['txt','JAVA','md','log','json','jsonl','csv','html','xml','yaml','py','js','ts']) assert.equal(uploadName(`notes.${extension}`,Buffer.from('UTF-8 文本')),`notes.${extension}`);
  assert.throws(()=>uploadName('old.xls',Buffer.alloc(1)),/旧版/);
  assert.equal(uploadName(undefined,Buffer.from('%PDF-1.0')),'wecom-1.pdf');
  const result=resultFromDone({messages:[{role:'assistant',text:'检索中',run:{id:'run'}},{role:'assistant',text:'最终回答，没有文件名',run:{id:'run'},outputs:[{id:'output'}]},{role:'assistant',text:'旧回答',run:{id:'old'}}]},'run');

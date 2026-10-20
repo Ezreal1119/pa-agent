@@ -116,7 +116,7 @@ FILE_WORKER_IMAGE=product-expert-files:ubuntu24
 
 ## 消息与附件的关系
 
-五种类型（图片、PDF、DOCX、XLSX、PPTX）采用同一流程：先上传原件，在输入框附近保留“待发送附件”，点击发送时文字和 attachmentIds 一起提交。每次发送只绑定明确选中的附件，下轮不重复携带。可移除待发送项；移除仅取消下一轮携带，不物理删除原件。待发送 ID 按会话保存在当前浏览器，刷新可恢复；跨浏览器不会自动继承草稿。已发送文件显示在对应用户消息下，原有会话文件和输出保留在折叠列表中。
+图片、PDF、DOCX、XLSX、PPTX及受支持的UTF-8纯文本采用同一流程：先上传原件，在输入框附近保留“待发送附件”，点击发送时文字和 attachmentIds 一起提交。每次发送只绑定明确选中的附件，下轮不重复携带。可移除待发送项；移除仅取消下一轮携带，不物理删除原件。待发送 ID 按会话保存在当前浏览器，刷新可恢复；跨浏览器不会自动继承草稿。已发送文件显示在对应用户消息下，原有会话文件和输出保留在折叠列表中。
 
 关联以 message-attachments-v1 custom entry 保存到现有 JSONL，记录 run、轮次、消息时间、最终 SDK 消息 ID 和附件快照，不引入 SQLite，不把原始图片或二进制写入日志。用户原文不改写；仅组装模型请求时在对应 user 消息添加 Files attached to this message 文件清单。随五轮窗口整轮裁剪，历史消息恢复后仍可识别原附件。系统会话文件目录不再代表最新消息附件；新上传但未发送的文件不进入模型目录。原有旧文件保持兼容，不推测其历史消息归属。
 
@@ -168,8 +168,19 @@ Web Agent settings分别开启 **Create Excel** / **Create text file** 后，Web
 {"filename":"comparison.md","content":"# Comparison\n\nComplete UTF-8 text here.\n"}
 ```
 
-文本输出允许.txt/.md/.html/.htm/.java/.json/.csv/.xml/.yaml/.yml/.css/.js/.ts/.py/.sql/.c/.h/.cpp/.hpp/.go/.rs。只保存和校验UTF-8字节（无NUL），不检查代码编译、JSON/HTML语法或程序运行结果。输入上传白名单仍为原PDF/DOCX/PPTX/XLSX/图片，不因文本输出而扩大。内容保持原样，不自动执行/编译/预览、转换编码或添加Markdown围栏。HTML同其他输出按application/octet-stream+Content-Disposition:attachment下载，保留nosniff/CSP，不在Agent域名内作为页面运行。
+文本输出允许.txt/.md/.html/.htm/.java/.json/.csv/.xml/.yaml/.yml/.css/.js/.ts/.py/.sql/.c/.h/.cpp/.hpp/.go/.rs。只保存和校验UTF-8字节（无NUL），不检查代码编译、JSON/HTML语法或程序运行结果。聊天输入另行支持受控UTF-8纯文本白名单，范围见下文；输出白名单不随输入类型扩张。内容保持原样，不自动执行/编译/预览、转换编码或添加Markdown围栏。HTML同其他输出按application/octet-stream+Content-Disposition:attachment下载，保留nosniff/CSP，不在Agent域名内作为页面运行。
 
 统一写入会话work临时任务后发布到outputs/<随机UUID>.<后缀>，展示文件名和实际磁盘名分离；拒绝绝对/相对目录、点文件、未知格式、覆盖、软/硬链接和超配额。单文件沿用FILE_MAX_BYTES且文本另限1MiB，单会话最多200文件/100MiB（可配置字节配额），串行队列与超时/取消沿用。Excel在受限worker中生成并验证，文本worker不加载Excel/Office模块；产物权限400。2核2G场景建议保持串行和现有systemd内存上限，大表仍可能被限额/OOM拒绝。
 
 专项验证：`npm run test:file-create` 以production配置运行新工具的隔离文件回归；完整`npm test`另含Web下载/恢复/删除、Core注册和模拟企微回传。本机生成夹具/模拟模型不等于真实模型选择工具或企微平台接受所有源码后缀的验收。
+
+
+## 纯文本聊天附件
+
+Web与WeCom聊天上传支持原文阅读，不新增text_read工具。支持.txt/.md/.markdown/.log/.java/.json/.jsonl/.csv/.tsv/.html/.htm/.xml/.yaml/.yml/.py/.js/.ts/.jsx/.tsx/.mjs/.cjs/.css/.sql/.c/.h/.cpp/.hpp/.go/.rs/.ini/.conf/.cfg/.properties，大小写均可。
+
+上传按流校验UTF-8（含跨chunk多字节），拒绝NUL/非法或截断编码，不擅自转码，保留原字节、BOM、换行和哈希。UTF-16/GBK等需先另存为UTF-8；失败/超限删除部分文件且不写manifest。聊天单文件上限仍30MiB，沿用总量、权限、消息绑定、恢复及删除/30天保留。原有文件模块上传开关保持：至少启用一个文件工具才开放附件入口，不另设文本工具开关。
+
+附件消息与当前会话文件目录在推理时为纯文本给出绝对readPath和format=plain-text；Agent复用已有read/grep，先检索大日志，再按行读取片段，不把全部日志注入上下文。二进制文档/图片仍由专用工具处理。代码/HTML只作为不可信文本读取，不执行、编译、渲染或加载其中的指令；HTML下载仍为附件，不作为页面打开。普通read的路径仍限当前会话及允许的知识根，不能读取另一会话附件。
+
+Bridge复用编译后的同一扩展名清单。部署不新增依赖或.env，正常构建后需同时重启product-expert.service与wecom-bridge.service；只重启主服务会使旧Bridge进程继续使用旧白名单。文本文件由现有只读工具分析，不能把它们交给pdf_read等二进制解析工具。

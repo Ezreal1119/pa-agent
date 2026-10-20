@@ -53,4 +53,6 @@ export const FILE_TOOL_NAMES = [...DEFAULT_FILE_TOOL_NAMES, ...CREATE_TOOL_NAMES
 export type FileToolName = typeof FILE_TOOL_NAMES[number];
 export const TEXT_OUTPUT_EXTENSIONS = new Set([".txt", ".md", ".html", ".htm", ".java", ".json", ".csv", ".xml", ".yaml", ".yml", ".css", ".js", ".ts", ".py", ".sql", ".c", ".h", ".cpp", ".hpp", ".go", ".rs"]);
 export const OUTPUT_EXTENSIONS = new Set([".xlsx", ...TEXT_OUTPUT_EXTENSIONS]);
-export const FILE_EXTENSIONS = new Set([".pdf", ".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"]);
+export const TEXT_INPUT_EXTENSIONS = new Set([...TEXT_OUTPUT_EXTENSIONS, ".log", ".jsonl", ".tsv", ".markdown", ".jsx", ".tsx", ".mjs", ".cjs", ".ini", ".conf", ".cfg", ".properties"]);
+export const BINARY_FILE_EXTENSIONS = new Set([".pdf", ".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"]);
+export const FILE_EXTENSIONS = new Set([...BINARY_FILE_EXTENSIONS, ...TEXT_INPUT_EXTENSIONS]);

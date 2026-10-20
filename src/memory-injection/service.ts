@@ -46,7 +46,7 @@ export class MemoryInjectionService {
     }
     return this.public(job);
   }
-  private async snapshot() {
+  private async readBytes() {
     const file = await safePath(this.options.dataDir, path.relative(this.options.dataDir, mainMemoryFile(this.options.dataDir)));
     const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
@@ -54,11 +54,15 @@ export class MemoryInjectionService {
       if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_BYTES) throw new SyncError("Main memory must be an ordinary, non-linked UTF-8 file of at most 2 MiB.");
       const bytes = await handle.readFile();
       if (bytes.length > MAX_BYTES) throw new SyncError("Main memory exceeds 2 MiB.");
-      const memory = new TextDecoder("utf-8", {fatal: true}).decode(bytes);
-      if (!memory.trim()) throw new SyncError("Main memory is empty. Restore it before injecting changes.");
-      parseMemoryEntries(memory, "Main memory");
-      return {memory, revision: hash(memory)};
+      return bytes;
     } finally { await handle.close(); }
+  }
+  async download() { return this.readBytes(); }
+  private async snapshot() {
+    const memory = new TextDecoder("utf-8", {fatal: true}).decode(await this.readBytes());
+    if (!memory.trim()) throw new SyncError("Main memory is empty. Restore it before injecting changes.");
+    parseMemoryEntries(memory, "Main memory");
+    return {memory, revision: hash(memory)};
   }
   async init() {
     await safePath(this.directory);

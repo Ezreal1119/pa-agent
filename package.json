@@ -27,7 +27,10 @@
     "test:mcp": "npm run build && node --test tests/mcp.test.mjs",
     "test:file-create": "npm run build && NODE_ENV=production FILE_WORKER_IMAGE= node --test tests/file-create.test.mjs",
     "test:sync": "npm run build && node --test tests/knowledge-sync*.test.mjs",
-    "check:sync": "node scripts/check-sync-runtime.mjs"
+    "check:sync": "node scripts/check-sync-runtime.mjs",
+    "sftp:sync": "npm run build && node dist/sftp-sync/cli.js",
+    "test:sftp": "npm run build && node --test tests/sftp-sync*.test.mjs",
+    "sftp:check-host": "npm run build && node dist/sftp-sync/probe.js"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
@@ -42,12 +45,16 @@
     "jszip": "3.10.2",
     "marked": "^18.1.1",
     "pdfjs-dist": "6.1.200",
+    "proper-lockfile": "4.1.2",
+    "ssh2": "1.17.0",
     "typebox": "1.3.7",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^24.3.0",
+    "@types/proper-lockfile": "4.1.4",
+    "@types/ssh2": "1.15.6",
     "pdf-lib": "1.17.1",
     "typescript": "^5.9.2"
   },

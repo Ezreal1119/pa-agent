@@ -1,6 +1,6 @@
 # Memory Injection
 
-管理员登录后，侧栏Synchronize上方的Memory Injection打开单个对话框。输入自然语言新增、更正或删除主记忆，点击Generate preview；AI判断ADD/UPDATE/DELETE并整理正文。意图或匹配条目不明确时显示问题，修改输入后重新预览，不能确认含疑问的修改。英文控件，模型说明按输入语言生成。
+管理员登录后，侧栏Synchronize上方的Memory Injection打开单个对话框。输入自然语言新增、更正或删除主记忆，点击Generate preview；AI判断ADD/UPDATE/DELETE并整理正文。意图或匹配条目不明确时显示问题，修改输入后重新预览，不能确认含疑问的修改。英文控件，模型说明按输入语言生成。对话框底部的Download Memory File直接下载当前已保存的主MEMORY.md，不包含未确认预览或MEMORY_EXTRA，不调用模型、不改变文件。下载保留原始字节（包括BOM和换行），格式异常时也可下载备份；仍拒绝链接文件和超过2MiB的文件。
 
 预览逐条展示操作、精确ID、理由及修改前后完整条目。只有点击Confirm injection才更新`.data/memory/urovo-product-expert/MEMORY.md`。修改预览后的输入会隐藏确认按钮。普通聊天memory工具继续只写同目录MEMORY_EXTRA.md，WeCom/MCP凭证不能使用管理员接口。主记忆和额外记忆仍每轮分别注入；UMS无新记忆逻辑。
 
@@ -22,6 +22,7 @@
 
 | 方法 | 路径 | 内容 |
 |---|---|---|
+| GET | `/api/memory-injection/download` | 管理员下载当前MEMORY.md，无路径/查询参数，attachment响应，禁止缓存 |
 | POST | `/api/memory-injection/previews` | 仅`{prompt}`；202返回预览ID |
 | GET | `/api/memory-injection/previews/<id>` | 状态、问题、逐条前后对比及已记录用量 |
 | POST | `/api/memory-injection/previews/<id>/confirm` | 空对象`{}`；202后轮询直至committed/conflict/failed |

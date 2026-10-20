@@ -20,7 +20,7 @@ import { BridgeAccess } from "./bridge-access.js";
 import { RunGate, boundedSetting } from "./run-gate.js";
 import { ExtraMemoryStore, EXTRA_MEMORY_SECTION } from "../agent/extra-memory.js";
 import { mainMemoryFile } from "../agent/memory-paths.js";
-import { fileToolConfig, FILE_TOOL_NAMES, type FileToolOptions } from "../file-tools/config.js";
+import { fileToolConfig, FILE_TOOL_NAMES, FILE_EXTENSIONS, type FileToolOptions } from "../file-tools/config.js";
 import { generatedFiles } from "../file-tools/outputs.js";
 import { FileStore } from "../file-tools/store.js";
 import { captureMessageAttachments, messageAttachments } from "../agent/message-attachments.js";
@@ -37,6 +37,8 @@ import { McpService } from "../mcp/service.js";
 import { handleMcp } from "../mcp/http.js";
 import { runMcpAgent } from "../mcp/runner.js";
 
+import { SftpSyncService } from "../sftp-sync/service.js";
+import { sftpConfig } from "../sftp-sync/config.js";
 import { SyncService } from "../knowledge-sync/service.js";
 import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
@@ -61,6 +63,7 @@ export async function createWebServer(options: WebOptions = {}) {
     if (error.code === "ENOENT") return {} as Record<string, string>;
     throw error;
   });
+  const sftpOptions = sftpConfig(cwd, dataDir, { ...diskEnv, ...process.env });
   const mcpOptions = mcpConfig(options.mcp, { ...diskEnv, ...process.env });
   const mcpAccess = new McpAccess(mcpOptions.apiKey);
   const originPolicy = new WebOriginPolicy(options.publicUrl ?? process.env.WEB_PUBLIC_URL ?? diskEnv.WEB_PUBLIC_URL ?? "");
@@ -108,6 +111,7 @@ export async function createWebServer(options: WebOptions = {}) {
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
     if (webConfig.apiKey) message = message.split(webConfig.apiKey).join("[REDACTED]");
+    if (sftpOptions.password) message = message.split(sftpOptions.password).join("[REDACTED]");
     if (adminPassword) message = message.split(adminPassword).join("[REDACTED]");
     if (fileConfig.vision.apiKey) message = message.split(fileConfig.vision.apiKey).join("[REDACTED]");
     return message.slice(0, 2000);
@@ -120,6 +124,8 @@ export async function createWebServer(options: WebOptions = {}) {
     planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
     converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
   await synchronize.init();
+  const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});
+  await sftpSync.init();
   const memoryInjection = new MemoryInjectionService({dataDir, modelId: () => settings.modelId, redact,
     planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
   await memoryInjection.init();
@@ -423,6 +429,12 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       if (url.pathname.startsWith("/api/memory-injection/")) {
         if (machine) throw new HttpError(403, "Main memory requires administrator login.");
+        if (url.pathname === "/api/memory-injection/download" && method === "GET") {
+          if (url.search) throw new HttpError(400, "Memory download does not accept path or query parameters.");
+          const bytes = await memoryInjection.download();
+          res.writeHead(200, {"Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": 'attachment; filename="MEMORY.md"', "Content-Length": bytes.length});
+          res.end(bytes); return;
+        }
         if (url.pathname === "/api/memory-injection/previews" && method === "POST") {
           const body = await readBody(req);
           if (Object.keys(body).length !== 1 || !("prompt" in body)) throw new HttpError(400, "Only a prompt is accepted.");
@@ -436,6 +448,22 @@ export async function createWebServer(options: WebOptions = {}) {
           return json(res, 202, await memoryInjection.confirm(match[1]!));
         }
         throw new HttpError(404, "Memory operation not found.");
+      }
+      if (url.pathname.startsWith("/api/sftp-sync/")) {
+        if (machine) throw new HttpError(403, "Imports require administrator login.");
+        const route = url.pathname.slice("/api/sftp-sync/".length);
+        if (route === "status" && method === "GET") return json(res, 200, await sftpSync.status());
+        if (route === "runs" && method === "POST") {
+          if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Import uses the configured JSONL list; request parameters are not accepted.");
+          return json(res, 202, await sftpSync.start());
+        }
+        const match = route.match(/^runs\/([a-f0-9-]{36})(\/stop)?$/);
+        if (match && !match[2] && method === "GET") return json(res, 200, await sftpSync.get(match[1]!));
+        if (match && match[2] && method === "POST") {
+          if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Stop accepts only the saved run ID.");
+          return json(res, 200, await sftpSync.stop(match[1]!));
+        }
+        throw new HttpError(404, "Import operation not found.");
       }
       if (url.pathname.startsWith("/api/sync/")) {
         if (machine) throw new HttpError(403, "Maintenance requires administrator login.");
@@ -458,7 +486,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       if (method === "GET" && url.pathname === "/api/status") {
         const extraMemory = await new ExtraMemoryStore(dataDir).snapshot().then(value => ({ ready: true, bytes: Buffer.byteLength(value.text) })).catch(() => ({ ready: false, bytes: 0 }));
-        return json(res, 200, { token: csrf, configured: configured(), model: { modelId: settings.modelId, baseUrl: settings.baseUrl, hasKey: Boolean(settings.apiKey), contextWindow: settings.contextWindow, maxTokens: settings.maxTokens }, skills: await resources(), ordinarySkills: await ordinarySkills(), extraMemory, historyRounds: 5, retentionDays: 30, reasoning: { supported: isDeepSeekModel(settings), default: agentSettings.effort, modes: REASONING_MODES }, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes, visionConfigured: Boolean(fileConfig.vision.baseUrl && fileConfig.vision.apiKey && fileConfig.vision.model), queue: queueState() } });
+        return json(res, 200, { token: csrf, configured: configured(), model: { modelId: settings.modelId, baseUrl: settings.baseUrl, hasKey: Boolean(settings.apiKey), contextWindow: settings.contextWindow, maxTokens: settings.maxTokens }, skills: await resources(), ordinarySkills: await ordinarySkills(), extraMemory, historyRounds: 5, retentionDays: 30, reasoning: { supported: isDeepSeekModel(settings), default: agentSettings.effort, modes: REASONING_MODES }, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes, acceptedExtensions: [...FILE_EXTENSIONS], visionConfigured: Boolean(fileConfig.vision.baseUrl && fileConfig.vision.apiKey && fileConfig.vision.model), queue: queueState() } });
       }
       const contactMatch = url.pathname.match(/^\/api\/wecom-contacts(?:\/([a-f0-9]{64}))?$/);
       if (contactMatch) {
@@ -798,10 +826,12 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
+    const sftpClosing = sftpSync.close();
     const syncClosing = synchronize.close();
     const memoryClosing = memoryInjection.close();
     await mcp?.close();
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
+    await sftpClosing;
     await syncClosing;
     await memoryClosing;
     for (const r of records.values()) r.session?.dispose();

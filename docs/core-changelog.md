@@ -4,13 +4,19 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Synchronize新增Source imports独立Tab及手动SFTP单次拉取；JSONL仅path，凭证在.env，哈希去重、串行原子投递、跨进程锁/停止/恢复，持久报告放.data/logs/sftp_sync。暂不启用定时与企微通知。详见2026-10-20 SFTP记录。
+
+- Web/WeCom聊天附件开放受控UTF-8纯文本（TXT/MD/LOG/JAVA/JSON/CSV/HTML/XML/YAML/PY/JS/TS等），复用read/grep并提供绝对readPath，流式编码校验；聊天30MiB保持，不新增工具，部署需重启主服务与Bridge。见2026-10-20纯文本附件记录。
+
+- Memory Injection对话框新增Download Memory File，管理员可下载当前已保存的主MEMORY.md原文，不调用模型、不导出预览或extra。见2026-10-20主记忆下载记录。
+
 - 新增管理员Memory Injection单对话框：自然语言判断主记忆ADD/UPDATE/DELETE，疑问澄清、逐条预览再确认；记忆工具仍只写MEMORY_EXTRA。主MEMORY需移除systemd只读挂载，由后台固定路径发布和备份。见2026-10-20主记忆管理记录。
 
 - Synchronize 文本维护与聊天共用.env的MODEL_ID/BASE_URL/API_KEY；曾临时指定Pro的改动已按用户要求撤回，视觉继续沿用.env中VISION_LLM_*。见2026-10-20维护模型回退记录。
 
 - Synchronize 视觉分块在完整覆盖后停止，末块贴边，避免额外细条触发视觉HTTP400；错误报告加入区域与脱敏后的接口原因，转换缓存版本更新。见2026-10-20切图修复记录。
 
-- Synchronize 后续调整为三个独立 Tab，忽略 README.md；维护上传单独固定100MiB，聊天30MiB保持原配置，无需新增环境变量。见2026-10-20后续记录。
+- Synchronize 保留三个维护 Tab，另增 Source imports；忽略 README.md；维护上传单独固定100MiB，聊天30MiB保持原配置，无需新增环境变量。见2026-10-20后续记录。
 
 - 新增管理员 Synchronize 独立页面及 `/api/sync/*`：手动导入、维护专用 Pi Agent、完整转换与视觉覆盖、索引校验和事务发布、报告反馈/Re-Sync、自然语言删除预览确认。共享知识读写锁，问答工具排除未发布目录。原生 LibreOffice/fontconfig 依赖、systemd 保护范围调整及 `check:sync`/`test:sync`。见 2026-10-20 记录。
 
@@ -576,3 +582,40 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 部署：模板取消主MEMORY单文件ReadOnlyPaths，保留SKILL/SYNC_PROMPT/UMS/file-runtime保护，普通模型仍无主记忆写工具。已有VPS须手动删除实际unit中的主记忆只读行、daemon-reload再启服务，不能只git pull。保留用户root账号；无需新服务/依赖/env/记忆迁移。README、VPS、记忆迁移及Sync说明已同步；详见docs/memory-injection.md。本轮没有修改本地实际记忆、.env、Cloud服务或patrick-agent，未提交推送。
 
 验证：完整npm test182项通过、无跳过（约28.2秒），最后错误文案区分主/额外后再次构建并跑相关10项全部通过。新增六组测试覆盖批量预览不写/确认备份和元数据/额外隔离、含糊/坏方案/越权字段/重复目标、哈希冲突与过期/读锁等待、重启恢复和幂等、链接/坏格式/备份拒绝/关闭取消，以及真实Pi SDK连接本地模拟模型的管理员HTTP端到端（.env同模型与强度、仅内部预览工具、Cookie/CSRF/Origin/机器Key拒绝）。浏览器在隔离知识库验证侧栏入口、生成预览无文件变更、编辑隐藏确认、确认后主记忆改变而extra不变、歧义无确认按钮、刷新重开恢复；模型判断/用量为测试夹具，未请求真实模型。日志与截图统一.data/debug/memory-injection/。语法及git diff检查通过。
+
+
+## 2026-10-20 — Memory Injection 主记忆下载
+
+原因：用户要求在主记忆维护对话框增加Download Memory File。
+
+行为/兼容性：底部增加独立下载按钮，管理员GET /api/memory-injection/download返回当前固定路径主MEMORY.md的原始字节，使用Markdown附件Content-Disposition和no-store。浏览器以MEMORY.md保存，显示下载中/错误并保留原有预览状态；不调用模型、不保存审计或修改任何记忆，不导出未确认预览或MEMORY_EXTRA。复用普通文件/符号链接/硬链接及2MiB上限检查，格式异常或空内容仍可原样下载备份；不接受路径或查询参数。无Cookie/仅机器Key拒绝下载，不改变现有注入和增删改逻辑。无需.env/systemd或依赖改动，未部署VPS或修改实际数据。
+
+验证：构建、前端语法和git diff检查通过，记忆相关11项测试通过、无跳过（约1.6秒）。验证UTF-8/BOM/CRLF原始字节保留、下载不写/不调用模型、链接拒绝、匿名/机器凭证拒绝、附件及缓存头、路径参数拒绝、预览未确认仍下载旧原文及确认后下载新原文，extra保持不变；真实Pi SDK连接本地模拟模型的原有预览确认端到端继续通过。未进行真实模型或VPS测试，日志.data/debug/memory-download/tests.log。
+
+
+## 2026-10-20 — 聊天开放UTF-8纯文本附件
+
+原因：用户企微发送TXT日志被原二进制类型白名单拒绝，要求开放TXT/JAVA/MD及其他纯文本，讨论后采用现有read/grep而不新增专用文本工具。
+
+行为/兼容性：新增独立文本输入集合（原文本输出格式再加log/jsonl/tsv/markdown/jsx/tsx/mjs/cjs/ini/conf/cfg/properties），Web选择器/状态API/提示同步，Bridge使用构建后的同一FILE_EXTENSIONS集合并更新错误提示。上传使用流式UTF-8解码器校验，支持跨chunk多字节，拒绝非法/未完成编码和NUL，失败清理部分文件且不登记manifest；原字节/BOM/换行/哈希保留。原有30MiB及session总量/文件数量/鉴权/附件开关不变，旧版Office/可执行扩展名不开放；无新工具/开关/env/依赖。
+
+读取：按消息绑定的附件brief和会话catalog为纯文本提供format及当前session绝对readPath；提示先grep定位大文件、再read按行读取，不自动把全文塞进上下文，源代码/HTML均为数据而不执行。原生read仅对二进制集合继续拦截，文本允许在现有当前会话/知识根边界读取，跨会话仍拒绝；知识根的二进制专用解析入口保持原格式限制。SDK日志/五轮裁剪/会话恢复和删除保留沿用原逻辑，输出白名单不扩大。
+
+验证：完整npm test186项通过、无跳过（约27秒），构建/脚本语法/git diff检查通过。新增三组测试覆盖所有文本扩展名上传及逐字节中文/emoji/BOM/CRLF保真、NUL/UTF16/非法UTF8尾字节/超限/路径拒绝与部分文件清理；真实本机Web→Pi SDK→grep/read定位超过3.66MiB日志中的ACTION_PTT/KEYCODE_PTT，再读取相关行，请求载荷保持小于60000字符，确认下载原件一致、服务重启恢复可重读且跨会话拒绝；真实Bridge/API/Agent读取TXT/JAVA/MD/HTML/JSON引用附件、旧协议扩展名验证和现有文本输出回归。模型与企微传输为本地模拟，未连接真实机器人/模型，未修改业务数据或部署VPS。日志.data/debug/text-attachments/。部署必须重启product-expert.service和wecom-bridge.service以同步白名单，无需改systemd配置。
+
+
+## 2026-10-20 — 手动 SFTP 来源拉取与持久报告
+
+原因：用户需要从给定SFTP账号及仅path的JSONL清单拉取变化文件至newly_added；凭证放.env，报告指定.data/logs/sftp_sync。本轮明确暂不做定时任务与企业微信推送。
+
+行为/兼容性：新增Synchronize第四个Source imports Tab，Run now/Stop、配置就绪提示、历史及逐文件状态/错误/实际名称/SHA256；独立于维护Start Sync，不调用模型或自动发布知识。新增管理员/api/sftp-sync/status、POST /runs、GET /runs/<id>、POST /runs/<id>/stop，返回202后沿用页面两秒轮询、Cookie/Origin/CSRF，WeCom/MCP凭证无维护权限。CLI npm run sftp:sync提供相同一次性拉取，失败/部分失败/停止退出码非零；npm run sftp:check-host无密码探测主机指纹；npm run test:sftp运行专项。
+
+实现：ssh2只用lstat/open-read/close，不调用shell、不改远端；默认现代算法，SFTP_LEGACY_KEX=true仅追加旧Serv-U所需group14-sha1，固定OpenSSH SHA256主机指纹在发送密码前校验。JSONL UTF-8/4MiB/10000行、逐行错误、仅path、重复路径去重，拒绝穿越、控制字符、保留名、不支持格式、非普通文件。每文件100MiB上限、流式SHA256、默认256MiB磁盘保留、下载前后size/mtime及长度核对、20秒连接/10分钟每次尝试/最多三次/有限退避；连接错误耗尽、认证/指纹/磁盘问题停止余批，独立路径错误继续。纯SFTP不能在不读取内容的前提下比较远端哈希，因此未变化仍读取网络字节，但不会重复投递/入库；不以mtime代替内容哈希。
+
+持久化：.data/logs/sftp_sync保存state.json、每run JSON报告/紧凑summary/JSONL事件、work暂存及proper-lockfile心跳锁。完整文件fsync后先保存待投递日志，再以独占硬链接原子暴露至newly_added，不覆盖同名；名称冲突带后缀，状态在投递后才推进。Sync消耗原件后哈希仍有效。HTTP/CLI共享单执行锁、支持跨进程停止标记；取消/失败清理未投递部分文件，服务重启恢复可验证的待投递事务并标记中断报告。目标被改或交付/记账间原件已被其他消费者删除、无法证明交付时停止审查，不盲目去重或重投。日志错误不静默更新哈希；密钥不回传、不写报告。缺少SFTP配置和恢复审查不禁用普通聊天。新目录/文件700/600；已有systemd .data可写范围足够，无新服务、无聊天工具变更。
+
+配置/数据：新增ssh2/proper-lockfile及类型依赖，需要npm ci；.env.example、README、VPS及Synchronize说明更新，docs/sftp-sync.md给出具体配置与恢复。真实凭证仅加入本地Git忽略.env，创建忽略的.data/sftp_sync_paths.jsonl测试路径。未修改patrick-agent、未部署VPS、未提交推送，正式newly_added与知识正文未用于测试。报告/状态不随聊天清理，不能随Mac资料同步覆盖VPS状态。
+
+验证：本机专项11项通过，无跳过，覆盖路径/JSONL、流式字节及去重、源文件被Sync删除后仍去重、同名不覆盖、网络重试成功/耗尽停止余批、单文件失败继续、远端变化、超限/磁盘不足、跨实例锁与停止、关闭与启动竞态不新建连接、已暴露硬链接的中断恢复/冲突、符号链接/配置缺失、管理员HTTP及凭证隔离；含真实本机ssh2服务端验证旧KEX显式开关、错误指纹在密码前拒绝、SFTP只读协议与流结束。完整npm test197项通过、无跳过；构建/前端语法/git diff检查通过。单元网络/文件错误用夹具，无真实模型调用。
+
+真实远端验证独立进行：连接用户指定Serv-U 15.0.1.20，观测主机指纹并固定，不冒充第三方认证；只读取/os/i9100/SQ29MB/SQ29MB修改记录.xlsx。首次下载72681字节，SHA256 ff1569af0cc511c6389a284512ec2a340ff34dc2e10be060a67b348597a0c491，ZIP CRC及XLSX关键结构通过；第二次及CLI再次运行均Unchanged、无重复文件。浏览器在隔离数据根真实点击Run now，验证Downloaded→Incoming files计数1、再次Unchanged及持久报告。所有下载/截图/测试日志在.data/debug/sftp-sync/，其中live与ui各自有独立logs/sftp_sync；未写远端、未请求真实模型、未进行Ubuntu/VPS验收。

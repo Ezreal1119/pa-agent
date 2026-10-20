@@ -10,7 +10,7 @@ let token = "",
   polling = false,
   uploading = false,
   maxFileBytes = 100 * 1048576;
-const tabNames = ["incoming", "reports", "delete"];
+const tabNames = ["incoming", "reports", "delete", "imports"];
 const requestedTab = new URLSearchParams(location.search).get("tab");
 let activeTab = tabNames.includes(requestedTab)
   ? requestedTab
@@ -41,7 +41,7 @@ const statusLabel = (value) =>
     needs_review: "Needs review",
     waiting_to_publish: "Publishing",
     awaiting_confirmation: "Awaiting confirmation",
-  })[value] || value.charAt(0).toUpperCase() + value.slice(1);
+  })[value] || (value.charAt(0).toUpperCase() + value.slice(1)).replaceAll("_", " ");
 const el = (tag, text, cls) => {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
@@ -445,6 +445,7 @@ async function refresh() {
   try {
     await incoming();
     await loadHistory();
+    await refreshImports();
   } finally {
     polling = false;
   }
@@ -540,6 +541,55 @@ dropZone.ondrop = (e) => {
   if (e.dataTransfer?.files.length)
     action(() => uploadFiles(e.dataTransfer.files));
 };
+let selectedImport, importCache = "", importHistoryCache = "", importStarting = false;
+async function importApi(route, method = "GET", body) {
+  const res = await fetch(`/api/sftp-sync/${route}`, {method, headers:{"X-Local-Token":token, ...(body ? {"Content-Type":"application/json"} : {})}, body:body ? JSON.stringify(body) : undefined});
+  if (res.status === 401) {location.href = "/login"; throw Error("Please sign in.");}
+  const data = await res.json(); if (!res.ok) throw Error(data.error || "Import request failed."); return data;
+}
+async function refreshImports() {
+  const state = await importApi("status");
+  $("import-config").textContent = !state.configured ? `Set ${state.missing.join(", ")} in .env, then restart.` : (state.recoveryError || state.listError) ? (state.recoveryError || state.listError) : `${state.paths} configured ${state.paths === 1 ? "path" : "paths"}${state.invalid ? ` · ${state.invalid} invalid lines` : ""}`;
+  $("import-paths").textContent = state.pathsFile;
+  $("import-run").disabled = importStarting || !!state.running || !state.configured || !!state.listError || (!state.paths && !state.invalid);
+  $("import-run").textContent = state.running ? "Import running…" : "Run now →";
+  const reports = state.reports;
+  if (!selectedImport && reports.length) selectedImport = state.running || reports[0].id;
+  const key = JSON.stringify({reports, selectedImport});
+  if (key !== importHistoryCache) {
+    importHistoryCache = key; $("import-history").replaceChildren();
+    for (const run of reports) {
+      const b = button("", async () => {selectedImport=run.id; importCache=""; await refreshImports();}, "sync-history-item");
+      b.append(el("strong", "SFTP import"), el("time", dateLabel(run.created)), badge(run.status), el("small",Object.entries(run.counts).map(([s,n])=>`${n} ${s.replaceAll("_"," ")}`).join(" · ")));
+      if (run.id === selectedImport) {b.classList.add("selected"); b.setAttribute("aria-current","true");}
+      $("import-history").append(b);
+    }
+  }
+  if (!selectedImport) return;
+  const run = await importApi(`runs/${selectedImport}`), encoded=JSON.stringify(run);
+  if (encoded === importCache) return; importCache=encoded;
+  const holder=$("import-report"); holder.replaceChildren();
+  const heading=el("div",undefined,"sync-report-heading"), title=el("div");
+  title.append(el("h3","Import report"), badge(run.status)); heading.append(title);
+  if (run.status === "running") heading.append(button("Stop",()=>importApi(`runs/${run.id}/stop`,"POST",{})));
+  holder.append(heading,el("p",dateLabel(run.created),"sync-report-date"));
+  if (run.error) holder.append(el("p",run.error,"sync-file-error"));
+  for (const item of run.items) {
+    const card=el("details",undefined,"sync-card"), summary=el("summary"), body=el("div",undefined,"sync-card-body");
+    card.open=["failed","interrupted"].includes(item.status);
+    summary.append(el("span",item.path || `JSONL line ${item.line}`,"sync-card-title"),badge(item.status));
+    body.append(el("p",`Line ${item.line} · ${item.attempts} ${item.attempts === 1 ? "attempt" : "attempts"}${item.bytes!==undefined?` · ${fileSize(item.bytes)}`:""}`));
+    if (item.error) body.append(el("p",item.error,"sync-file-error"));
+    if (item.target) body.append(el("p",`Incoming file: ${item.target}`));
+    if (item.hash) body.append(el("code",`SHA256 ${item.hash}`));
+    card.append(summary,body); holder.append(card);
+  }
+}
+$("import-run").onclick=()=>action(async()=>{
+  if (importStarting) return; importStarting=true; $("import-run").disabled=true;
+  try {const run=await importApi("runs","POST",{}); selectedImport=run.id;importCache="";}
+  finally {importStarting=false;}
+});
 (async () => {
   try {
     const response = await fetch("/api/auth/status"),

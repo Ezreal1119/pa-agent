@@ -48,7 +48,7 @@
             <div id="config-banner" class="config-banner" hidden><span>Configure the model connection in .env, then restart the service.</span><button id="banner-settings">Agent settings →</button></div>
             <div id="run-note" class="run-note" role="status" hidden></div>
             <section id="attachment-area" class="attachment-area" aria-label="Message attachments" hidden>
-              <div class="attachment-heading"><button id="upload-file" type="button">＋ Upload files</button><span id="file-support"></span><input id="file-input" type="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp" multiple hidden></div>
+              <div class="attachment-heading"><button id="upload-file" type="button">＋ Upload files</button><span id="file-support"></span><input id="file-input" type="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp,.txt,.md,.markdown,.log,.java,.json,.jsonl,.csv,.tsv,.html,.htm,.xml,.yaml,.yml,.py,.js,.ts,.jsx,.tsx,.mjs,.cjs,.css,.sql,.c,.h,.cpp,.hpp,.go,.rs,.ini,.conf,.cfg,.properties" multiple hidden></div>
               <div id="attachment-list" class="attachment-list"></div>
               <p id="attachment-hint" class="attachment-hint" hidden></p>
               <details id="session-files" class="session-files" hidden><summary>Conversation files and outputs</summary><div id="session-file-list" class="attachment-list"></div></details>
@@ -148,7 +148,7 @@
         <div id="memory-injection-changes"></div>
         <p id="memory-injection-usage" class="settings-help"></p>
       </section>
-      <div class="dialog-actions memory-injection-actions"><button id="memory-injection-cancel" type="button" class="secondary-button">Close</button><button id="memory-injection-confirm" type="button" class="primary-button" hidden>Confirm injection <span>↗</span></button></div>
+      <div class="dialog-actions memory-injection-actions"><button id="memory-injection-download" type="button" class="secondary-button">Download Memory File</button><button id="memory-injection-cancel" type="button" class="secondary-button">Close</button><button id="memory-injection-confirm" type="button" class="primary-button" hidden>Confirm injection <span>↗</span></button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="alert" hidden></div>

@@ -1059,3 +1059,9 @@
 .sync-tabs > button {
   flex-shrink: 0;
 }
+
+.sftp-status { padding: 0 28px 24px; overflow-wrap: anywhere; }
+#import-report { min-width: 0; }
+#import-report code { display: block; overflow-wrap: anywhere; font-size: 11px; }
+.sync-badge[data-status="completed_with_errors"], .sync-badge[data-status="not_attempted"] { background: #fcf0e9; color: #a3674b; }
+@media (max-width: 600px) { .sftp-status { padding: 0 20px 20px; } }
