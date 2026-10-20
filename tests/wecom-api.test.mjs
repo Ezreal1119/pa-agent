@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -16,7 +17,7 @@ function modelReply(res,text='独立回答'){
 }
 async function setup(t,limits={}){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-api-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});
- await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRODUCT RULE');await fs.writeFile(path.join(dataDir,'urovo-product-expert/MEMORY.md'),'PRODUCT MEMORY');
+ await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRODUCT RULE');await writeMemoryFixture(dataDir,'urovo-product-expert','PRODUCT MEMORY');
  let handler;let requestCount=0;const model=createServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);requestCount++;if(handler)return handler(body,res);modelReply(res);});model.listen(0,'127.0.0.1');await once(model,'listening');
  const options={cwd:root,dataDir,bridgeToken:TOKEN,admin:{account:'admin',password:'password'},model:{apiKey:'FAKE_TEST_KEY',modelId:'fixture',baseUrl:`http://127.0.0.1:${model.address().port}/v1`},...limits};
  let app,base,api;

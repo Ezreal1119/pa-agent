@@ -1,6 +1,7 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, stat, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, stat, symlink, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ExtraMemoryStore, extraMemoryContext } from '../dist/agent/extra-memory.js';
@@ -8,12 +9,14 @@ import { ExtraMemoryStore, extraMemoryContext } from '../dist/agent/extra-memory
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'extra-memory-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  for (const name of ['ums-expert', 'urovo-product-expert']) { await mkdir(path.join(root, name)); await writeFile(path.join(root, name, 'MEMORY.md'), `UNTOUCHABLE_${name}`); }
+  for (const name of ['ums-expert', 'urovo-product-expert']) await writeMemoryFixture(root, name, `UNTOUCHABLE_${name}`);
   return { root, store: new ExtraMemoryStore(root) };
 }
 
 test('fixed-file add/edit/delete preserve format, creation metadata, backups and both skill memories', async t => {
   const {root, store} = await fixture(t);
+  assert.equal(store.file, path.join(root,'memory/urovo-product-expert/MEMORY_EXTRA.md'));
+  await writeFile(path.join(root,'memory/MEMORY.md'),'LEGACY EXTRA MUST NOT BE USED');
   const empty = await store.snapshot(); assert.equal(empty.text, ''); await assert.rejects(stat(store.file), {code:'ENOENT'});
   const added = await store.change({action:'add', expected_revision:empty.revision, content:'需要记住的内容\n\n- 支持 Markdown', kind:'preference'});
   assert.match(added.id, /^mem_[a-f0-9]{16}$/); assert.equal(added.entry.email, 'unknown@email.com'); assert.match(added.entry.created, /\+08:00$/);
@@ -26,7 +29,8 @@ test('fixed-file add/edit/delete preserve format, creation metadata, backups and
   assert.equal((await store.snapshot()).text.trim(),'# Skill Memories'); assert.ok(!(await readFile(store.file,'utf8')).includes('## Memory'));
   assert.equal((await readdir(path.join(root,'maintenance-backups/extra-memory'))).length,3);
   assert.ok(deleted.revision);
-  for (const name of ['ums-expert','urovo-product-expert']) assert.equal(await readFile(path.join(root,name,'MEMORY.md'),'utf8'),`UNTOUCHABLE_${name}`);
+  for (const name of ['ums-expert','urovo-product-expert']) assert.equal(await readFile(memoryFixturePath(root,name),'utf8'),`UNTOUCHABLE_${name}`);
+  assert.equal(await readFile(path.join(root,'memory/MEMORY.md'),'utf8'),'LEGACY EXTRA MUST NOT BE USED');
 });
 
 test('parallel writers cannot clobber one another and unrelated entries retain their raw bytes', async t => {
@@ -59,11 +63,16 @@ test('invalid content, unknown IDs, stale revisions, malformed files and cancell
 });
 
 test('memory file, memory directory and backup directory symlinks cannot reach skill files', async t => {
-  const {root,store} = await fixture(t); const protectedFile=path.join(root,'urovo-product-expert/MEMORY.md');
-  await mkdir(path.join(root,'memory'));await symlink(protectedFile,store.file);
-  await assert.rejects(store.snapshot());await rm(store.file);await rm(path.join(root,'memory'),{recursive:true});await symlink(path.join(root,'urovo-product-expert'),path.join(root,'memory'));
-  await assert.rejects(store.snapshot(),/symlinks/);await rm(path.join(root,'memory'));
-  const snapshot=await store.snapshot();await symlink(path.join(root,'urovo-product-expert'),path.join(root,'maintenance-backups'));
+  const {root,store} = await fixture(t); const protectedFile=memoryFixturePath(root);
+  await symlink(protectedFile,store.file);
+  await assert.rejects(store.snapshot());await rm(store.file);
+  for (const directory of [path.dirname(store.file), path.join(root,'memory')]) {
+    const saved=path.join(root,'memory-saved');
+    await rename(directory,saved);await symlink(saved,directory);
+    await assert.rejects(store.snapshot(),/symlinks/);
+    await rm(directory);await rename(saved,directory);
+  }
+  const snapshot=await store.snapshot();await symlink(path.dirname(protectedFile),path.join(root,'maintenance-backups'));
   await assert.rejects(store.change({action:'add',expected_revision:snapshot.revision,content:'blocked backup write'}),/symlinks/);
   assert.equal(await readFile(protectedFile,'utf8'),'UNTOUCHABLE_urovo-product-expert');
   await assert.rejects(stat(store.file),{code:'ENOENT'});

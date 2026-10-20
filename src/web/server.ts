@@ -19,6 +19,7 @@ import { WebOriginPolicy, RequestOriginError } from "./origin.js";
 import { BridgeAccess } from "./bridge-access.js";
 import { RunGate, boundedSetting } from "./run-gate.js";
 import { ExtraMemoryStore, EXTRA_MEMORY_SECTION } from "../agent/extra-memory.js";
+import { mainMemoryFile } from "../agent/memory-paths.js";
 import { fileToolConfig, FILE_TOOL_NAMES, type FileToolOptions } from "../file-tools/config.js";
 import { generatedFiles } from "../file-tools/outputs.js";
 import { FileStore } from "../file-tools/store.js";
@@ -128,7 +129,7 @@ export async function createWebServer(options: WebOptions = {}) {
   async function resources() {
     return Promise.all(DEFAULT_SKILLS.map(async name => ({ name, files: await Promise.all(["SKILL.md", "MEMORY.md"].map(async file => {
       try {
-        const text = await fs.readFile(path.join(dataDir, name, file), "utf8");
+        const text = await fs.readFile(file === "MEMORY.md" ? mainMemoryFile(dataDir, name) : path.join(dataDir, name, file), "utf8");
         return { file, ready: Boolean(text.trim()), bytes: Buffer.byteLength(text) };
       } catch { return { file, ready: false, bytes: 0 }; }
     })) })));

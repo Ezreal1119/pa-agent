@@ -74,24 +74,27 @@ The configured data directory (`AGENT_DATA_DIR`, default `.data/`) contains the 
 │   └── references/...
 ├── urovo-product-expert/
 │   ├── SKILL.md
-│   ├── MEMORY.md
 │   ├── product-knowledge-vault/...
 │   └── <product>/...
+├── memory/
+│   └── urovo-product-expert/
+│       ├── MEMORY.md         required, read-only main memory
+│       └── MEMORY_EXTRA.md   optional, writable by the memory tool
 ├── agent/
 └── sessions/
 ```
 
-Only `urovo-product-expert/SKILL.md` and `urovo-product-expert/MEMORY.md` are required and read anew for each user request, including resumed sessions. The product expert’s absolute root and full contents are injected at the model request boundary. All model/tool steps within that run share the same snapshot; edits take effect on the next request without restarting the runtime. Missing, unreadable, or empty files stop execution before inference. They are not repeatedly appended to the persisted transcript. Business memory is data; it does not grant tool permissions.
+Only `urovo-product-expert/SKILL.md` and `memory/urovo-product-expert/MEMORY.md` are required and read anew for each user request, including resumed sessions. The product expert’s absolute root and full contents are injected at the model request boundary. All model/tool steps within that run share the same snapshot; edits take effect on the next request without restarting the runtime. Missing, unreadable, or empty files stop execution before inference. They are not repeatedly appended to the persisted transcript. Business memory is data; it does not grant tool permissions.
 
 Both skill templates instruct the model to omit sources, file paths, citation markers, and reference lists from final answers unless the user explicitly requests sources or references. Retrieval and verification still happen internally, and relevant uncertainty or conflicting facts should still be explained. This is a skill instruction rather than a frontend filter; it does not rewrite earlier replies.
 
-Versioned skill templates live in `resources/skills/`. Deploy the product template and its knowledge/memory under its data directory. Optionally deploy `ums-expert/SKILL.md` and `references/`; the SDK advertises its name, description and actual deployed file path, and the agent reads its body with `read` when the user asks a relevant UMS question. UMS has no dedicated MEMORY loading step, and missing UMS files do not block product runs. An existing UMS MEMORY is retained on disk but no longer automatically read or injected. Runtime edits use the `.data/` copies; templates do not automatically overwrite them. Use configured roots rather than Mac-specific absolute paths when deploying to Linux.
+Versioned skill templates live in `resources/skills/`. Deploy the product template and its knowledge under `urovo-product-expert/`, with main memory under `memory/urovo-product-expert/MEMORY.md`. Optionally deploy `ums-expert/SKILL.md` and `references/`; the SDK advertises its name, description and actual deployed file path, and the agent reads its body with `read` when the user asks a relevant UMS question. UMS has no dedicated MEMORY loading step, and missing UMS files do not block product runs. An existing UMS MEMORY is retained on disk but no longer automatically read or injected. Runtime edits use the `.data/` copies; templates do not automatically overwrite them. Use configured roots rather than Mac-specific absolute paths when deploying to Linux.
 
 Knowledge, business memories, session history, maintenance backups, and `.env` remain Git-ignored. Only code and generic skill templates belong in Git. New and resumed sessions enable Pi's built-in `read`, `grep`, `find`, and `ls`, plus the narrowly scoped `memory` tool. The independent `get_file_link_from_library` switch defaults on (six tools total when on, five when off). Optional `search` / `fetch` online tools default off and add up to two tools when enabled. Bash, PowerShell, general edit, and write are unavailable, even if the model requests an old tool from session history. Searches use tool parameters rather than shell commands/pipelines; `find` uses fd and `grep` uses ripgrep, installed or resolved by the SDK. This limits agent capabilities, but is not a filesystem sandbox: readable paths are not confined to the knowledge roots, and OS/container read-only mounts have not been added. Session/log persistence and retention continue to write from application code, independently of model tools.
 
 ### Shared extra agent memory
 
-In addition to the product skill memory, every run injects the full `<dataDir>/memory/MEMORY.md` in a separate system section, once per model request. An empty/missing extra file is valid and is not rewritten on startup; the first successful add initializes it. A run keeps its initial snapshot across tool/model steps, and the next run reloads the latest file. The extra memory is shared across this runtime's conversations and is not part of the session's 30-day retention. The product skill memory and any retained legacy skill memories remain read-only.
+In addition to the product skill memory, every run injects the full `<dataDir>/memory/urovo-product-expert/MEMORY_EXTRA.md` in a separate system section, once per model request. An empty/missing extra file is valid and is not rewritten on startup; the first successful add initializes it. A run keeps its initial snapshot across tool/model steps, and the next run reloads the latest file. The extra memory is shared across this runtime's conversations and is not part of the session's 30-day retention. The product skill memory and any retained legacy skill memories remain read-only.
 
 The single `memory` tool operates only on this fixed extra file. Its `action` parameter selects one of three operations; there is no path parameter or list/get action:
 
@@ -101,7 +104,7 @@ The single `memory` tool operates only on this fixed extra file. Its `action` pa
 | `edit` | `id`, `content`, optional `kind`, `expected_revision` | Replace one entry's body; preserve ID, creator and creation time; update modification time |
 | `delete` | `id`, `expected_revision` | Remove one entry from this file; do not supply `content` or `kind`; never delete a skill entry or the whole file |
 
-Only the name `memory` is registered. The earlier `memory_add`/`memory_edit`/`memory_delete` names are no longer callable; their existing session records remain viewable. Memory files, IDs, revisions and backup formats are unchanged.
+Only the name `memory` is registered. The earlier `memory_add`/`memory_edit`/`memory_delete` names are no longer callable; their existing session records remain viewable. Entry IDs, revisions and backup formats are unchanged. Memory paths now use `memory/urovo-product-expert/{MEMORY,MEMORY_EXTRA}.md`; see [the migration steps](docs/memory-layout-migration.md). Legacy paths are not read, copied, merged or removed automatically.
 
 The file uses the same `# Skill Memories`, `## Memory mem_…`, `Kind`, `Created-By-Email`, `Created`, `Updated`, and `### Content` format as the product skill memory. New timestamps use `+08:00`. Tool content must be nonempty, at most 64,000 characters, and cannot contain reserved `## Memory` entry headings or NUL. Arbitrary existing text is still injected, but mutation refuses malformed/duplicate entry structures rather than rewriting them.
 

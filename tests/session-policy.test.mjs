@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat, utimes, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,9 +17,9 @@ async function fixture(t) {
   for (const name of ['ums-expert', 'urovo-product-expert']) {
     await mkdir(path.join(dataDir, name), { recursive: true });
     await writeFile(path.join(dataDir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: Fixture\n---\n${name}-RULE-v1`);
-    await writeFile(path.join(dataDir, name, 'MEMORY.md'), `${name}-MEMORY-v1`);
+    await writeMemoryFixture(dataDir, name, `${name}-MEMORY-v1`);
   }
-  await mkdir(path.join(dataDir, 'memory')); await writeFile(path.join(dataDir, 'memory/MEMORY.md'), 'extra-MEMORY-v1');
+  await mkdir(path.join(dataDir, 'memory'), {recursive: true}); await writeFile(path.join(dataDir, 'memory/urovo-product-expert/MEMORY_EXTRA.md'), 'extra-MEMORY-v1');
   const requests = [];
   let handle;
   const server = createServer(async (req, res) => {
@@ -72,8 +73,8 @@ test('each run injects the product skill and memory while UMS stays on demand; s
   for (let n = 1; n <= 7; n++) {
     if (n === 3) {
       await writeFile(path.join(f.dataDir, 'urovo-product-expert', 'SKILL.md'), 'urovo-product-expert-RULE-v2');
-      await writeFile(path.join(f.dataDir, 'urovo-product-expert', 'MEMORY.md'), 'urovo-product-expert-MEMORY-v2');
-      await writeFile(path.join(f.dataDir, 'memory/MEMORY.md'), 'extra-MEMORY-v2');
+      await writeFile(memoryFixturePath(f.dataDir), 'urovo-product-expert-MEMORY-v2');
+      await writeFile(path.join(f.dataDir, 'memory/urovo-product-expert/MEMORY_EXTRA.md'), 'extra-MEMORY-v2');
     }
     await session.prompt(`question-${n}`);
     const body = f.requests.at(-1);
@@ -112,8 +113,8 @@ test('tool steps retain matched calls/results and use one knowledge snapshot unt
   f.setHandler(async body => {
     if (!toolSent) {
       toolSent = true;
-      await writeFile(path.join(f.dataDir, 'urovo-product-expert', 'MEMORY.md'), 'urovo-product-expert-MEMORY-v2');
-      await writeFile(path.join(f.dataDir, 'memory/MEMORY.md'), 'extra-MEMORY-v2');
+      await writeFile(memoryFixturePath(f.dataDir), 'urovo-product-expert-MEMORY-v2');
+      await writeFile(path.join(f.dataDir, 'memory/urovo-product-expert/MEMORY_EXTRA.md'), 'extra-MEMORY-v2');
       return { tool: source };
     }
     assert.equal(body.messages.at(-1).role, 'tool');
@@ -148,10 +149,11 @@ test('missing required resources fail before inference, and concurrent preflight
   await assert.rejects(session.prompt('two'), /already running/);
   await first;
   const count = f.requests.length;
-  await rm(path.join(f.dataDir, 'urovo-product-expert', 'MEMORY.md'));
+  await writeFile(path.join(f.dataDir, 'urovo-product-expert', 'MEMORY.md'), 'legacy must not be used as fallback');
+  await rm(memoryFixturePath(f.dataDir));
   await assert.rejects(session.prompt('missing-memory'), /ENOENT/);
   assert.equal(f.requests.length, count);
-  await writeFile(path.join(f.dataDir, 'urovo-product-expert', 'MEMORY.md'), 'restored');
+  await writeFile(memoryFixturePath(f.dataDir), 'restored');
   await rm(path.join(f.dataDir, 'urovo-product-expert', 'SKILL.md'));
   await assert.rejects(session.prompt('missing-skill'), /ENOENT/);
   assert.equal(f.requests.length, count);

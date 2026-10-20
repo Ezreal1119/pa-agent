@@ -7,7 +7,7 @@ description: Answer UROVO product specifications, comparisons, selection, tender
 
 ## Runtime and sources
 
-The runtime injects this entire skill and its current `MEMORY.md` at the start of every user run. Use the absolute **Root** supplied beside this skill; it defaults to `.data/urovo-product-expert/` under the configured data directory. All paths below are relative to that root. Do not use the old `skills/urovo-product-expert/` location.
+The runtime injects this entire skill and its current `MEMORY.md` at the start of every user run. The memory is stored separately at `.data/memory/urovo-product-expert/MEMORY.md`; use the absolute **Source** in its injected section rather than resolving memory relative to the skill root. Use the absolute **Root** supplied beside this skill; it defaults to `.data/urovo-product-expert/` under the configured data directory. All paths below are relative to that root. Do not use the old `skills/urovo-product-expert/` location.
 
 Use the read-only tools `read` (file contents, with offset/limit), `grep` (content search, with context/limit), `find` (file glob search, with limit), and `ls` (directory listing). Set search paths to the supplied skill root or its relevant subdirectory. For several filename patterns, call `find` separately or use a supported glob; limit results through tool parameters. There is no Bash, shell pipeline, `edit`, `write`, `skill_read`, `file_search`, or `skill_read_resource` tool in this agent.
 

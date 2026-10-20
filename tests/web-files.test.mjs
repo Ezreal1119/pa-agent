@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
@@ -21,7 +22,7 @@ function reply(res,tool,text='完成测试') {
 }
 async function setup(t,enabled=true,fileOptions={}) {
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'expert-web-files-'));const dataDir=path.join(root,'.data');await fixtures(path.join(root,'fixtures'));
- for(const name of ['ums-expert','urovo-product-expert']) { await fs.mkdir(path.join(dataDir,name),{recursive:true});await fs.writeFile(path.join(dataDir,name,'SKILL.md'),'BUSINESS SKILL');await fs.writeFile(path.join(dataDir,name,'MEMORY.md'),'BUSINESS MEMORY'); }
+ for(const name of ['ums-expert','urovo-product-expert']) { await fs.mkdir(path.join(dataDir,name),{recursive:true});await fs.writeFile(path.join(dataDir,name,'SKILL.md'),'BUSINESS SKILL');await writeMemoryFixture(dataDir,name,'BUSINESS MEMORY'); }
  let handler;const payloads=[];const model=createServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);payloads.push(body);if(handler)return handler(body,res);reply(res);});model.listen(0,'127.0.0.1');await once(model,'listening');
  const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},model:{apiKey:'MAIN_TEST_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'},fileTools:{enabled,...fileOptions}};
  let app,url,token,cookie;

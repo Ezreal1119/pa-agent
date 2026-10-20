@@ -54,9 +54,11 @@ npm run test:sync
 
 `check:sync` 只检查依赖及配置是否存在，不输出密钥，不请求模型，不改知识库。`test:sync` 使用临时知识库、真实文件转换和模拟模型/视觉接口；MarkItDown 不在默认虚拟环境时可用 `FILE_TEST_MARKITDOWN` 指定。依赖缺失会明确跳过真实转换测试或使对应转换测试失败，不代表完整通过。
 
+Sync 文本维护与聊天共用 `.env` 中的 `MODEL_ID`、`BASE_URL` 和 `API_KEY`，沿用全局思考强度及现有上下文/输出上限，不单独指定模型。视觉转换继续使用 `.env` 中已有的 `VISION_LLM_*` 配置。
+
 `.env` 必须有原模型配置、`MARKITDOWN_COMMAND=/opt/ProductExpertCloud/.data/file-runtime/bin/markitdown` 和现有的 `VISION_LLM_BASE_URL`、`VISION_LLM_API_KEY`、`VISION_LLM_MODEL`。`SYNC_SOFFICE_COMMAND=soffice` 可保持默认。预算字段不写入时使用默认值。纯文本和无视觉对象的 Excel 可不调用视觉模型。
 
-本次 unit 移除了整个产品知识目录的只读挂载，保留根 SKILL/MEMORY/SYNC_PROMPT、UMS 和 Python 运行环境的只读保护；代码校验另外禁止修改任意层级的 SKILL/MEMORY。原有额外业务记忆工具的权限不变。
+本次 unit 移除了整个产品知识目录的只读挂载，保留产品根 SKILL/SYNC_PROMPT、`.data/memory/urovo-product-expert/MEMORY.md`、UMS 和 Python 运行环境的只读保护；代码校验另外禁止修改任意层级的 SKILL/MEMORY。原有额外业务记忆工具的权限不变。
 
 先检查 `systemctl cat product-expert.service`。使用仓库模板的非 root 部署可更新模板；**此前使用 root 运行并手工修改过 unit 的，须保留现有 User/Group 配置**，只同步 ReadOnlyPaths 与 TasksMax 的变化，不能直接覆盖账号设置：
 

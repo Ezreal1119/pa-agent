@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
+import { extraMemoryFile, MEMORY_DIRECTORY_PARTS } from "./memory-paths.js";
 
 const queues = new Map<string, Promise<unknown>>();
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -39,7 +40,7 @@ function render(entry: Pick<Entry, "id" | "kind" | "email" | "created" | "update
 export class ExtraMemoryStore {
   readonly file: string;
   private readonly root: string;
-  constructor(dataDir: string) { this.root = path.resolve(dataDir); this.file = path.join(this.root, "memory/MEMORY.md"); }
+  constructor(dataDir: string) { this.root = path.resolve(dataDir); this.file = extraMemoryFile(this.root); }
   private async directory(parts: string[], create: boolean): Promise<string | undefined> {
     let current = this.root;
     for (const part of parts) {
@@ -53,7 +54,7 @@ export class ExtraMemoryStore {
   }
   async snapshot() {
     let text = "";
-    if (await this.directory(["memory"], false)) {
+    if (await this.directory(MEMORY_DIRECTORY_PARTS, false)) {
       const file = await fs.open(this.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
       if (file) {
         try {
@@ -96,18 +97,18 @@ export class ExtraMemoryStore {
       ? `${before.text.trim() ? before.text.trimEnd() : "# Skill Memories"}\n\n${render(entry)}`
       : before.text.slice(0, existing!.start) + (input.action === "edit" ? render(entry) : "") + before.text.slice(existing!.end);
     parse(next);
-    const directory = (await this.directory(["memory"], true))!;
+    const directory = (await this.directory(MEMORY_DIRECTORY_PARTS, true))!;
     const backupDir = (await this.directory(["maintenance-backups", "extra-memory"], true))!;
     const backup = path.join(backupDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(6).toString("hex")}.md`);
     await fs.writeFile(backup, before.text, { flag: "wx", mode: 0o600 });
-    const temporary = path.join(directory, `.MEMORY-${randomBytes(12).toString("hex")}.tmp`);
+    const temporary = path.join(directory, `.MEMORY_EXTRA-${randomBytes(12).toString("hex")}.tmp`);
     try {
       const handle = await fs.open(temporary, "wx", 0o600);
       try { await handle.writeFile(next); await handle.sync(); } finally { await handle.close(); }
       signal?.throwIfAborted();
       const current = await this.snapshot();
       if (current.revision !== before.revision) throw conflict(current);
-      await this.directory(["memory"], false);
+      await this.directory(MEMORY_DIRECTORY_PARTS, false);
       await fs.rename(temporary, this.file);
     } finally { await fs.rm(temporary, { force: true }); }
     return { action: input.action, id: entry.id, revision: hash(next), backup, ...(input.action === "delete" ? {} : { entry }) };

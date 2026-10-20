@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -93,7 +94,7 @@ function reply(res,toolName){
 
 test('Web and WeCom share persistent individual online switches, registered prompts, calls and original session history',{timeout:30000},async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'online-tools-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});
- await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRIVATE_SKILL_SENTINEL');await fs.writeFile(path.join(dataDir,'urovo-product-expert/MEMORY.md'),'PRIVATE_MEMORY_SENTINEL');
+ await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRIVATE_SKILL_SENTINEL');await writeMemoryFixture(dataDir,'urovo-product-expert','PRIVATE_MEMORY_SENTINEL');
  let active=[],error;const payloads=[];const model=createServer(async(req,res)=>{
   try{
    let text='';for await(const part of req)text+=part;const body=JSON.parse(text);payloads.push(body);

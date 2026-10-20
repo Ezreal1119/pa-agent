@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extraMemoryContext } from "./extra-memory.js";
+import { mainMemoryFile } from "./memory-paths.js";
 
 export const DEFAULT_SKILLS = ["urovo-product-expert"] as const;
 export const ON_DEMAND_SKILLS = ["ums-expert"] as const;
@@ -29,7 +30,7 @@ export async function loadRunKnowledge(dataDir: string): Promise<string> {
     const skill = await fs.readFile(skillFile, "utf8");
     if (!skill.trim()) throw new Error(`Required skill is empty: ${skillFile}`);
     sections.push(`## Skill: ${name}\nRoot: ${root}\n\n${skill}`);
-    const memoryFile = path.join(root, "MEMORY.md");
+    const memoryFile = mainMemoryFile(dataDir, name);
     const memory = await fs.readFile(memoryFile, "utf8");
     if (!memory.trim()) throw new Error(`Memory is empty: ${memoryFile}`);
     sections.push(`## Business memory: ${name}\nSource: ${memoryFile}\n\n${memory}`);

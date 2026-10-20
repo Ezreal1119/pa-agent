@@ -4,13 +4,15 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Synchronize 文本维护与聊天共用.env的MODEL_ID/BASE_URL/API_KEY；曾临时指定Pro的改动已按用户要求撤回，视觉继续沿用.env中VISION_LLM_*。见2026-10-20维护模型回退记录。
+
 - Synchronize 视觉分块在完整覆盖后停止，末块贴边，避免额外细条触发视觉HTTP400；错误报告加入区域与脱敏后的接口原因，转换缓存版本更新。见2026-10-20切图修复记录。
 
 - Synchronize 后续调整为三个独立 Tab，忽略 README.md；维护上传单独固定100MiB，聊天30MiB保持原配置，无需新增环境变量。见2026-10-20后续记录。
 
 - 新增管理员 Synchronize 独立页面及 `/api/sync/*`：手动导入、维护专用 Pi Agent、完整转换与视觉覆盖、索引校验和事务发布、报告反馈/Re-Sync、自然语言删除预览确认。共享知识读写锁，问答工具排除未发布目录。原生 LibreOffice/fontconfig 依赖、systemd 保护范围调整及 `check:sync`/`test:sync`。见 2026-10-20 记录。
 
-- ProductExpertCloud 默认仅要求 `.data/urovo-product-expert/` 的 `SKILL.md` 和 `MEMORY.md`，每轮读取新快照并在模型请求注入完整内容，缺失时在推理前报错。ums-expert 改为可选普通 Skill，按需读取正文，无专属 MEMORY 加载。详见 2026-10-18 UMS 按需记录。
+- ProductExpertCloud 默认要求 `.data/urovo-product-expert/SKILL.md` 和 `.data/memory/urovo-product-expert/MEMORY.md`，每轮读取新快照并在模型请求注入完整内容，缺失时在推理前报错。ums-expert 改为可选普通 Skill，按需读取正文，无专属 MEMORY 加载。详见 2026-10-18 UMS 按需记录。
 - 每次模型上下文最多五轮，包含本次请求；完整保留轮内工具调用关系。过滤历史压缩/分支摘要并关闭自动压缩，避免摘要带回窗口外对话。磁盘历史不按五轮裁剪。
 - 会话文件按最后活动时间保留 30 天，在启动、创建会话及运行中每小时清理。支持显式 cleanup；同进程执行中的 prompt 受保护，过期对象不能静默重建无头日志。仅处理 sessionsDir 内已识别的 JSONL，会话目录由一个服务进程独占使用。
 - 增加 `AgentRuntime.cleanupSessions()` 和 `dispose()`；保留 SDK Session 返回类型，但安装 prompt 并发检查、上下文策略和模型请求注入。传入 SessionManager 的文件需位于配置的 sessionsDir 下。
@@ -23,7 +25,7 @@
 - Core 新建/恢复会话只启用 Pi 内置 read/grep/find/ls，禁用模型可调用的 Bash、PowerShell、edit、write。两个运行 Skill 与模板改用工具参数检索；可选文件模块启用时另有读取路径限制及文件 worker 隔离，关闭时保留原读取行为。见 2026-10-18 只读工具记录。
 - 两个 Skill 默认仅在用户明确要求时展示来源；Web 新增会话重命名/删除并写入或删除原 JSONL，右侧调试面板全尺寸默认收起，支持按需展开。见 2026-10-18 后续记录。
 - Web 新增 ADMIN_ACCOUNT/ADMIN_PASSWORD 单管理员登录，页面与 Agent API 需要有效登录 Cookie；保留本地 Token/Host/Origin 校验，未配置管理员时默认拒绝访问。见 2026-10-18 登录记录。
-- 每轮额外注入 `.data/memory/MEMORY.md`，通过单个 memory 工具的 action=add/edit/delete 管理；产品 Skill MEMORY 和保留的历史 UMS MEMORY 均不由该工具写入，基础工具五个，资料库链接检索独立开关默认开启后为六个（可选文件模块再加最多六个）。带版本检查、同进程写入队列、原子保存和备份。见 2026-10-18 额外记忆记录及后续合并修正。
+- 每轮额外注入 `.data/memory/urovo-product-expert/MEMORY_EXTRA.md`，通过单个 memory 工具的 action=add/edit/delete 管理；产品 Skill MEMORY 和保留的历史 UMS MEMORY 均不由该工具写入，基础工具五个，资料库链接检索独立开关默认开启后为六个（可选文件模块再加最多六个）。带版本检查、同进程写入队列、原子保存和备份。见 2026-10-18 额外记忆记录及后续合并修正。
 - 系统提示及 memory.content 参数说明以软约束要求记忆正文标题从三级（###）起步，不新增硬校验或改写已有记忆。见 2026-10-18 标题规范记录。
 
 - 可选文件模块新增六个专用工具及 Web 上传/下载；受控 session 文件存储、串行任务队列、独立视觉配置和 Ubuntu worker 镜像。开关默认关闭，关闭并恢复旧会话仍为基础工具（资料库链接独立开关开启时六个、关闭时五个）；文件模块最多再加八个（新增两个创建工具默认关闭），并收窄原生读取路径。见 2026-10-18 文件工具记录。
@@ -528,3 +530,32 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 修改/兼容性：横纵方向统一使用完整覆盖后停止、最后区域贴齐边缘的偏移规则；每块最大1800像素，至少120像素重叠，不跳过边缘内容。1191×1684及1800×1800只发送整图；1801及更大尺寸分块不产生窄尾条。转换缓存版本2→3，旧转换重建区域，逐区域内容哈希缓存仍可复用；失败条目可直接Re-Sync。维护视觉HTTP失败读取最多64KiB错误正文，报告包含失败区域及最多1000字符的接口错误原因，优先提取JSON错误字段，脱敏API Key、Bearer和图片Base64，不输出整份结构化请求。不改变聊天视觉工具、业务资料、.env、依赖或systemd。
 
 验证：`npm run test:sync`21项通过、无跳过；覆盖1至10000像素的完整覆盖/重叠/无重复区域，真实PDF1191×1684及多种边界PNG的实际视觉请求尺寸、失败保留原件且不生成成功转换缓存、结构化错误原因脱敏和超长流取消。完整`npm test`176项通过、无跳过（约16.6秒），git diff检查通过。视觉接口均为本地模拟，未请求真实模型、未修改正式知识库或部署VPS。日志在`.data/debug/sync-vision-fix/targeted-tests.log`和`full-tests.log`。
+
+
+## 2026-10-20 — Synchronize 文本模型改用 DeepSeek Pro
+
+原因：用户要求Sync使用deepseek-v4-pro，并与现有模型共用API Key。
+
+行为/兼容性：仅维护planner固定覆盖modelId为deepseek-v4-pro，报告同步记录实际文本模型名。继续复用现有BASE_URL/API_KEY、全局思考强度和上下文/输出上限，新增、更新、Re-Sync和删除预览均生效。聊天MODEL_ID及VISION_LLM_*视觉模型保持原样，无新增环境变量、依赖或数据库迁移，未改实际.env；.env.example仅更新说明。
+
+验证：npm run test:sync共21项通过、无跳过（约16.4秒）。真实Pi会话使用本地模拟端点，验证请求model为deepseek-v4-pro、Authorization沿用同一测试Key；管理员HTTP任务报告记录Pro，聊天状态仍保留Flash。其余转换/发布/恢复专项回归通过。未调用真实Pro模型、未部署VPS。日志.data/debug/sync-pro-model/tests.log。
+
+
+## 2026-10-20 — Synchronize 维护模型回退
+
+原因：用户要求撤销上一轮单独指定Pro，统一通过.env管理模型。
+
+行为/兼容性：撤销Sync的deepseek-v4-pro覆盖，planner和报告重新使用共享MODEL_ID/BASE_URL/API_KEY及全局思考强度；视觉仍使用已有.env中的VISION_LLM_*，不新增模型字段。不修改实际.env，不撤销之前的切图修复。前一条Pro记录仅说明当时的临时实现，本条为当前状态。
+
+验证：构建与维护Agent/管理员HTTP两项针对性测试通过、无跳过；验证Sync报告和聊天状态均为同一个配置模型。模拟模型端点，未请求真实模型或部署VPS。日志.data/debug/sync-model-undo/tests.log。
+
+
+## 2026-10-20 — 按Skill集中存放主记忆与额外记忆
+
+原因：用户要求主/额外记忆统一放在.data/memory/<skill_name>，并以Cloud为记忆唯一准源；本轮先改代码，实际文件由用户按指导迁移。
+
+行为/兼容性：产品主记忆必需路径改为.data/memory/urovo-product-expert/MEMORY.md；额外记忆改为同目录MEMORY_EXTRA.md，缺失/空文件仍有效。SKILL和知识根目录不变，UMS仍按需读取且不注入UMS记忆。上下文标题、分段、注入顺序、每轮新快照/同轮固定快照及五轮窗口保持。Web资源状态同步检查新主记忆路径；记忆工具仍仅可操作固定额外文件，无路径参数、不允许主记忆写入，条目格式/ID/作者邮箱/版本并发检查及原子保存/历史备份路径不变。新的两级记忆目录均校验符号链接。旧位置无自动回退/复制/合并/删除，缺少新位置主记忆时在推理前失败，避免读取错误数据源。
+
+部署：systemd主记忆ReadOnlyPaths移到新位置，父目录保持可写供MEMORY_EXTRA原子替换；保留用户root账号和其他保护。.env.example仅更新说明，无新配置或依赖。README/技能模板/部署和Sync说明同步，docs/memory-layout-migration.md提供Cloud停服备份、手动迁移、防覆盖、归属权限、unit调整和重启步骤，提醒停用Mac旧记忆覆盖并从Cloud取本地副本。本轮没有移动本地真实.data、修改.env/本地同步脚本、修改patrick-agent或部署VPS。
+
+验证：记忆/会话/Web针对性49项通过，完整npm test共176项通过，无跳过（约28.2秒）；覆盖实际SDK发送的每轮单份注入、工具轮内快照与下一轮重读、恢复/五轮裁剪、新主记忆缺失且旧文件存在仍拒绝、旧额外文件保持不读不写、主记忆保护/路径覆盖/主记忆ID拒绝、额外文件与两级目录/备份目录符号链接拒绝及Web/WeCom/MCP兼容。均使用隔离数据与模拟模型端点；未用真实记忆或真实模型验证。日志.data/debug/memory-layout/{targeted-tests,full-tests}.log。

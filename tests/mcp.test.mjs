@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -21,7 +22,7 @@ function reply(res,{tool,usage=true,text='Expert answer',prompt=100,completion=7
 }
 async function fixture(t,mcp={}){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'expert-mcp-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});
- for(const file of ['SKILL.md','MEMORY.md'])await fs.writeFile(path.join(dataDir,'urovo-product-expert',file),'PRIVATE_BUSINESS_CONTEXT');
+ await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRIVATE_BUSINESS_CONTEXT');await writeMemoryFixture(dataDir,'urovo-product-expert','PRIVATE_BUSINESS_CONTEXT');
  await fs.writeFile(path.join(root,'.env'),'PRIVATE_LOCAL_ENV=DO_NOT_EXPOSE');
  const requests=[];let handler;let defaultDelay=0;
  const model=createServer(async(req,res)=>{
@@ -88,7 +89,7 @@ test('MCP cannot execute memory/file mutations or read configuration even with f
  });
  for(mode of ['memory','file','env']){const response=await call(client,'ask_product_expert',{question:'Try forbidden action'});assert.equal(response.structuredContent.status,'completed');}
  assert.match(results[0],/not found|not available/i);assert.match(results[1],/not found|not available/i);assert.match(results[2],/outside|denied/i);
- assert.ok(!results.some(text=>text.includes('DO_NOT_EXPOSE')));assert.equal(await fs.readFile(path.join(f.dataDir,'urovo-product-expert/MEMORY.md'),'utf8'),'PRIVATE_BUSINESS_CONTEXT');assert.equal(await fs.stat(path.join(f.dataDir,'memory/MEMORY.md')).catch(()=>null),null);
+ assert.ok(!results.some(text=>text.includes('DO_NOT_EXPOSE')));assert.equal(await fs.readFile(memoryFixturePath(f.dataDir),'utf8'),'PRIVATE_BUSINESS_CONTEXT');assert.equal(await fs.stat(path.join(f.dataDir,'memory/urovo-product-expert/MEMORY_EXTRA.md')).catch(()=>null),null);
 });
 
 test('cancellation preserves partial returned usage and missing usage is explicit, not invented',{timeout:20000},async t=>{

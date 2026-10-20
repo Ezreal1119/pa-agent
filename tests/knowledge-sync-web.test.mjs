@@ -18,6 +18,7 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
     bridgeToken: "bridge-fixture-key-01234567890123456789",
     mcp: { apiKey: "mcp-fixture-key-01234567890123456789" },
     fileTools: { maxFileBytes: 30 * 1048576 },
+    model: {modelId: "deepseek-flash"},
     sync: {
       converter: () => async (source) => ({
         markdown: await fs.readFile(source, "utf8"),
@@ -179,6 +180,8 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
     await new Promise((r) => setTimeout(r, 20));
   }
   assert.equal(job.items[0].status, "needs_review");
+  assert.equal(job.items[0].model, "deepseek-flash");
+  assert.equal((await (await request("/api/status")).json()).model.modelId, "deepseek-flash");
   await app.close();
   url = await start();
   token = (await (await fetch(url + "/api/auth/status")).json()).token;

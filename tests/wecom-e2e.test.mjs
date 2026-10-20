@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -22,7 +23,7 @@ function reply(res,tool){
 }
 test('WeCom transport uses the real Agent/file workers to read PDF DOCX PPTX and return a validated filled Excel', {timeout:120000},async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-e2e-'));const dataDir=path.join(root,'.data');const source=path.join(root,'fixtures');await fixtures(source);
- await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRODUCT RULE');await fs.writeFile(path.join(dataDir,'urovo-product-expert/MEMORY.md'),'PRODUCT MEMORY');
+ await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRODUCT RULE');await writeMemoryFixture(dataDir,'urovo-product-expert','PRODUCT MEMORY');
  const toolResults=[];let assertionsError;
  const model=createServer(async(req,res)=>{
   try{
@@ -56,7 +57,7 @@ test('WeCom transport uses the real Agent/file workers to read PDF DOCX PPTX and
 
 
 test('WeCom text-only questions create new Excel and text files and deliver bytes without model filenames',{timeout:60000},async t=>{
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-create-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});for(const file of ['SKILL.md','MEMORY.md'])await fs.writeFile(path.join(dataDir,'urovo-product-expert',file),'EXPERT');
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-create-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'EXPERT');await writeMemoryFixture(dataDir,'urovo-product-expert','EXPERT');
  const model=createServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);if(body.messages.at(-1).role==='tool')return reply(res);const question=JSON.stringify(body.messages.findLast(m=>m.role==='user'));if(question.includes('Excel'))return reply(res,{name:'excel_create',args:{filename:'comparison.xlsx',sheets:[{name:'Compare',headers:['Model','Screen'],rows:[['DT610',6],['DT630',6.6]]}]}});const ext=question.includes('HTML')?'html':question.includes('Java')?'java':'md';return reply(res,{name:'text_file_create',args:{filename:'output.'+ext,content:ext==='html'?'<h1>中文</h1>':ext==='java'?'public class Example {}':'# 中文'}});});model.listen(0,'127.0.0.1');await once(model,'listening');
  const token='creation-test-token-'.repeat(4);const app=await createWebServer({cwd:root,dataDir,bridgeToken:token,model:{apiKey:'test',modelId:'fixture',baseUrl:`http://127.0.0.1:${model.address().port}/v1`},fileTools:{enabled:true,tools:['excel_create','text_file_create'],workerImage:''}});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
  const store=await new BridgeStore(path.join(dataDir,'wecom')).open();const client={files:[],async replyStream(){},async replyStreamNonBlocking(){},async sendMessage(){},async uploadMedia(buffer,options){this.files.push({buffer,options});return{media_id:randomUUID()};},async replyMedia(){},async sendMediaMessage(){},disconnect(){}};

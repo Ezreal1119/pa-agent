@@ -1,3 +1,4 @@
+import { memoryFixturePath, writeMemoryFixture } from './memory-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ async function fixture(t, configured = true, modelId = "fixture") {
   for (const name of ['ums-expert', 'urovo-product-expert']) {
     await mkdir(path.join(dataDir, name), { recursive: true });
     await writeFile(path.join(dataDir, name, 'SKILL.md'), `${name} RULE`);
-    await writeFile(path.join(dataDir, name, 'MEMORY.md'), `${name} MEMORY`);
+    await writeMemoryFixture(dataDir, name, `${name} MEMORY`);
   }
   const requests = []; let handler; let delayMs = 0;
   const model = createServer(async (req, res) => {
@@ -436,7 +437,7 @@ test('session management rejects active runs and unauthorized mutation requests'
 test('saved session rename/delete do not require loading a model or available knowledge files', async t => {
   const f = await fixture(t); const id = await createSession(f);
   await (await f.request(`/api/sessions/${id}/run`, 'POST', { text: 'saved session' })).text();
-  await rm(path.join(f.root, '.data/urovo-product-expert/MEMORY.md')); await f.restart();
+  await rm(memoryFixturePath(path.join(f.root, '.data'))); await f.restart();
   assert.equal((await f.request(`/api/sessions/${id}`, 'PATCH', { title: 'manage without inference' })).status, 200);
   assert.equal((await f.request(`/api/sessions/${id}`, 'DELETE')).status, 200);
 });
@@ -528,7 +529,7 @@ test('the single memory tool routes all three actions through the SDK, inject on
   const {ExtraMemoryStore}=await import('../dist/agent/extra-memory.js');
   const store=new ExtraMemoryStore(path.join(f.root,'.data'));
   const empty=await store.snapshot();await store.change({action:'add',expected_revision:empty.revision,content:'EXTRA_ORIGINAL_SENTINEL'});
-  const originalSkills=await Promise.all(['ums-expert','urovo-product-expert'].map(name=>readFile(path.join(f.root,'.data',name,'MEMORY.md'),'utf8')));
+  const originalSkills=await Promise.all(['ums-expert','urovo-product-expert'].map(name=>readFile(memoryFixturePath(path.join(f.root,'.data'),name),'utf8')));
   let action='add';let step=0;let entryId;let revision;let seenSystems=[];
   f.setHandler((_req,res,payload)=>{
     const system=payload.messages.filter(m=>m.role==='system'||m.role==='developer').map(m=>m.content).join('\n');seenSystems.push(system);
@@ -553,14 +554,14 @@ test('the single memory tool routes all three actions through the SDK, inject on
   const removed=await run('delete','删除刚才的额外记忆');assert.equal(removed.run.toolCallCount,1);assert.ok(seenSystems.every(s=>s.includes('EXTRA_EDITED_SENTINEL')));
   await run('none','普通问答不修改记忆');assert.ok(seenSystems.every(s=>!s.includes('EXTRA_EDITED_SENTINEL')));
   assert.equal((await store.snapshot()).revision,revision);
-  assert.deepEqual(await Promise.all(['ums-expert','urovo-product-expert'].map(name=>readFile(path.join(f.root,'.data',name,'MEMORY.md'),'utf8'))),originalSkills);
+  assert.deepEqual(await Promise.all(['ums-expert','urovo-product-expert'].map(name=>readFile(memoryFixturePath(path.join(f.root,'.data'),name),'utf8'))),originalSkills);
   const calls=await(await f.request(`/api/sessions/${id}/runs/${added.run.id}/tools`)).json();assert.equal(calls.calls[0].name,'memory');assert.equal(calls.calls[0].status,'completed');
 });
 
 test('memory tool path overrides and skill IDs cannot write skill memories', async t=>{
   const f=await fixture(t);const id=await createSession(f);let sent=false;
   const {ExtraMemoryStore}=await import('../dist/agent/extra-memory.js');const store=new ExtraMemoryStore(path.join(f.root,'.data'));const revision=(await store.snapshot()).revision;
-  const protectedFile=path.join(f.root,'.data/urovo-product-expert/MEMORY.md');const original=await readFile(protectedFile,'utf8');
+  const protectedFile=memoryFixturePath(path.join(f.root,'.data'));const original=await readFile(protectedFile,'utf8');
   f.setHandler((_req,res)=>{
     if(!sent){sent=true;return replyChunks(res,[
       {id:'override-path',name:'memory',args:{action:'add',content:'must not reach a skill',expected_revision:revision,path:protectedFile}},

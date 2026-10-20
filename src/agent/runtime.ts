@@ -241,7 +241,7 @@ export class AgentRuntime {
       sessionManager,
       settingsManager,
       // No shell or general file mutation tools, including in resumed sessions.
-      // The memory tool can only mutate memory/MEMORY.md; unpublished inputs are excluded.
+      // The memory tool can only mutate memory/urovo-product-expert/MEMORY_EXTRA.md; unpublished inputs are excluded.
       tools: ["read", "grep", "find", "ls", ...(options.textOnly ? [] : [MEMORY_TOOL_NAME]), ...onlineTools.map(tool => tool.name), ...(this.config.libraryLinksEnabled ? [LIBRARY_LINK_TOOL_NAME] : []), ...(files ? this.config.fileTools.tools : [])],
       customTools: [...publishedSearchTools(this.config.cwd), ...(options.textOnly ? [] : [createMemoryTool(this.config.dataDir)]), ...onlineTools, ...(this.config.libraryLinksEnabled ? [libraryLinks] : []), ...(files?.tools(sessionManager.getSessionId(), (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file)) ?? [])],
       // Uses the SDK's default reasoning level, clamped when the model supports less.
