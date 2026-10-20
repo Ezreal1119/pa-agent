@@ -9,6 +9,7 @@ import type { FileToolConfig } from "../file-tools/config.js";
 import JSZip from "jszip";
 import { XMLParser } from "fast-xml-parser";
 import { decodeOfficeXml } from "../file-tools/office-xml.js";
+import { tileOffsets } from "./visual-tiles.js";
 const request = JSON.parse(
   await new Promise<string>((resolve) => {
     let s = "";
@@ -226,10 +227,9 @@ async function tiles(
   label: string,
 ) {
   // Bounded overlapping tiles keep dense source text legible without downsampling.
-  const size = 1800,
-    step = 1680;
-  for (let y = 0; y < height; y += step)
-    for (let x = 0; x < width; x += step) {
+  const size = 1800;
+  for (const y of tileOffsets(height))
+    for (const x of tileOffsets(width)) {
       const w = Math.min(size, width - x),
         h = Math.min(size, height - y);
       const canvas = createCanvas(w, h);

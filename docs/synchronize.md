@@ -72,6 +72,14 @@ systemctl status product-expert.service --no-pager
 
 已有 `product-expert.service` 同时管理 HTTP 与维护调度，不新增 service/timer。无需为此更新 WeCom Bridge 的服务文件。2GB VPS 上先用几份小文件验证；内存上限包含所有子进程，复杂大文档可能触发预算/服务内存保护，届时保留输入并缩小文档后重试。
 
+## 视觉切图与失败重试
+
+维护转换的图像区域最长边为1800像素，分块时保持至少120像素重叠，最后一块贴齐边缘；已经完整覆盖的方向不再继续切图。小于等于1800像素的页面/图片只发送整图，不会额外生成底部或右侧的细条区域。
+
+视觉HTTP错误在报告中显示失败区域及经过脱敏、限长的接口错误原因，不显示API Key或图片Base64。失败时仍保留原件，不发布不完整资料。修复前因细条图片报400的条目，在更新代码并重启服务后可直接Re-Sync；转换缓存版本已更新，重新生成正确的区域，未变化且已成功识别的区域可复用。若需要全部重新识别，勾选Reconvert original。
+
+此次修复无需新增依赖、修改.env或systemd配置，聊天image_read等文件工具的行为不变。
+
 ## 管理员 API
 
 所有 `/api/sync/*` 要求管理员 Cookie；写请求需 `X-Local-Token`，保留现有 Host/Origin 检查。MCP key 与 WeCom token 不授予维护权限。

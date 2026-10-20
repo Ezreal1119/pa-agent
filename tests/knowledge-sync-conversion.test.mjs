@@ -26,6 +26,7 @@ test(
     let vision;
     let mode = "complete";
     let calls = 0;
+    const sentImages = [];
     t.after(async () => {
       vision?.closeAllConnections();
       if (vision) await new Promise((r) => vision.close(r));
@@ -52,7 +53,16 @@ test(
         body.messages[1].content[1].image_url.url,
         /^data:image\/png;base64,/,
       );
+      const sentImage = await loadImage(Buffer.from(
+        body.messages[1].content[1].image_url.url.split(",")[1], "base64",
+      ));
+      sentImages.push({width: sentImage.width, height: sentImage.height});
       calls++;
+      if (mode === "http-error") {
+        res.writeHead(400, {"content-type": "application/json"});
+        res.end(JSON.stringify({error: {code: "invalid_image", message: "Image rejected; key=fixture"}}));
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -93,6 +103,20 @@ test(
       128,
       async () => () => {},
     );
+    // Exercise the real worker/canvas and request payloads, not just offset math.
+    for (const [width, height, expected] of [
+      [1191, 1684, [{width: 1191, height: 1684}]],
+      [1800, 1800, [{width: 1800, height: 1800}]],
+      [1801, 1801, Array.from({length: 4}, () => ({width: 1800, height: 1800}))],
+      [3481, 1191, Array.from({length: 3}, () => ({width: 1800, height: 1191}))],
+    ]) {
+      const name = `boundary-${width}-${height}.png`;
+      await fs.writeFile(path.join(root, name), createCanvas(width, height).toBuffer("image/png"));
+      const before = sentImages.length;
+      await convert(path.join(root, name), path.join(root, `out-${name}`),
+        new AbortController().signal, emptyUsage(), async () => {});
+      assert.deepEqual(sentImages.slice(before), expected);
+    }
     for (const name of [
       "sample.pdf",
       "sample.docx",
@@ -174,6 +198,13 @@ test(
       /Missing source font/,
     );
     const { PDFDocument } = await import("pdf-lib");
+    const boundaryPdf = await PDFDocument.create();
+    boundaryPdf.addPage([595.5, 842]);
+    await fs.writeFile(path.join(root, "boundary.pdf"), await boundaryPdf.save());
+    const beforeBoundary = sentImages.length;
+    await convert(path.join(root, "boundary.pdf"), path.join(root, "out-boundary-pdf"),
+      new AbortController().signal, emptyUsage(), async () => {});
+    assert.deepEqual(sentImages.slice(beforeBoundary), [{width: 1191, height: 1684}]);
     const scan = await PDFDocument.create();
     const image = await scan.embedPng(
       await fs.readFile(path.join(root, "image.png")),
@@ -190,6 +221,19 @@ test(
       async () => {},
     );
     assert.match(scanned.markdown, /Visual transcription/);
+    mode = "http-error";
+    await assert.rejects(
+      convert(path.join(root, "image.png"), path.join(root, "http-error"),
+        new AbortController().signal, emptyUsage(), async () => {}),
+      (error) => {
+        assert.match(error.message, /Vision HTTP 400 at Image, region/);
+        assert.match(error.message, /invalid_image; Image rejected/);
+        assert.ok(!error.message.includes("fixture"));
+        return true;
+      },
+    );
+    assert.ok(await fs.stat(path.join(root, "image.png")));
+    await assert.rejects(fs.access(path.join(root, "http-error", "conversion.json")));
     mode = "incomplete";
     await assert.rejects(
       convert(

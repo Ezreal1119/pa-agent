@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { fileQueue } from "../file-tools/runner.js";
 import { visionTokens } from "../web/run-metrics.js";
+import { visionHttpError } from "./vision-http.js";
 import type { FileToolConfig } from "../file-tools/config.js";
 import {
   atomic,
@@ -20,7 +21,7 @@ export type Converter = (
   usage: Usage,
   update: () => Promise<void>,
 ) => Promise<Conversion>;
-export const CONVERSION_VERSION = 2;
+export const CONVERSION_VERSION = 3;
 export function createConverter(
   config: FileToolConfig,
   soffice: string,
@@ -192,8 +193,7 @@ export function createConverter(
             },
           );
           if (!response.ok) {
-            await response.body?.cancel();
-            throw new Error(`Vision HTTP ${response.status}`);
+            throw await visionHttpError(response, image.label, config.vision.apiKey);
           }
           const chunks: Uint8Array[] = [];
           let size = 0;
