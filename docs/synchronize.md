@@ -58,7 +58,7 @@ Sync 文本维护与聊天共用 `.env` 中的 `MODEL_ID`、`BASE_URL` 和 `API_
 
 `.env` 必须有原模型配置、`MARKITDOWN_COMMAND=/opt/ProductExpertCloud/.data/file-runtime/bin/markitdown` 和现有的 `VISION_LLM_BASE_URL`、`VISION_LLM_API_KEY`、`VISION_LLM_MODEL`。`SYNC_SOFFICE_COMMAND=soffice` 可保持默认。预算字段不写入时使用默认值。纯文本和无视觉对象的 Excel 可不调用视觉模型。
 
-本次 unit 移除了整个产品知识目录的只读挂载，保留产品根 SKILL/SYNC_PROMPT、`.data/memory/urovo-product-expert/MEMORY.md`、UMS 和 Python 运行环境的只读保护；代码校验另外禁止修改任意层级的 SKILL/MEMORY。原有额外业务记忆工具的权限不变。
+本次 unit 移除了整个产品知识目录的只读挂载，保留产品根 SKILL/SYNC_PROMPT、UMS 和 Python 运行环境的只读保护；主记忆由独立管理员Memory Injection入口维护，需要移除其单文件只读挂载；代码校验另外禁止修改任意层级的 SKILL/MEMORY。原有额外业务记忆工具的权限不变。
 
 先检查 `systemctl cat product-expert.service`。使用仓库模板的非 root 部署可更新模板；**此前使用 root 运行并手工修改过 unit 的，须保留现有 User/Group 配置**，只同步 ReadOnlyPaths 与 TasksMax 的变化，不能直接覆盖账号设置：
 
@@ -96,3 +96,6 @@ systemctl status product-expert.service --no-pager
 | POST | `/api/sync/jobs/:id/cleanup` | `{itemId}`，重试原件清理 |
 | POST | `/api/sync/delete-preview` | `{prompt}`，创建预览任务返回 202 |
 | POST | `/api/sync/jobs/:id/confirm` | `{}`，提交指定预览返回 202 |
+
+
+侧栏另有独立的 [Memory Injection](memory-injection.md) 对话框，仅在管理员确认预览后维护主MEMORY.md，不属于资料Synchronize任务，也不改MEMORY_EXTRA.md。

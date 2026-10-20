@@ -42,13 +42,15 @@ import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
 import { createConverter, type Converter } from "../knowledge-sync/converter.js";
 import { SyncError } from "../knowledge-sync/core.js";
+import { MemoryInjectionService } from "../memory-injection/service.js";
+import { createMemoryPlanner, type MemoryPlanner } from "../memory-injection/planner.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -118,6 +120,9 @@ export async function createWebServer(options: WebOptions = {}) {
     planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
     converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
   await synchronize.init();
+  const memoryInjection = new MemoryInjectionService({dataDir, modelId: () => settings.modelId, redact,
+    planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
+  await memoryInjection.init();
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
@@ -415,6 +420,22 @@ export async function createWebServer(options: WebOptions = {}) {
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
         auth.logout(req, res, secureCookies); return json(res, 200, { ok: true });
+      }
+      if (url.pathname.startsWith("/api/memory-injection/")) {
+        if (machine) throw new HttpError(403, "Main memory requires administrator login.");
+        if (url.pathname === "/api/memory-injection/previews" && method === "POST") {
+          const body = await readBody(req);
+          if (Object.keys(body).length !== 1 || !("prompt" in body)) throw new HttpError(400, "Only a prompt is accepted.");
+          return json(res, 202, await memoryInjection.preview(body.prompt));
+        }
+        const match = url.pathname.match(/^\/api\/memory-injection\/previews\/([a-f0-9-]{36})(\/confirm)?$/);
+        if (match && method === "GET" && !match[2]) return json(res, 200, await memoryInjection.get(match[1]!));
+        if (match && method === "POST" && match[2]) {
+          const body = await readBody(req);
+          if (Object.keys(body).length) throw new HttpError(400, "Confirmation accepts only the saved preview ID.");
+          return json(res, 202, await memoryInjection.confirm(match[1]!));
+        }
+        throw new HttpError(404, "Memory operation not found.");
       }
       if (url.pathname.startsWith("/api/sync/")) {
         if (machine) throw new HttpError(403, "Maintenance requires administrator login.");
@@ -758,6 +779,8 @@ export async function createWebServer(options: WebOptions = {}) {
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
+        "/memory-injection.js": [path.join(resourcesDir, "web/memory-injection.js"), "text/javascript; charset=utf-8"],
+        "/memory-injection.css": [path.join(resourcesDir, "web/memory-injection.css"), "text/css; charset=utf-8"],
         "/app.js": [path.join(resourcesDir, "web/app.js"), "text/javascript; charset=utf-8"],
         "/style.css": [path.join(resourcesDir, "web/style.css"), "text/css; charset=utf-8"],
         "/vendor/marked.js": [path.join(projectRoot, "node_modules/marked/lib/marked.umd.js"), "text/javascript; charset=utf-8"],
@@ -776,9 +799,11 @@ export async function createWebServer(options: WebOptions = {}) {
   server.requestTimeout = 60000;
   async function close() {
     const syncClosing = synchronize.close();
+    const memoryClosing = memoryInjection.close();
     await mcp?.close();
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
     await syncClosing;
+    await memoryClosing;
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
     auth.dispose(); retention.dispose();

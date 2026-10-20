@@ -43,9 +43,9 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/opt/ProductExpertCloud/.data
-# Synchronize publishes product Markdown; skill and business memory remain protected.
+# Only backend administrator workflows publish product Markdown and main memory.
+# Do not mount main MEMORY.md read-only: Memory Injection publishes it atomically.
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/urovo-product-expert/SKILL.md
-ReadOnlyPaths=-/opt/ProductExpertCloud/.data/memory/urovo-product-expert/MEMORY.md
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/urovo-product-expert/SYNC_PROMPT.md
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/ums-expert
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/file-runtime

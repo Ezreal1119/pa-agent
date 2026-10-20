@@ -4,8 +4,8 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Product Expert workspace for product knowledge, UMS, and conversations.">
   <title>Product Expert · Workspace</title>
-  <link rel="stylesheet" href="/style.css">
-  <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script>
+  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/memory-injection.css">
+  <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script><script defer src="/memory-injection.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -17,6 +17,7 @@
       <nav id="sessions" class="session-list" aria-label="Recent conversations"><p class="empty-sessions">Your product conversations start here.</p></nav>
       <div class="sidebar-bottom">
         <div class="local-card"><span class="local-dot"></span><div>Knowledge workspace<small>Conversations retained for 30 days</small></div><span class="local-symbol">⌁</span></div>
+        <button id="memory-injection-open" class="settings-button"><span>◇</span> Memory Injection <span class="settings-arrow">↗</span></button>
         <a class="settings-button" href="/synchronize"><span>⇄</span> Synchronize <span class="settings-arrow">↗</span></a>
         <a id="contacts-open" class="settings-button" href="/wecom-contacts"><span>♧</span> WeCom contacts <span class="settings-arrow">↗</span></a>
         <button id="settings-open" class="settings-button"><span>⚙</span> Agent settings <span class="settings-arrow">↗</span></button>
@@ -131,6 +132,23 @@
       <div id="file-tool-toggles" class="file-tool-toggles"></div>
       <p id="settings-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions"><button type="button" id="settings-cancel" class="secondary-button">Cancel</button><button type="submit" id="settings-save" class="primary-button">Save and apply <span>↗</span></button></div>
+    </form>
+  </dialog>
+  <dialog id="memory-injection-dialog" aria-labelledby="memory-injection-title">
+    <form id="memory-injection-form">
+      <div class="dialog-heading"><div><span class="eyebrow">MAIN BUSINESS MEMORY</span><h2 id="memory-injection-title">Memory Injection</h2></div><button id="memory-injection-close" type="button" class="icon-close" aria-label="Close memory injection">×</button></div>
+      <p class="dialog-copy">Describe what to remember, correct, or remove. Review the proposed changes before updating main memory. Extra memory stays separate.</p>
+      <label for="memory-injection-prompt">Your instructions</label>
+      <textarea id="memory-injection-prompt" rows="4" maxlength="16000" placeholder="Describe the facts to add, correct, or forget…" required></textarea>
+      <div class="memory-preview-toolbar"><span id="memory-injection-status" role="status">No changes until you confirm.</span><button id="memory-injection-preview" type="submit" class="secondary-button">Generate preview</button></div>
+      <p id="memory-injection-error" class="form-error" role="alert" hidden></p>
+      <section id="memory-injection-result" aria-label="Memory change preview" hidden>
+        <p id="memory-injection-summary"></p>
+        <ul id="memory-injection-questions" hidden></ul>
+        <div id="memory-injection-changes"></div>
+        <p id="memory-injection-usage" class="settings-help"></p>
+      </section>
+      <div class="dialog-actions memory-injection-actions"><button id="memory-injection-cancel" type="button" class="secondary-button">Close</button><button id="memory-injection-confirm" type="button" class="primary-button" hidden>Confirm injection <span>↗</span></button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="alert" hidden></div>

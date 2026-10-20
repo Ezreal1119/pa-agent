@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- 新增管理员Memory Injection单对话框：自然语言判断主记忆ADD/UPDATE/DELETE，疑问澄清、逐条预览再确认；记忆工具仍只写MEMORY_EXTRA。主MEMORY需移除systemd只读挂载，由后台固定路径发布和备份。见2026-10-20主记忆管理记录。
+
 - Synchronize 文本维护与聊天共用.env的MODEL_ID/BASE_URL/API_KEY；曾临时指定Pro的改动已按用户要求撤回，视觉继续沿用.env中VISION_LLM_*。见2026-10-20维护模型回退记录。
 
 - Synchronize 视觉分块在完整覆盖后停止，末块贴边，避免额外细条触发视觉HTTP400；错误报告加入区域与脱敏后的接口原因，转换缓存版本更新。见2026-10-20切图修复记录。
@@ -559,3 +561,18 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 部署：systemd主记忆ReadOnlyPaths移到新位置，父目录保持可写供MEMORY_EXTRA原子替换；保留用户root账号和其他保护。.env.example仅更新说明，无新配置或依赖。README/技能模板/部署和Sync说明同步，docs/memory-layout-migration.md提供Cloud停服备份、手动迁移、防覆盖、归属权限、unit调整和重启步骤，提醒停用Mac旧记忆覆盖并从Cloud取本地副本。本轮没有移动本地真实.data、修改.env/本地同步脚本、修改patrick-agent或部署VPS。
 
 验证：记忆/会话/Web针对性49项通过，完整npm test共176项通过，无跳过（约28.2秒）；覆盖实际SDK发送的每轮单份注入、工具轮内快照与下一轮重读、恢复/五轮裁剪、新主记忆缺失且旧文件存在仍拒绝、旧额外文件保持不读不写、主记忆保护/路径覆盖/主记忆ID拒绝、额外文件与两级目录/备份目录符号链接拒绝及Web/WeCom/MCP兼容。均使用隔离数据与模拟模型端点；未用真实记忆或真实模型验证。日志.data/debug/memory-layout/{targeted-tests,full-tests}.log。
+
+
+## 2026-10-20 — 管理员 Memory Injection 主记忆维护
+
+原因：用户要求在Synchronize上方增加Memory Injection入口，单个Dialog输入自然语言，由AI判断新增/修改/删除；有歧义时提示，明确后先预览再由管理员确认写主MEMORY，与普通聊天额外记忆写入隔离。
+
+界面/API：侧栏新增入口及独立CSS/JS，对话框有输入、Generate preview、说明/疑问、逐条ADD/UPDATE/DELETE与前后完整条目、记录Token和Confirm injection。编辑输入会隐藏旧预览确认；关闭不取消后台任务，同浏览器刷新后凭sessionStorage预览ID恢复。新增管理员POST /api/memory-injection/previews、GET /previews/<id>、POST /previews/<id>/confirm，沿用Cookie/Origin/CSRF，拒绝机器凭证、路径/正文覆盖参数，创建/确认202后轮询。后台只接受已保存预览ID执行，不信任浏览器回传的内容或操作。
+
+模型/边界：独立Pi会话共用.env连接和模型、全局强度、上下文/输出上限，只提供提交建议的内部preview_main_memory工具，不加载业务Skill/额外记忆，不提供文件/网络/写工具。管理员请求与当前主记忆分隔为数据，提示不猜测缺失事实和含糊对象，正文标题从###起步；有questions时不允许任何操作。每次最多30条、正文每条64000字符、主记忆2MiB、输入16000字符，单次3分钟/8文本请求，共享RunGate；无新模型或.env字段。
+
+保存/兼容性：只写.data/memory/urovo-product-expert/MEMORY.md。复用现有条目格式解析/渲染，不改普通memory工具的路径和增删改语义；共享解析器可区分主/额外格式错误。后台产生新增ID/北京时间戳/unknown@email.com，更新保留原ID/作者/创建时间，未涉及条目保留原文。文件哈希绑定预览30分钟有效，确认取得共享知识写锁，等待问答后重新校验、备份、原子发布；过期/变化/符号链接/硬链接/坏格式/重复目标拒绝。重复确认已完成预览不重复写。预览和确认记录保留在.data/memory-injection/<id>.json，备份在.data/maintenance-backups/main-memory/<id>.md，不随会话30天清理。重启将未完成预览标记失败；发布中断根据前后哈希恢复为已完成/待确认/冲突；发布成功但确认回执保存失败不误报成未写入。
+
+部署：模板取消主MEMORY单文件ReadOnlyPaths，保留SKILL/SYNC_PROMPT/UMS/file-runtime保护，普通模型仍无主记忆写工具。已有VPS须手动删除实际unit中的主记忆只读行、daemon-reload再启服务，不能只git pull。保留用户root账号；无需新服务/依赖/env/记忆迁移。README、VPS、记忆迁移及Sync说明已同步；详见docs/memory-injection.md。本轮没有修改本地实际记忆、.env、Cloud服务或patrick-agent，未提交推送。
+
+验证：完整npm test182项通过、无跳过（约28.2秒），最后错误文案区分主/额外后再次构建并跑相关10项全部通过。新增六组测试覆盖批量预览不写/确认备份和元数据/额外隔离、含糊/坏方案/越权字段/重复目标、哈希冲突与过期/读锁等待、重启恢复和幂等、链接/坏格式/备份拒绝/关闭取消，以及真实Pi SDK连接本地模拟模型的管理员HTTP端到端（.env同模型与强度、仅内部预览工具、Cookie/CSRF/Origin/机器Key拒绝）。浏览器在隔离知识库验证侧栏入口、生成预览无文件变更、编辑隐藏确认、确认后主记忆改变而extra不变、歧义无确认按钮、刷新重开恢复；模型判断/用量为测试夹具，未请求真实模型。日志与截图统一.data/debug/memory-injection/。语法及git diff检查通过。

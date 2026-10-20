@@ -61,7 +61,7 @@ journalctl -u product-expert.service -n 80 --no-pager
 
 模板适配已提供的约 1.6GiB VPS：主进程 JS 堆256MiB、每 worker JS 堆384MiB；整个服务及全部子进程共 MemoryHigh=900M、MemoryMax=1100M、MemorySwapMax=256M、CPUQuota=150%、TasksMax=96。这些不是最大文件一定可处理的承诺。OOM 时整组结束，systemd 按 on-failure 重启，正在进行的 run 会中断。文件队列仍只执行一个重任务。
 
-ProtectSystem=strict，只开放 `.data/` 写入，再把产品SKILL/SYNC_PROMPT、新路径主MEMORY、可选UMS和转换器环境设为ReadOnlyPaths；产品资料由Synchronize维护，MEMORY_EXTRA、sessions、files、维护备份和设置仍可写。PrivateTmp、无额外 capabilities、NoNewPrivileges 一并启用。管理员在服务外仍能维护文件。这里是整个服务的权限边界，并非每个 worker 只能看见 job 目录；worker 仍能读取同账号可读文件，仍可联网，主进程也需要访问模型 API。参考 [systemd.exec](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) 和 [resource-control](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)。
+ProtectSystem=strict，只开放 `.data/` 写入，再把产品SKILL/SYNC_PROMPT、可选UMS和转换器环境设为ReadOnlyPaths；产品资料由Synchronize维护，MEMORY_EXTRA、sessions、files、维护备份和设置仍可写。PrivateTmp、无额外 capabilities、NoNewPrivileges 一并启用。管理员在服务外仍能维护文件。这里是整个服务的权限边界，并非每个 worker 只能看见 job 目录；worker 仍能读取同账号可读文件，仍可联网，主进程也需要访问模型 API。参考 [systemd.exec](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) 和 [resource-control](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)。
 
 ## 验证（VPS 与 Mac）
 
@@ -136,4 +136,7 @@ systemctl status product-expert --no-pager
 
 手动知识库维护入口 `/synchronize` 由原 product-expert 服务管理。新增原生 LibreOffice Writer/Calc/Impress、Fontconfig、Noto CJK/Liberation 字体和 ripgrep；安装、环境检查及资源限制见 [Synchronize 部署步骤](synchronize.md#ubuntu-24-原生部署)。运行 `npm run check:sync` 和 `npm run test:sync`。
 
-本次必须调整 unit：移除产品库整个目录的 ReadOnlyPaths，改为保护该库根 SKILL.md/SYNC_PROMPT.md，以及 `.data/memory/urovo-product-expert/MEMORY.md`；保留 UMS/file-runtime 的只读项，TasksMax=192。保留现有 User/Group（尤其是已选择 root 的部署），然后 daemon-reload/restart。未完成这些调整时发布会因只读目录失败，原件保留。正式启用后不要继续用旧同步脚本或 rsync 直接覆盖该知识库；外部文件只投递到 newly_added。
+本次必须调整 unit：移除产品库整个目录的 ReadOnlyPaths，改为保护该库根 SKILL.md/SYNC_PROMPT.md；Memory Injection需要解除新旧主MEMORY文件的只读挂载；保留 UMS/file-runtime 的只读项，TasksMax=192。保留现有 User/Group（尤其是已选择 root 的部署），然后 daemon-reload/restart。未完成这些调整时发布会因只读目录失败，原件保留。正式启用后不要继续用旧同步脚本或 rsync 直接覆盖该知识库；外部文件只投递到 newly_added。
+
+
+主记忆管理员维护入口已提供：部署时须删除主MEMORY.md的单文件ReadOnlyPaths，否则原子保存会失败；不是取消SKILL、UMS或运行依赖的保护。详见 [Memory Injection](memory-injection.md)。无需改.env或安装新依赖。

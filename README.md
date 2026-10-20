@@ -78,7 +78,7 @@ The configured data directory (`AGENT_DATA_DIR`, default `.data/`) contains the 
 │   └── <product>/...
 ├── memory/
 │   └── urovo-product-expert/
-│       ├── MEMORY.md         required, read-only main memory
+│       ├── MEMORY.md         required, administrator-managed main memory
 │       └── MEMORY_EXTRA.md   optional, writable by the memory tool
 ├── agent/
 └── sessions/
@@ -94,7 +94,7 @@ Knowledge, business memories, session history, maintenance backups, and `.env` r
 
 ### Shared extra agent memory
 
-In addition to the product skill memory, every run injects the full `<dataDir>/memory/urovo-product-expert/MEMORY_EXTRA.md` in a separate system section, once per model request. An empty/missing extra file is valid and is not rewritten on startup; the first successful add initializes it. A run keeps its initial snapshot across tool/model steps, and the next run reloads the latest file. The extra memory is shared across this runtime's conversations and is not part of the session's 30-day retention. The product skill memory and any retained legacy skill memories remain read-only.
+In addition to the product skill memory, every run injects the full `<dataDir>/memory/urovo-product-expert/MEMORY_EXTRA.md` in a separate system section, once per model request. An empty/missing extra file is valid and is not rewritten on startup; the first successful add initializes it. A run keeps its initial snapshot across tool/model steps, and the next run reloads the latest file. The extra memory is shared across this runtime's conversations and is not part of the session's 30-day retention. Ordinary chat tools cannot edit main memory or any retained legacy skill memories; administrators maintain main memory through the separate preview-and-confirm Memory Injection dialog.
 
 The single `memory` tool operates only on this fixed extra file. Its `action` parameter selects one of three operations; there is no path parameter or list/get action:
 
@@ -277,3 +277,8 @@ MCP agent runs share the existing execution gate. Each task reports input/output
 管理员侧栏新增 **Synchronize** → `/synchronize`。支持批量导入、完整转换、版本/slot 判断、候选索引修改和事务发布；报告反馈 **Re-Sync**；自然语言删除先预览再确认。只维护 `urovo-product-expert`，不改 SKILL/MEMORY 或 UMS。失败/疑问保留原件，成功后清理；普通问答不能检索 `newly_added`。
 
 使用、状态、恢复、预算、安全边界、API 与 Ubuntu 新依赖见 [Synchronize 说明](docs/synchronize.md)。依赖检查 `npm run check:sync`，定向验证 `npm run test:sync`，完整回归 `npm test`。部署必须同步本次 systemd 只读挂载调整，保留你现有的 root/专用用户设置。正式启用后停止旧脚本/rsync 对知识库的覆盖同步。没有新增自动采集或定时 Sync。
+
+
+### Administrator main memory maintenance
+
+The sidebar **Memory Injection** entry above Synchronize opens one dialog. Describe additions, corrections or deletions, generate a preview, resolve any questions, then confirm the exact proposed changes to `memory/urovo-product-expert/MEMORY.md`. This administrator-only workflow does not change `MEMORY_EXTRA.md` or expose a write tool to ordinary chat. It shares the configured model and effort, keeps backups/audit records, and rejects stale previews. Existing systemd deployments must remove the main-memory `ReadOnlyPaths` line before saving. See [workflow, API and VPS upgrade](docs/memory-injection.md).

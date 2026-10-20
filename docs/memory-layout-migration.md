@@ -4,7 +4,7 @@
 
 ```text
 .data/memory/urovo-product-expert/
-├── MEMORY.md        # 必需，主记忆，只读
+├── MEMORY.md        # 必需，主记忆，仅管理员预览确认后维护
 └── MEMORY_EXTRA.md  # 可选，额外记忆，memory工具可写
 ```
 
@@ -64,13 +64,13 @@ ls -lh .data/memory/urovo-product-expert/
 systemctl edit --full product-expert.service
 ```
 
-把旧主记忆的ReadOnlyPaths行替换为：
+当前版本已提供Memory Injection管理员入口。删除旧位置的主记忆ReadOnlyPaths行；如果已经迁移过，也删除下面这一行（若存在）：
 
 ```ini
 ReadOnlyPaths=-/opt/ProductExpertCloud/.data/memory/urovo-product-expert/MEMORY.md
 ```
 
-保持`ReadWritePaths=/opt/ProductExpertCloud/.data`及其他保护项，保留当前User=root/Group=root。不能把整个memory目录或urovo-product-expert记忆子目录设为只读，MEMORY_EXTRA.md需要写入。无需改变WeCom Bridge配置。
+保持`ReadWritePaths=/opt/ProductExpertCloud/.data`及其他保护项，保留当前User=root/Group=root。不能把整个memory目录或urovo-product-expert记忆子目录设为只读；主记忆由管理员入口确认写入，MEMORY_EXTRA.md由聊天memory工具写入，两条路径在代码中隔离。无需改变WeCom Bridge配置。
 
 ## 5. 启动并检查
 
