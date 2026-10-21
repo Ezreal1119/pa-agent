@@ -56,7 +56,7 @@ function command(bin: string, args: string[]) {
   );
 }
 const coverage: string[] = [];
-const images: { file: string; label: string }[] = [];
+const images: { file: string; label: string; context: string }[] = [];
 let markdown = "";
 const ext = path.extname(input).toLowerCase();
 try {
@@ -283,8 +283,10 @@ async function tiles(
   // Bounded overlapping tiles keep dense source text legible without downsampling.
   const size = 1800;
   const canvases = new Map<string, Canvas>();
-  for (const y of tileOffsets(height))
-    for (const x of tileOffsets(width)) {
+  const xs = tileOffsets(width),
+    ys = tileOffsets(height);
+  for (const [row, y] of ys.entries())
+    for (const [column, x] of xs.entries()) {
       const w = Math.min(size, width - x),
         h = Math.min(size, height - y);
       let canvas = canvases.get(`${w}x${h}`);
@@ -296,9 +298,26 @@ async function tiles(
       await fs.writeFile(path.join(dir, file), canvas.toBuffer("image/png"), {
         mode: 0o600,
       });
+      const shared = [
+        column > 0 && "left",
+        column < xs.length - 1 && "right",
+        row > 0 && "top",
+        row < ys.length - 1 && "bottom",
+      ].filter(Boolean);
+      const outer = ["left", "right", "top", "bottom"].filter(
+        (edge) => !shared.includes(edge),
+      );
       images.push({
         file,
         label: `${label}, region x=${x} y=${y} width=${w} height=${h}`,
+        context:
+          `Full ${label.toLowerCase()} is ${width}×${height} px. ` +
+          (shared.length
+            ? `This region's ${shared.join(", ")} edge(s) overlap neighbouring regions that are transcribed separately, so text cut at those edges is covered elsewhere. `
+            : "This region is the entire source. ") +
+          (outer.length
+            ? `Its ${outer.join(", ")} edge(s) are the real page boundary.`
+            : "It has no real page boundary."),
       });
     }
 }

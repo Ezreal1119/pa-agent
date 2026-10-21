@@ -6,7 +6,7 @@
 
 - WeCom Bridge 进入聊天静默；收到消息的排队/等待提示统一为 `AI Thinking...`。本机 Agent API 无法连接或返回 502/503/504 时回复“服务正在升级中，请稍后尝试。”；后端离线不阻止 Bridge 启动，运行中未知结果继续恢复且只通知一次。见 2026-10-21 企微提示调整。
 
-- Synchronize：超大幅面 PDF 页（如 4032×2896 pt 宣传页）不再因 2× 渲染超 2000 万像素失败，改为自动降到不低于 1×（72 dpi）的倍率并记录在覆盖说明；1× 仍超限才拒绝。Incoming files 每行新增 Delete，任务运行时禁用；删除后该文件的 Re-Sync 提示需重新上传。转换 worker 渲染后立即释放 pdf.js 页面、复用切块画布并逐页 GC（`--expose-gc`），i9600 宣传页峰值 RSS 由约 1.09 GB 降到约 0.68 GB，避免触发 systemd 1100M 上限被 SIGKILL。VPS 升级到 2 vCPU/4 GiB，`deploy/product-expert.service` 改为 MemoryHigh=2200M、MemoryMax=2600M、MemorySwapMax=512M。前端遇到代理返回的 HTML（502/504）显示可读提示，轮询恢复后自动消失。
+- Synchronize：超大幅面 PDF 页（如 4032×2896 pt 宣传页）不再因 2× 渲染超 2000 万像素失败，改为自动降到不低于 1×（72 dpi）的倍率并记录在覆盖说明；1× 仍超限才拒绝。Incoming files 每行新增 Delete，任务运行时禁用；删除后该文件的 Re-Sync 提示需重新上传。转换 worker 渲染后立即释放 pdf.js 页面、复用切块画布并逐页 GC（`--expose-gc`），i9600 宣传页峰值 RSS 由约 1.09 GB 降到约 0.68 GB，避免触发 systemd 1100M 上限被 SIGKILL。视觉切块请求附带整页尺寸及哪些边与相邻块重叠，提示模型只把真实页边截断或不可读内容列为问题，修复多块页面因内部边缘文字被切而整份失败；报告标签不变，转换缓存版本不变。VPS 升级到 2 vCPU/4 GiB，`deploy/product-expert.service` 改为 MemoryHigh=2200M、MemoryMax=2600M、MemorySwapMax=512M。前端遇到代理返回的 HTML（502/504）显示可读提示，轮询恢复后自动消失。
 
 - Synchronize 新增 Library Tab：递归浏览知识库（跳过点路径与符号链接），Markdown 预览/源码查看；`.md`/`.txt`（≤2 MiB，含 MEMORY.md）可编辑，保存前显示 diff，按打开时哈希防覆盖，写锁内原子写入，旧版备份到 `maintenance-backups/library-edits/` 并追加 `edits.jsonl`。Sync 运行时、`newly_added/`、SKILL/SYNC/SYNC_PROMPT.md 只读。手工编辑不重新校验索引。
 

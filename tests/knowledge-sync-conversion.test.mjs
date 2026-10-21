@@ -26,7 +26,8 @@ test(
     let vision;
     let mode = "complete";
     let calls = 0;
-    const sentImages = [];
+    const sentImages = [],
+      sentTexts = [];
     t.after(async () => {
       vision?.closeAllConnections();
       if (vision) await new Promise((r) => vision.close(r));
@@ -60,6 +61,7 @@ test(
         ),
       );
       sentImages.push({ width: sentImage.width, height: sentImage.height });
+      sentTexts.push(body.messages[1].content[0].text);
       calls++;
       if (mode === "http-error") {
         res.writeHead(400, { "content-type": "application/json" });
@@ -261,6 +263,11 @@ test(
     );
     const posterTiles = sentImages.slice(beforePoster);
     assert.equal(posterTiles.length, 12);
+    const [firstTile] = sentTexts.slice(beforePoster);
+    assert.match(firstTile, /Full page 1 is 5277×3791 px/);
+    assert.match(firstTile, /right, bottom edge\(s\) overlap neighbouring regions/);
+    assert.match(firstTile, /left, top edge\(s\) are the real page boundary/);
+    assert.match(sentTexts[beforeBoundary], /entire source/);
     assert.ok(posterTiles.every((s) => s.width <= 1800 && s.height <= 1800));
     await fs.writeFile(path.join(root, "huge.pdf"), await posterPdf.save());
     await assert.rejects(
