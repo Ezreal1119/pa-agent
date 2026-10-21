@@ -60,6 +60,7 @@ export function createConverter(
             process.execPath,
             [
               "--max-old-space-size=384",
+              "--expose-gc",
               fileURLToPath(new URL("./conversion-worker.js", import.meta.url)),
             ],
             {

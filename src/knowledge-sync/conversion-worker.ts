@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, type Canvas } from "@napi-rs/canvas";
 import { preflightPackage } from "../file-tools/preflight.js";
 import type { FileToolConfig } from "../file-tools/config.js";
 import JSZip from "jszip";
@@ -218,9 +218,11 @@ try {
             viewport,
             canvas: canvas as any,
           }).promise;
+          page.cleanup();
           await tiles(canvas, canvas.width, canvas.height, `Page ${pageNo}`);
           coverage.push(`Page ${pageNo}/${doc.numPages}: rendered`);
-          page.cleanup();
+          // Canvas pixels live outside the V8 heap, so collect before the next page.
+          (globalThis as { gc?: () => void }).gc?.();
         }
       } finally {
         await task.destroy();
@@ -280,12 +282,16 @@ async function tiles(
 ) {
   // Bounded overlapping tiles keep dense source text legible without downsampling.
   const size = 1800;
+  const canvases = new Map<string, Canvas>();
   for (const y of tileOffsets(height))
     for (const x of tileOffsets(width)) {
       const w = Math.min(size, width - x),
         h = Math.min(size, height - y);
-      const canvas = createCanvas(w, h);
-      canvas.getContext("2d").drawImage(source, x, y, w, h, 0, 0, w, h);
+      let canvas = canvases.get(`${w}x${h}`);
+      if (!canvas) canvases.set(`${w}x${h}`, (canvas = createCanvas(w, h)));
+      const context = canvas.getContext("2d");
+      context.clearRect(0, 0, w, h);
+      context.drawImage(source, x, y, w, h, 0, 0, w, h);
       const file = `image-${images.length}.png`;
       await fs.writeFile(path.join(dir, file), canvas.toBuffer("image/png"), {
         mode: 0o600,

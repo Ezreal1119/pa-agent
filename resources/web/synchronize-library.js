@@ -21,7 +21,7 @@ async function libraryRequest(route, method = "GET", body) {
     location.href = "/login";
     throw Error("Please sign in.");
   }
-  const result = await response.json();
+  const result = await readJson(response);
   if (!response.ok)
     throw Object.assign(Error(result.error || "Request failed."), {
       status: response.status,

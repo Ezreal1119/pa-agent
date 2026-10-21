@@ -25,9 +25,9 @@ LimitCORE=0
 
 # Limits apply to the main service AND every native worker/converter together.
 MemoryAccounting=yes
-MemoryHigh=900M
-MemoryMax=1100M
-MemorySwapMax=256M
+MemoryHigh=2200M
+MemoryMax=2600M
+MemorySwapMax=512M
 CPUQuota=150%
 TasksMax=192
 

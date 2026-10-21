@@ -132,9 +132,19 @@ async function api(route, method = "GET", body) {
       `File exceeds the ${Math.round(maxFileBytes / 1048576)} MB upload limit. If the file is smaller, check the reverse proxy upload limit.`,
     );
   }
-  const result = await response.json();
+  const result = await readJson(response);
   if (!response.ok) throw Error(result.error || "Request failed.");
   return result;
+}
+/** Proxies answer with HTML pages (502/504) while the service restarts. */
+async function readJson(response) {
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    await response.body?.cancel();
+    throw Error(
+      `Server temporarily unavailable (HTTP ${response.status}). The page keeps retrying; running tasks are not affected.`,
+    );
+  }
+  return response.json();
 }
 async function action(fn) {
   $("sync-error").hidden = true;
@@ -693,7 +703,7 @@ async function importApi(route, method = "GET", body) {
     location.href = "/login";
     throw Error("Please sign in.");
   }
-  const data = await res.json();
+  const data = await readJson(res);
   if (!res.ok) throw Error(data.error || "Import request failed.");
   return data;
 }
@@ -809,8 +819,19 @@ $("import-run").onclick = () =>
     }
     token = auth.token;
     await refresh();
+    let pollFailed = false;
     setInterval(() => {
-      if (!document.hidden) refresh().catch(error);
+      if (document.hidden) return;
+      refresh().then(
+        () => {
+          if (pollFailed) $("sync-error").hidden = true;
+          pollFailed = false;
+        },
+        (e) => {
+          pollFailed = true;
+          error(e);
+        },
+      );
     }, 2000);
   } catch (e) {
     error(e);
