@@ -11,10 +11,12 @@ import {
   readJson,
   relative,
   protectedName,
+  PlanError,
   safePath,
   SyncError,
   timestamp,
   terminal,
+  type Attempt,
   type Conversion,
   type Job,
   type Item,
@@ -37,6 +39,19 @@ const extensions = new Set([
   ".txt",
   ".md",
 ]);
+const attemptOf = (item: Item): Attempt => ({
+  id: item.id,
+  status: item.status,
+  reason: item.reason,
+  summary: item.summary,
+  feedback: item.feedback,
+  started: item.started,
+  finished: item.finished,
+  elapsedMs: item.elapsedMs,
+  textUsage: item.textUsage,
+  visualUsage: item.visualUsage,
+  model: item.model,
+});
 export type Incoming = {
   id: string;
   name: string;
@@ -111,7 +126,9 @@ export class SyncService {
         }
       }
       if (!terminal(job.status)) {
-        job.status = "interrupted";
+        job.status = job.items.some((i) => i.status === "awaiting_confirmation")
+          ? "awaiting_confirmation"
+          : "interrupted";
       }
       this.jobs.set(job.id, job);
       await this.save(job);
@@ -330,6 +347,9 @@ export class SyncService {
         : job,
     );
   }
+  get busy() {
+    return this.reserved;
+  }
   private reserve() {
     if (this.closed) throw new SyncError("Service is shutting down.", 503);
     if (this.reserved)
@@ -391,56 +411,71 @@ export class SyncService {
     this.jobs.set(j.id, j);
     return j;
   }
+  /** Re-run one item inside its existing report; earlier attempts become history. */
   async resync(
     jobId: string,
     itemId: string,
     feedback: unknown,
     force = false,
   ) {
-    const old = this.jobs.get(jobId)?.items.find((i) => i.id === itemId);
-    if (!old) throw new SyncError("Item not found.", 404);
     if (typeof feedback !== "string" || feedback.length > 16000)
       throw new SyncError("Feedback must be at most 16000 characters.");
-    if (["published", "duplicate", "deleted"].includes(old.status))
-      throw new SyncError(
-        "This item is already committed. Use cleanup retry, or upload a new revision.",
-        409,
-      );
-    if (this.jobs.get(jobId)!.kind === "delete")
-      return this.preview(
-        `${this.jobs.get(jobId)!.prompt}\n补充说明：${feedback}`,
-      );
     this.reserve();
     try {
-      const file = (await this.incoming()).find((f) => f.name === old.name);
-      if (!file)
-        throw new SyncError("Original input is missing. Upload it again.", 409);
-      const item = this.item(
-        file,
-        `${old.feedback}${old.feedback ? "\n" : ""}${feedback}`,
-        old.id,
+      const job = await this.get(jobId);
+      const index = job.items.findIndex(
+        (i) => i.id === itemId || i.attempts?.some((a) => a.id === itemId),
       );
-      const job = this.newJob("sync", [item]);
-      // Reuse conversions only for unchanged bytes and no request to re-read/reconvert.
-      if (
-        !force &&
-        !/重新.*(?:转换|识别|读取)|漏|识别.*错|reconvert|re.?read|missing|ocr/i.test(
-          feedback,
-        ) &&
-        file.sourceHash === old.sourceHash
-      ) {
-        const oldDir = await safePath(this.directory, `work/${old.id}`);
-        if (await fs.stat(oldDir).catch(() => undefined)) {
-          await fs.mkdir(path.join(this.directory, "work"), {
-            recursive: true,
-          });
-          await fs.cp(oldDir, path.join(this.directory, "work", item.id), {
-            recursive: true,
-            filter: async (p) => !(await fs.lstat(p)).isSymbolicLink(),
-          });
+      const old = job.items[index];
+      if (!old) throw new SyncError("Item not found.", 404);
+      if (["published", "duplicate", "deleted"].includes(old.status))
+        throw new SyncError(
+          "This item is already committed. Use cleanup retry, or upload a new revision.",
+          409,
+        );
+      const instructions = `${old.feedback}${old.feedback ? "\n" : ""}${feedback}`;
+      let item: Item;
+      if (job.kind === "delete")
+        item = this.item(
+          { name: old.name, id: "", sourceHash: "", bytes: 0 },
+          instructions,
+          old.id,
+        );
+      else {
+        const file = (await this.incoming()).find((f) => f.name === old.name);
+        if (!file)
+          throw new SyncError(
+            "Original input is missing. Upload it again.",
+            409,
+          );
+        item = this.item(file, instructions, old.id);
+        // Reuse conversions only for unchanged bytes and no request to re-read/reconvert.
+        if (
+          !force &&
+          !/重新.*(?:转换|识别|读取)|漏|识别.*错|reconvert|re.?read|missing|ocr/i.test(
+            feedback,
+          ) &&
+          file.sourceHash === old.sourceHash
+        ) {
+          const oldDir = await safePath(this.directory, `work/${old.id}`);
+          if (await fs.stat(oldDir).catch(() => undefined)) {
+            await fs.mkdir(path.join(this.directory, "work"), {
+              recursive: true,
+            });
+            await fs.cp(oldDir, path.join(this.directory, "work", item.id), {
+              recursive: true,
+              filter: async (p) => !(await fs.lstat(p)).isSymbolicLink(),
+            });
+          }
         }
       }
-      await this.launch(job);
+      item.attempts = [...(old.attempts ?? []), attemptOf(old)];
+      job.items[index] = item;
+      job.confirmed = undefined;
+      job.finished = undefined;
+      this.jobs.set(job.id, job);
+      this.archived.delete(job.id);
+      await this.launch(job, new Set([item.id]));
       return this.get(job.id);
     } catch (e) {
       this.reserved = false;
@@ -468,20 +503,32 @@ export class SyncService {
       throw e;
     }
   }
-  async confirm(id: string) {
+  async confirm(id: string, itemId?: string) {
     const job = await this.get(id);
     if (
       !job ||
-      job.kind !== "delete" ||
       job.status !== "awaiting_confirmation" ||
-      !job.items[0]?.plan
+      !job.items.some(
+        (i) =>
+          i.status === "awaiting_confirmation" &&
+          i.plan &&
+          (!itemId || i.id === itemId),
+      )
     )
-      throw new SyncError("No pending deletion preview.", 409);
+      throw new SyncError("No pending publication preview.", 409);
+    const pending = job.items.filter(
+      (i) =>
+        i.status === "awaiting_confirmation" &&
+        i.plan &&
+        (!itemId || i.id === itemId),
+    );
+    if (pending.length !== 1)
+      throw new SyncError("Choose one pending file to confirm.", 409);
     this.reserve();
     this.activeId = id;
     this.jobs.set(id, job);
     this.archived.delete(id);
-    const item = job.items[0]!;
+    const item = pending[0]!;
     this.controller = new AbortController();
     job.status = "running";
     item.status = "waiting_to_publish";
@@ -500,13 +547,27 @@ export class SyncService {
           this.controller!.signal,
         );
         job.confirmed = true;
-        item.status = "deleted";
+        item.status = job.kind === "delete" ? "deleted" : "published";
         item.stage = "Published";
-        job.status = "completed";
+        if (job.kind === "sync") await this.clean(job, item);
+        job.status = job.items.some((i) => i.status === "awaiting_confirmation")
+          ? "awaiting_confirmation"
+          : "completed";
       } catch (e) {
-        item.status = "needs_review";
+        if (await this.publisher.committed(item.id)) {
+          item.status = job.kind === "delete" ? "deleted" : "published";
+          item.stage = "Published";
+          if (job.kind === "sync")
+            item.cleanupError =
+              "Publication succeeded; retry cleanup after resolving storage errors.";
+        } else {
+          item.status = "failed";
+          item.stage = "Not published";
+        }
         item.reason = this.options.redact(e);
-        job.status = "completed";
+        job.status = job.items.some((i) => i.status === "awaiting_confirmation")
+          ? "awaiting_confirmation"
+          : "completed";
       } finally {
         job.finished = new Date().toISOString();
         try {
@@ -520,7 +581,7 @@ export class SyncService {
       }
     })().catch((error) => {
       console.error(
-        "Sync deletion report persistence failed:",
+        "Sync confirmation report persistence failed:",
         this.options.redact(error),
       );
     });
@@ -561,28 +622,31 @@ export class SyncService {
         throw new Error("Input changed after sync; preserved the new file.");
       if (bytes) await fs.unlink(file);
       item.sourceDeleted = true;
+      const ids = new Set([
+        item.id,
+        ...(item.attempts ?? []).map((a) => a.id),
+      ]);
+      // Reports created before in-place Re-Sync linked attempts across jobs.
       let attempt: Item | undefined = item;
-      const seen = new Set<string>();
-      while (attempt && !seen.has(attempt.id)) {
-        seen.add(attempt.id);
-        await fs.rm(await safePath(this.directory, `work/${attempt.id}`), {
+      while (attempt?.previous && !ids.has(attempt.previous)) {
+        ids.add(attempt.previous);
+        const previous: string = attempt.previous;
+        attempt = [...this.jobs.values()]
+          .flatMap((j) => j.items)
+          .find((i) => i.id === previous);
+      }
+      for (const id of ids)
+        await fs.rm(await safePath(this.directory, `work/${id}`), {
           recursive: true,
           force: true,
         });
-        const previous: string | undefined = attempt.previous;
-        attempt = previous
-          ? [...this.jobs.values()]
-              .flatMap((j) => j.items)
-              .find((i) => i.id === previous)
-          : undefined;
-      }
       item.cleanupError = undefined;
     } catch (e) {
       item.cleanupError = this.options.redact(e);
     }
     await this.save(job);
   }
-  private async launch(job: Job) {
+  private async launch(job: Job, only?: Set<string>) {
     this.activeId = job.id;
     this.controller = new AbortController();
     const signal = this.controller.signal;
@@ -591,11 +655,11 @@ export class SyncService {
     const model = this.options.modelId();
     job.status = "running";
     await this.save(job);
-    this.active = this.execute(job, signal, planner, convert, model)
+    this.active = this.execute(job, signal, planner, convert, model, only)
       .catch(async (e) => {
         job.status = "failed";
         for (const item of job.items)
-          if (!terminal(item.status)) {
+          if (!terminal(item.status) && (!only || only.has(item.id))) {
             item.status = "failed";
             item.reason = this.options.redact(e);
           }
@@ -620,7 +684,9 @@ export class SyncService {
     planner: Planner,
     convert: Converter,
     model: string,
+    only?: Set<string>,
   ) {
+    const targets = job.items.filter((i) => !only || only.has(i.id));
     const converted = new Map<string, Conversion>();
     const conversionTimes = new Map<string, number>();
     let convertedBytes = 0;
@@ -638,13 +704,13 @@ export class SyncService {
           .map((d) => d.hash),
       }));
     if (job.kind === "sync")
-      for (const item of job.items) {
+      for (const item of targets) {
         if (item.status === "failed") continue;
         if (signal.aborted) {
           item.status = "stopped";
           continue;
         }
-        item.status = "running";
+        item.status = "converting";
         item.stage = "Converting";
         item.started = new Date().toISOString();
         item.model = model;
@@ -706,7 +772,8 @@ export class SyncService {
           convertedBytes += size;
           converted.set(item.id, result);
           item.coverage = result.coverage;
-          item.stage = "Converted";
+          item.status = "converted";
+          item.stage = "Converted · waiting for analysis";
           conversionTimes.set(item.id, Date.now() - conversionStart);
           await this.save(job);
         } catch (e) {
@@ -720,14 +787,14 @@ export class SyncService {
           await this.event(job, item);
         }
       }
-    const batch = job.items.map((i) => ({
+    const batch = targets.map((i) => ({
       id: i.id,
       name: i.name,
       status: i.status,
       characters: converted.get(i.id)?.markdown.length,
       preview: converted.get(i.id)?.markdown.slice(0, 3000),
     }));
-    for (const item of job.items) {
+    for (const item of targets) {
       if (job.kind === "sync" && !converted.has(item.id)) continue;
       if (signal.aborted) {
         item.status = "stopped";
@@ -746,8 +813,8 @@ export class SyncService {
       ]);
       try {
         abort.throwIfAborted();
-        item.status = "running";
-        item.stage = "Comparing and maintaining indexes";
+        item.status = "analyzing";
+        item.stage = "Analyzing and maintaining indexes";
         await this.event(job, item);
         const release = await knowledgeLock(this.root).read();
         let base: Map<string, string>;
@@ -787,6 +854,7 @@ export class SyncService {
               ? `DELETE PREVIEW: ${job.prompt}`
               : `SYNC input ${item.name} (id ${item.id})`,
           feedback: item.feedback,
+          deletion: job.kind === "delete",
           candidates: new Map(
             [...converted].map(([id, c]) => [id, c.markdown]),
           ),
@@ -806,8 +874,11 @@ export class SyncService {
           !item.feedback.trim() &&
           deletions.some((d) => d.hashes.includes(hash(markdown)))
         )
-          throw new SyncError(
-            "This exact document was previously deleted as legacy. Administrator feedback is required to reintroduce it.",
+          throw new PlanError(
+            [
+              "This exact document was previously deleted as legacy. Administrator feedback is required to reintroduce it.",
+            ],
+            true,
           );
         item.reason = result.decision.reason;
         item.summary = result.decision.summary;
@@ -821,11 +892,12 @@ export class SyncService {
         );
         if (result.decision.action === "review") {
           item.status = "needs_review";
-          item.stage = "Needs review";
-        } else if (job.kind === "delete") {
+          item.stage = "Needs your decision";
+        } else if (job.kind === "delete" || item.plan.confirmationReason) {
           item.status = "awaiting_confirmation";
           item.stage = "Preview ready";
-          job.status = "awaiting_confirmation";
+          if (item.plan.confirmationReason)
+            item.reason = item.plan.confirmationReason;
         } else {
           item.stage = "Waiting to publish";
           item.status = "waiting_to_publish";
@@ -837,11 +909,19 @@ export class SyncService {
           await this.clean(job, item);
         }
       } catch (e) {
+        const review = e instanceof PlanError && e.review;
         item.status = signal.aborted
           ? "stopped"
-          : e instanceof SyncError
+          : review
             ? "needs_review"
             : "failed";
+        item.stage = signal.aborted
+          ? "Stopped"
+          : review
+            ? "Needs your decision"
+            : e instanceof PlanError
+              ? "Automatic checks failed · nothing published"
+              : "Failed · nothing published";
         item.reason = this.options.redact(e);
         if (job.kind === "sync" && (await this.publisher.committed(item.id))) {
           item.status = "published";
@@ -863,8 +943,11 @@ export class SyncService {
         item.elapsedMs = Date.parse(item.finished) - Date.parse(item.started);
       }
     }
-    if (job.status !== "awaiting_confirmation")
-      job.status = signal.aborted ? "stopped" : "completed";
+    job.status = job.items.some((i) => i.status === "awaiting_confirmation")
+      ? "awaiting_confirmation"
+      : signal.aborted
+        ? "stopped"
+        : "completed";
     job.finished = new Date().toISOString();
     await this.save(job);
   }

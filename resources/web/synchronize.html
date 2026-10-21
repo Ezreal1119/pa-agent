@@ -6,7 +6,10 @@
     <title>Synchronize · Product Expert</title>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/synchronize.css" />
+    <script src="/vendor/marked.js" defer></script>
+    <script src="/vendor/purify.js" defer></script>
     <script src="/synchronize.js" defer></script>
+    <script src="/synchronize-library.js" defer></script>
   </head>
   <body class="sync-body">
     <main class="sync-page">
@@ -59,6 +62,7 @@
           Delete knowledge
         </button>
         <button id="tab-imports" role="tab" aria-controls="panel-imports" aria-selected="false" tabindex="-1">Source imports</button>
+        <button id="tab-library" role="tab" aria-controls="panel-library" aria-selected="false" tabindex="-1">Library</button>
       </nav>
       <p id="sync-error" role="alert" class="sync-error" hidden></p>
       <section
@@ -204,6 +208,26 @@
           </div>
           <div class="sftp-status"><p id="import-config" role="status">Checking configuration…</p><small id="import-paths"></small><p class="sync-subtle">Manual only · up to 100 MB per file · scheduling and WeCom notifications are not enabled.</p></div>
           <div class="sync-reports-layout"><aside id="import-history" class="sync-history" aria-label="Import history"></aside><div id="import-report" class="sync-report"><div class="sync-empty-report"><h3>No imports yet</h3><p>Run an import to see each file's result here.</p></div></div></div>
+        </div>
+      </section>
+      <section id="panel-library" role="tabpanel" aria-labelledby="tab-library" class="sync-tab-panel" hidden>
+        <div class="sync-panel">
+          <div class="sync-panel-heading">
+            <div>
+              <h2>Library <span id="library-count" class="sync-count">0</span></h2>
+              <p>Browse and edit the live knowledge files. Saved edits apply to the next answer; previous versions are backed up.</p>
+            </div>
+            <button id="library-refresh" class="sync-button sync-button-quiet">↻ Refresh</button>
+          </div>
+          <div class="library-layout">
+            <aside class="library-sidebar">
+              <input id="library-filter" type="search" placeholder="Filter files…" aria-label="Filter files" />
+              <nav id="library-tree" class="library-tree" aria-label="Knowledge files"></nav>
+            </aside>
+            <div id="library-viewer" class="library-viewer">
+              <div class="sync-empty-report"><h3>Select a file</h3><p>Choose a file on the left to view or edit it.</p></div>
+            </div>
+          </div>
         </div>
       </section>
     </main>

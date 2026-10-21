@@ -532,6 +532,9 @@
 .sync-badge[data-status="running"],
 .sync-badge[data-status="waiting_to_publish"],
 .sync-badge[data-status="queued"],
+.sync-badge[data-status="converted"],
+.sync-badge[data-status="converting"],
+.sync-badge[data-status="analyzing"],
 .sync-badge[data-status="stopping"] {
   color: #657fa2;
   background: #eef3fa;
@@ -657,6 +660,31 @@
   border: 1px solid #e7eddc;
   padding: 11px;
   border-radius: 6px;
+}
+.sync-hint {
+  font-size: 10px;
+  line-height: 1.6;
+  color: #6f8262;
+  padding: 9px 12px;
+  border-left: 3px solid #c9d6bb;
+  background: #f8faf5;
+}
+.sync-problems {
+  margin: 10px 0;
+  padding-left: 18px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.sync-attempts ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.sync-attempts li {
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.sync-attempts li p {
+  margin: 4px 0;
 }
 .sync-feedback {
   margin-top: 15px;
@@ -1076,3 +1104,161 @@
 #import-report code { display: block; overflow-wrap: anywhere; font-size: 11px; }
 .sync-badge[data-status="completed_with_errors"], .sync-badge[data-status="not_attempted"] { background: #fcf0e9; color: #a3674b; }
 @media (max-width: 600px) { .sftp-status { padding: 0 20px 20px; } }
+.library-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 520px;
+  border-top: 1px solid #e6ecdf;
+}
+.library-sidebar {
+  border-right: 1px solid #e6ecdf;
+  background: #fbfcf9;
+  padding: 12px;
+  min-width: 0;
+}
+.library-sidebar input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+  border: 1px solid #dfe7d6;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+}
+.library-tree {
+  max-height: 720px;
+  overflow: auto;
+  font-size: 11px;
+}
+.library-tree ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 12px;
+}
+.library-tree > ul {
+  padding-left: 0;
+}
+.library-tree summary {
+  cursor: pointer;
+  padding: 3px 0;
+  color: #4f6846;
+  overflow-wrap: anywhere;
+}
+.library-file {
+  display: block;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #6f8262;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.library-file:hover {
+  background: #f0f4ea;
+}
+.library-file.selected {
+  background: #e6eedc;
+  color: #3f5a37;
+}
+.library-file.is-readonly {
+  color: #a5b099;
+}
+.library-viewer {
+  min-width: 0;
+  padding: 20px;
+}
+.library-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.library-head h3 {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.library-head p {
+  margin: 4px 0 0;
+}
+.library-modes {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.library-modes [aria-pressed="true"] {
+  background: #e6eedc;
+}
+.library-preview {
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  max-height: 720px;
+  overflow: auto;
+}
+.library-preview h1 { font-size: 20px; }
+.library-preview h2 { font-size: 16px; }
+.library-preview h3,
+.library-preview h4 { font-size: 13px; }
+.library-preview :is(h1, h2, h3, h4) {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.3;
+}
+.library-preview table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.library-preview th,
+.library-preview td {
+  border: 1px solid #e3e9da;
+  padding: 4px 8px;
+  vertical-align: top;
+}
+.library-source,
+.library-editor {
+  width: 100%;
+  box-sizing: border-box;
+  max-height: 720px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: 11px/1.7 ui-monospace, monospace;
+  background: #f7f9f3;
+  border: 1px solid #e3e9da;
+  border-radius: 7px;
+  padding: 12px;
+}
+.library-editor {
+  min-height: 520px;
+  height: 60vh;
+  resize: vertical;
+  color: inherit;
+}
+.library-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.library-actions > span {
+  margin-right: auto;
+}
+@media (max-width: 800px) {
+  .library-layout {
+    grid-template-columns: 1fr;
+  }
+  .library-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #e6ecdf;
+  }
+  .library-tree {
+    max-height: 260px;
+  }
+}

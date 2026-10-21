@@ -17,14 +17,18 @@ import {
   type ReasoningMode,
 } from "../agent/reasoning.js";
 import { sdkTokens } from "../web/run-metrics.js";
-import { dependents } from "./validation.js";
+import { buildPlan, dependents, resolveHub } from "./validation.js";
 import {
   type Decision,
   type Usage,
   excluded,
+  hash,
   relative,
+  PlanError,
   SyncError,
 } from "./core.js";
+/** Rejected finish_sync submissions the agent may repair before the report shows them. */
+const MAX_PLAN_REPAIRS = 3;
 export type ModelConfig = {
   apiKey: string;
   baseUrl: string;
@@ -37,6 +41,7 @@ export type AgentInput = {
   markdown: string;
   prompt: string;
   feedback: string;
+  deletion?: boolean;
   batch: unknown;
   candidates?: Map<string, string>;
   deletions: unknown;
@@ -107,7 +112,7 @@ export function createPlanner(options: {
         const ranges = readRanges.get(key) ?? new Set<number>();
         ranges.add(offset);
         readRanges.set(key, ranges);
-        return slice(text, offset);
+        return { ...slice(text, offset), hash: hash(text) };
       }
       function readFully(key: string, text: string) {
         for (let offset = 0; offset < text.length; offset += 20000)
@@ -115,6 +120,10 @@ export function createPlanner(options: {
             throw new Error(`Read all segments before submitting: ${key}`);
       }
       let decision: Decision | undefined;
+      let rejected: Decision | undefined;
+      let rejections = 0;
+      const deletion =
+        input.deletion ?? input.prompt.startsWith("DELETE PREVIEW");
       const tool = (
         name: string,
         description: string,
@@ -147,6 +156,33 @@ export function createPlanner(options: {
         candidate: Type.Optional(Type.Boolean()),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
       });
+      function stage(name: string, text: string) {
+        relative(name);
+        if (
+          excluded(name) ||
+          !name.startsWith("product-knowledge-vault/") ||
+          !name.endsWith(".md")
+        )
+          throw new Error("Only Vault pages can be staged.");
+        if (name === "product-knowledge-vault/log.md")
+          throw new Error(
+            "The backend appends the log. Submit only logEntry in finish_sync.",
+          );
+        if (!text.trim() || Buffer.byteLength(text) > 2 * 1024 * 1024)
+          throw new Error(
+            "Candidate knowledge page must contain 1–2 MiB of text.",
+          );
+        const bytes = [...staged].reduce(
+          (sum, [p, t]) => sum + (p === name ? 0 : Buffer.byteLength(t)),
+          Buffer.byteLength(text),
+        );
+        if (bytes > 8 * 1024 * 1024)
+          throw new Error(
+            "Candidate index text exceeds 8 MiB; narrow the maintenance operation.",
+          );
+        staged.set(name, text);
+        return { staged: name, hash: hash(text) };
+      }
       const tools: ToolDefinition[] = [
         tool(
           "list_knowledge",
@@ -261,30 +297,65 @@ export function createPlanner(options: {
           (a) => ({ paths: dependents(input.base, a.paths) }),
         ),
         tool(
+          "product_hubs",
+          "Resolve the exact product Hub path the backend expects for each canonical product directory. Stage these Hubs; never create a duplicate Hub.",
+          Type.Object({
+            products: Type.Array(Type.String(), { maxItems: 50 }),
+          }),
+          (a) => ({
+            hubs: a.products.map((product: string) => {
+              const hub = resolveHub(input.base, product);
+              return { product, path: hub, exists: input.base.has(hub) };
+            }),
+          }),
+        ),
+        tool(
           "write_candidate",
           "Stage complete text of an affected Vault page. Does not publish.",
           Type.Object({
             path: Type.String(),
             text: Type.String({ minLength: 1, maxLength: 2000000 }),
           }),
+          (a) => stage(a.path, a.text),
+        ),
+        tool(
+          "patch_candidate",
+          "Stage exact local replacements in a Vault page. Supply the hash from read_knowledge; each before must occur exactly once. Does not publish. Log is appended by backend.",
+          Type.Object({
+            path: Type.String(),
+            expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+            replacements: Type.Array(
+              Type.Object({
+                before: Type.String({ minLength: 1, maxLength: 2000000 }),
+                after: Type.String({ maxLength: 2000000 }),
+              }),
+              { minItems: 1, maxItems: 100 },
+            ),
+          }),
           (a) => {
-            relative(a.path);
-            if (
-              excluded(a.path) ||
-              !a.path.startsWith("product-knowledge-vault/") ||
-              !a.path.endsWith(".md")
-            )
-              throw new Error("Only Vault pages can be staged.");
-            const bytes = [...staged].reduce(
-              (sum, [p, t]) => sum + (p === a.path ? 0 : Buffer.byteLength(t)),
-              Buffer.byteLength(a.text),
-            );
-            if (bytes > 8 * 1024 * 1024)
+            let text = staged.get(a.path) ?? input.base.get(a.path);
+            if (text === undefined || hash(text) !== a.expectedHash)
               throw new Error(
-                "Candidate index text exceeds 8 MiB; narrow the maintenance operation.",
+                "Candidate baseline conflict. Read the current candidate and retry.",
               );
-            staged.set(a.path, a.text);
-            return { staged: a.path };
+            for (const edit of a.replacements) {
+              const at = text.indexOf(edit.before);
+              if (
+                !edit.before ||
+                at < 0 ||
+                text.indexOf(edit.before, at + 1) >= 0
+              )
+                throw new Error(
+                  "Each replacement must match exactly once; include more surrounding context.",
+                );
+              text =
+                text.slice(0, at) +
+                edit.after +
+                text.slice(at + edit.before.length);
+              if (Buffer.byteLength(text) > 2 * 1024 * 1024)
+                throw new Error("Candidate knowledge page exceeds 2 MiB.");
+            }
+            return stage(a.path, text);
           },
         ),
         tool(
@@ -303,6 +374,14 @@ export function createPlanner(options: {
             versionEvidence: Type.String(),
             authorizedException: Type.Boolean(),
             reviewedPaths: Type.Array(Type.String()),
+            productHubs: Type.Optional(
+              Type.Array(
+                Type.Object({ product: Type.String(), path: Type.String() }),
+              ),
+            ),
+            logEntry: Type.Optional(
+              Type.String({ minLength: 1, maxLength: 16000 }),
+            ),
             suggestedFeedback: Type.Optional(
               Type.String({ minLength: 1, maxLength: 16000 }),
             ),
@@ -316,9 +395,35 @@ export function createPlanner(options: {
                 ...a.reviewedPaths,
                 ...staged.keys(),
               ])) {
+                if (p === "product-knowledge-vault/log.md") continue;
                 const original = input.base.get(p);
                 if (original !== undefined) readFully(p, original);
               }
+            }
+            try {
+              buildPlan(
+                input.base,
+                staged,
+                a as Decision,
+                input.markdown,
+                input.feedback,
+                deletion,
+              );
+            } catch (error) {
+              if (!(error instanceof SyncError)) throw error;
+              const problems =
+                error instanceof PlanError ? error.problems : [error.message];
+              rejected = a as Decision;
+              if (++rejections < MAX_PLAN_REPAIRS)
+                return {
+                  submitted: false,
+                  problems,
+                  repairsLeft: MAX_PLAN_REPAIRS - rejections,
+                  instruction:
+                    "The backend rejected this plan. Fix every listed problem with the candidate tools and call finish_sync again. Choose action=review only when a real business decision (product identity, version order, new product, conflicting facts) is required.",
+                };
+              decision = a as Decision;
+              return { submitted: true, problems };
             }
             decision = a as Decision;
             return { submitted: true };
@@ -389,6 +494,7 @@ export function createPlanner(options: {
         input.signal.removeEventListener("abort", abort);
         unsub();
       }
+      decision ??= rejected;
       if (!decision)
         throw new Error(
           "Agent ended without a structured decision. Inspect configuration or Re-Sync.",

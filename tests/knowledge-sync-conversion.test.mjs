@@ -53,14 +53,24 @@ test(
         body.messages[1].content[1].image_url.url,
         /^data:image\/png;base64,/,
       );
-      const sentImage = await loadImage(Buffer.from(
-        body.messages[1].content[1].image_url.url.split(",")[1], "base64",
-      ));
-      sentImages.push({width: sentImage.width, height: sentImage.height});
+      const sentImage = await loadImage(
+        Buffer.from(
+          body.messages[1].content[1].image_url.url.split(",")[1],
+          "base64",
+        ),
+      );
+      sentImages.push({ width: sentImage.width, height: sentImage.height });
       calls++;
       if (mode === "http-error") {
-        res.writeHead(400, {"content-type": "application/json"});
-        res.end(JSON.stringify({error: {code: "invalid_image", message: "Image rejected; key=fixture"}}));
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              code: "invalid_image",
+              message: "Image rejected; key=fixture",
+            },
+          }),
+        );
         return;
       }
       res.writeHead(200, { "content-type": "application/json" });
@@ -105,16 +115,32 @@ test(
     );
     // Exercise the real worker/canvas and request payloads, not just offset math.
     for (const [width, height, expected] of [
-      [1191, 1684, [{width: 1191, height: 1684}]],
-      [1800, 1800, [{width: 1800, height: 1800}]],
-      [1801, 1801, Array.from({length: 4}, () => ({width: 1800, height: 1800}))],
-      [3481, 1191, Array.from({length: 3}, () => ({width: 1800, height: 1191}))],
+      [1191, 1684, [{ width: 1191, height: 1684 }]],
+      [1800, 1800, [{ width: 1800, height: 1800 }]],
+      [
+        1801,
+        1801,
+        Array.from({ length: 4 }, () => ({ width: 1800, height: 1800 })),
+      ],
+      [
+        3481,
+        1191,
+        Array.from({ length: 3 }, () => ({ width: 1800, height: 1191 })),
+      ],
     ]) {
       const name = `boundary-${width}-${height}.png`;
-      await fs.writeFile(path.join(root, name), createCanvas(width, height).toBuffer("image/png"));
+      await fs.writeFile(
+        path.join(root, name),
+        createCanvas(width, height).toBuffer("image/png"),
+      );
       const before = sentImages.length;
-      await convert(path.join(root, name), path.join(root, `out-${name}`),
-        new AbortController().signal, emptyUsage(), async () => {});
+      await convert(
+        path.join(root, name),
+        path.join(root, `out-${name}`),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      );
       assert.deepEqual(sentImages.slice(before), expected);
     }
     for (const name of [
@@ -200,11 +226,21 @@ test(
     const { PDFDocument } = await import("pdf-lib");
     const boundaryPdf = await PDFDocument.create();
     boundaryPdf.addPage([595.5, 842]);
-    await fs.writeFile(path.join(root, "boundary.pdf"), await boundaryPdf.save());
+    await fs.writeFile(
+      path.join(root, "boundary.pdf"),
+      await boundaryPdf.save(),
+    );
     const beforeBoundary = sentImages.length;
-    await convert(path.join(root, "boundary.pdf"), path.join(root, "out-boundary-pdf"),
-      new AbortController().signal, emptyUsage(), async () => {});
-    assert.deepEqual(sentImages.slice(beforeBoundary), [{width: 1191, height: 1684}]);
+    await convert(
+      path.join(root, "boundary.pdf"),
+      path.join(root, "out-boundary-pdf"),
+      new AbortController().signal,
+      emptyUsage(),
+      async () => {},
+    );
+    assert.deepEqual(sentImages.slice(beforeBoundary), [
+      { width: 1191, height: 1684 },
+    ]);
     const scan = await PDFDocument.create();
     const image = await scan.embedPng(
       await fs.readFile(path.join(root, "image.png")),
@@ -223,8 +259,13 @@ test(
     assert.match(scanned.markdown, /Visual transcription/);
     mode = "http-error";
     await assert.rejects(
-      convert(path.join(root, "image.png"), path.join(root, "http-error"),
-        new AbortController().signal, emptyUsage(), async () => {}),
+      convert(
+        path.join(root, "image.png"),
+        path.join(root, "http-error"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
       (error) => {
         assert.match(error.message, /Vision HTTP 400 at Image, region/);
         assert.match(error.message, /invalid_image; Image rejected/);
@@ -233,7 +274,9 @@ test(
       },
     );
     assert.ok(await fs.stat(path.join(root, "image.png")));
-    await assert.rejects(fs.access(path.join(root, "http-error", "conversion.json")));
+    await assert.rejects(
+      fs.access(path.join(root, "http-error", "conversion.json")),
+    );
     mode = "incomplete";
     await assert.rejects(
       convert(
@@ -300,3 +343,181 @@ test(
     );
   },
 );
+
+test(
+  "maintenance converts up to 200 sheets independently of chat and explicitly omits embedded XLSX without opening it",
+  { timeout: 30000 },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-worksheets-"));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const ExcelJS = (await import("exceljs")).default;
+    const book = new ExcelJS.Workbook();
+    for (let i = 1; i <= 200; i++)
+      book.addWorksheet(`Sheet${i}`).getCell("A1").value = `Sentinel ${i}`;
+    const source = path.join(root, "many.xlsx");
+    await book.xlsx.writeFile(source);
+    const zip = await JSZip.loadAsync(await fs.readFile(source));
+    // Intentionally unreadable embedded bytes: the policy must not parse them.
+    zip.file(
+      "xl/embeddings/Workbook1.xlsx",
+      Buffer.from("not an Office package"),
+    );
+    zip.file(
+      "xl/worksheets/_rels/sheet1.xml.rels",
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdEmbedded" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/Workbook1.xlsx"/></Relationships>',
+    );
+    zip.file(
+      "xl/worksheets/sheet1.xml",
+      (await zip.file("xl/worksheets/sheet1.xml").async("string")).replace(
+        "</worksheet>",
+        '<oleObjects><oleObject r:id="rIdEmbedded" progId="Excel.Sheet.12"/></oleObjects></worksheet>',
+      ),
+    );
+    await fs.writeFile(source, await zip.generateAsync({ type: "nodebuffer" }));
+    const original = await fs.readFile(source);
+    const config = fileToolConfig(
+      root,
+      { maxSheets: 20, timeoutMs: 15000 },
+      {},
+    );
+    const { preflightPackage } = await import(
+      "../dist/file-tools/preflight.js"
+    );
+    await assert.rejects(
+      preflightPackage(source, ".xlsx", config),
+      /21 worksheets \(limit 20\)/,
+    );
+    const convert = createConverter(
+      config,
+      "unused-soffice",
+      128,
+      async () => () => {},
+    );
+    const result = await convert(
+      source,
+      path.join(root, "work"),
+      new AbortController().signal,
+      emptyUsage(),
+      async () => {},
+    );
+    assert.match(result.markdown, /Sentinel 200/);
+    assert.equal(
+      result.coverage.filter((c) => c.startsWith("Worksheet ")).length,
+      200,
+    );
+    assert.match(result.markdown, /Skipped embedded XLSX.*not read/);
+    assert.ok(result.coverage.some((c) => c.includes("Workbook1.xlsx")));
+    assert.deepEqual(
+      await fs.readFile(source),
+      original,
+      "never modifies original",
+    );
+    const sanitized = await JSZip.loadAsync(
+      await fs.readFile(path.join(root, "work/source.xlsx")),
+    );
+    assert.equal(sanitized.file("xl/embeddings/Workbook1.xlsx"), null);
+    assert.doesNotMatch(
+      await sanitized
+        .file("xl/worksheets/_rels/sheet1.xml.rels")
+        .async("string"),
+      /rIdEmbedded/,
+    );
+    assert.doesNotMatch(
+      await sanitized.file("xl/worksheets/sheet1.xml").async("string"),
+      /rIdEmbedded/,
+    );
+    book.addWorksheet("Sheet201").getCell("A1").value = "excess";
+    await book.xlsx.writeFile(source);
+    await assert.rejects(
+      convert(
+        source,
+        path.join(root, "over"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /201 worksheets \(limit 200\)/,
+    );
+    const hostile = await JSZip.loadAsync(original);
+    hostile.file("xl/embeddings/unknown.bin", Buffer.from("untrusted"));
+    await fs.writeFile(
+      source,
+      await hostile.generateAsync({ type: "nodebuffer" }),
+    );
+    await assert.rejects(
+      convert(
+        source,
+        path.join(root, "unsafe"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /Active\/embedded/,
+    );
+    const limited = createConverter(
+      { ...config, maxCells: 10 },
+      "unused",
+      128,
+      async () => () => {},
+    );
+    await assert.rejects(
+      limited(
+        source,
+        path.join(root, "cells"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /XML cells \(limit 10\)/,
+    );
+  },
+);
+
+test("omitting embedded XLSX removes only its exact preview shape and leaves unrelated drawings intact", async () => {
+  const { omitEmbeddedWorkbooks, hasSpreadsheetVisuals } = await import(
+    "../dist/knowledge-sync/office-embeddings.js"
+  );
+  const zip = new JSZip();
+  zip.file("xl/embeddings/Workbook1.xlsx", "deliberately not parsed");
+  zip.file(
+    "xl/worksheets/sheet1.xml",
+    '<worksheet xmlns:r="http://example/r"><oleObjects><oleObject shapeId="42" r:id="rEmbed"/></oleObjects></worksheet>',
+  );
+  zip.file(
+    "xl/worksheets/_rels/sheet1.xml.rels",
+    '<Relationships><Relationship Id="rEmbed" Target="../embeddings/Workbook1.xlsx" Type="http://example/package"/><Relationship Id="rDraw" Target="../drawings/drawing1.xml" Type="http://example/drawing"/></Relationships>',
+  );
+  zip.file(
+    "xl/drawings/drawing1.xml",
+    '<xdr:wsDr xmlns:xdr="http://example/drawing"><xdr:sp><xdr:cNvPr id="42" name="embedded icon"/></xdr:sp><xdr:pic><xdr:cNvPr id="43" name="real chart image"/></xdr:pic></xdr:wsDr>',
+  );
+  zip.file(
+    "xl/drawings/drawing2.xml",
+    '<xdr:wsDr xmlns:xdr="http://example/drawing"><xdr:sp><xdr:cNvPr id="42" name="other worksheet shape"/></xdr:sp></xdr:wsDr>',
+  );
+  zip.file(
+    "[Content_Types].xml",
+    '<Types><Override PartName="/xl/embeddings/Workbook1.xlsx" ContentType="example"/><Override PartName="/xl/workbook.xml" ContentType="example"/></Types>',
+  );
+  assert.deepEqual(await omitEmbeddedWorkbooks(zip), [
+    "xl/embeddings/Workbook1.xlsx",
+  ]);
+  const drawing = await zip.file("xl/drawings/drawing1.xml").async("string");
+  assert.doesNotMatch(drawing, /embedded icon/);
+  assert.match(drawing, /real chart image/);
+  assert.match(
+    await zip.file("xl/drawings/drawing2.xml").async("string"),
+    /other worksheet shape/,
+  );
+  assert.equal(hasSpreadsheetVisuals(drawing), true);
+  assert.equal(
+    hasSpreadsheetVisuals(
+      "<xdr:wsDr><mc:Choice><xdr:twoCellAnchor/></mc:Choice></xdr:wsDr>",
+    ),
+    false,
+  );
+  assert.doesNotMatch(
+    await zip.file("[Content_Types].xml").async("string"),
+    /Workbook1/,
+  );
+});

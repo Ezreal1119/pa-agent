@@ -9,6 +9,10 @@ import type { FileToolConfig } from "../file-tools/config.js";
 import JSZip from "jszip";
 import { XMLParser } from "fast-xml-parser";
 import { decodeOfficeXml } from "../file-tools/office-xml.js";
+import {
+  omitEmbeddedWorkbooks,
+  hasSpreadsheetVisuals,
+} from "./office-embeddings.js";
 import { tileOffsets } from "./visual-tiles.js";
 const request = JSON.parse(
   await new Promise<string>((resolve) => {
@@ -59,6 +63,21 @@ try {
   if ([".docx", ".pptx", ".xlsx"].includes(ext)) {
     await preflightPackage(input, ext, config);
     await normalizeOfficeEncoding();
+    const snapshot = await JSZip.loadAsync(await fs.readFile(input));
+    const skipped = await omitEmbeddedWorkbooks(snapshot);
+    if (skipped.length) {
+      for (const name of skipped)
+        coverage.push(
+          `Skipped embedded XLSX by administrator policy (not read): ${name}`,
+        );
+      await fs.writeFile(
+        input,
+        await snapshot.generateAsync({
+          type: "nodebuffer",
+          compression: "DEFLATE",
+        }),
+      );
+    }
     await inspectOffice();
   }
   if ([".txt", ".md"].includes(ext)) {
@@ -71,7 +90,9 @@ try {
     const { loadImage } = await import("@napi-rs/canvas");
     const image = await loadImage(input);
     if (image.width * image.height > config.maxPixels)
-      throw new Error("Image exceeds pixel limit.");
+      throw new Error(
+        `Image ${image.width}×${image.height} exceeds pixel limit ${config.maxPixels}.`,
+      );
     await tiles(image, image.width, image.height, "Image");
     coverage.push("Image pixels scheduled for recognition");
   } else {
@@ -82,7 +103,9 @@ try {
       await book.xlsx.readFile(input);
       let cells = 0;
       if (book.worksheets.length > config.maxSheets)
-        throw new Error("Workbook exceeds sheet limit.");
+        throw new Error(
+          `Workbook has ${book.worksheets.length} worksheets; limit ${config.maxSheets}.`,
+        );
       const sections: string[] = [];
       for (const sheet of book.worksheets) {
         sections.push(
@@ -91,7 +114,9 @@ try {
         sheet.eachRow((row) =>
           row.eachCell((cell) => {
             if (++cells > config.maxCells)
-              throw new Error("Workbook exceeds cell limit.");
+              throw new Error(
+                `Workbook has ${cells} populated cells; limit ${config.maxCells}; worksheet ${sheet.name}.`,
+              );
             sections.push(
               `${cell.address}: ${JSON.stringify(cell.value)}${cell.note ? `\nNote: ${JSON.stringify(cell.note)}` : ""}`,
             );
@@ -103,9 +128,15 @@ try {
       }
       markdown = sections.join("\n\n");
       const zip = await JSZip.loadAsync(await fs.readFile(input));
-      const visuals = Object.keys(zip.files).filter((p) =>
-        /^xl\/(drawings|charts)\/[^/]+\.xml$/.test(p),
-      );
+      const visuals: string[] = [];
+      for (const name of Object.keys(zip.files)) {
+        if (
+          /^xl\/charts\/[^/]+\.xml$/.test(name) ||
+          (/^xl\/drawings\/[^/]+\.xml$/.test(name) &&
+            hasSpreadsheetVisuals(await zip.file(name)!.async("string")))
+        )
+          visuals.push(name);
+      }
       if (visuals.length) {
         for (const name of visuals.filter((p) => p.startsWith("xl/charts/")))
           markdown += `\n\n### Chart source ${name}\n\n\`\`\`xml\n${await zip.file(name)!.async("string")}\n\`\`\``;
@@ -154,14 +185,20 @@ try {
       const doc = await task.promise;
       try {
         if (doc.numPages > config.maxPages)
-          throw new Error("Document exceeds page limit.");
+          throw new Error(
+            `Document has ${doc.numPages} pages; page limit ${config.maxPages}.`,
+          );
         if (request.expectedPages && doc.numPages !== request.expectedPages)
-          throw new Error("Rendered slide count differs from source.");
+          throw new Error(
+            `Rendered slide count ${doc.numPages} differs from source ${request.expectedPages}.`,
+          );
         for (let pageNo = 1; pageNo <= doc.numPages; pageNo++) {
           const page = await doc.getPage(pageNo);
           const viewport = page.getViewport({ scale: 2 });
           if (viewport.width * viewport.height > config.maxPixels)
-            throw new Error("Page exceeds render pixel limit.");
+            throw new Error(
+              `Page ${pageNo}: ${Math.ceil(viewport.width)}×${Math.ceil(viewport.height)} exceeds render pixel limit ${config.maxPixels}.`,
+            );
           const canvas = createCanvas(
             Math.ceil(viewport.width),
             Math.ceil(viewport.height),
@@ -180,6 +217,11 @@ try {
       }
     }
   }
+  const skippedNotes = coverage.filter((line) =>
+    line.startsWith("Skipped embedded XLSX"),
+  );
+  if (skippedNotes.length)
+    markdown += `\n\n## Conversion scope\n\n${skippedNotes.map((line) => `- ${line}`).join("\n")}\n`;
   if (Buffer.byteLength(markdown) > 32 * 1024 * 1024)
     throw new Error("Extracted Markdown exceeds 32 MiB.");
   await fs.writeFile(path.join(dir, "extracted.md"), markdown, { mode: 0o600 });
@@ -250,7 +292,10 @@ async function inspectOffice() {
   const zip = await JSZip.loadAsync(await fs.readFile(input));
   const fonts = new Set<string>();
   for (const [name, part] of Object.entries(zip.files)) {
-    if (/(?:vbaProject|activeX|embeddings|externalLinks)/i.test(name))
+    if (
+      /(?:vbaProject|activeX|externalLinks)/i.test(name) ||
+      (!part.dir && /(?:^|\/)embeddings\//i.test(name))
+    )
       throw new Error(
         "Active/embedded/external Office content requires a safe exported copy.",
       );

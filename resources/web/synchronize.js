@@ -10,7 +10,7 @@ let token = "",
   polling = false,
   uploading = false,
   maxFileBytes = 100 * 1048576;
-const tabNames = ["incoming", "reports", "delete", "imports"];
+const tabNames = ["incoming", "reports", "delete", "imports", "library"];
 const requestedTab = new URLSearchParams(location.search).get("tab");
 let activeTab = tabNames.includes(requestedTab)
   ? requestedTab
@@ -26,6 +26,7 @@ function setTab(name, updateUrl = true) {
     button.tabIndex = isActive ? 0 : -1;
     $(`panel-${tab}`).hidden = !isActive;
   }
+  if (activeTab === "library") globalThis.openLibrary?.();
   if (updateUrl) {
     const url = new URL(location.href);
     url.searchParams.set("tab", activeTab);
@@ -38,10 +39,26 @@ const drafts = new Map(),
   reconvertIds = new Set();
 const statusLabel = (value) =>
   ({
-    needs_review: "Needs review",
+    needs_review: "Needs your decision",
+    queued: "Pending",
+    converted: "Converted · waiting",
     waiting_to_publish: "Publishing",
     awaiting_confirmation: "Awaiting confirmation",
-  })[value] || (value.charAt(0).toUpperCase() + value.slice(1)).replaceAll("_", " ");
+  })[value] ||
+  (value.charAt(0).toUpperCase() + value.slice(1)).replaceAll("_", " ");
+const statusHint = (status, kind) =>
+  ({
+    needs_review:
+      "The agent needs a business decision from you, such as product identity, version order or a new product. Answer below, then Re-Sync.",
+    failed:
+      "Nothing was published. Automatic checks or processing failed; Re-Sync retries, with optional guidance.",
+    stopped: "Nothing was published. Re-Sync to continue.",
+    interrupted: "Nothing was published. Re-Sync to continue.",
+    awaiting_confirmation:
+      kind === "delete"
+        ? "Review the deletion diff, then confirm. To change it, give instructions below."
+        : undefined,
+  })[status];
 const el = (tag, text, cls) => {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
@@ -295,7 +312,7 @@ async function renderJob(job) {
     head.append(button("Stop", () => api(`jobs/${job.id}/stop`, "POST", {})));
   holder.append(head, el("p", dateLabel(job.created), "sync-report-date"));
   if (job.prompt) holder.append(el("p", job.prompt, "sync-request"));
-  if (job.status === "awaiting_confirmation")
+  if (job.kind === "delete" && job.status === "awaiting_confirmation")
     holder.append(
       button(
         "Confirm deletion",
@@ -345,16 +362,44 @@ async function renderJob(job) {
       metric("Model", item.model || "—"),
     );
     content.append(metrics);
-    if (item.reason) content.append(el("p", item.reason));
+    const hint = statusHint(item.status, job.kind);
+    if (hint) content.append(el("p", hint, "sync-hint"));
+    if (item.reason?.includes("\n")) {
+      const list = el("ul", undefined, "sync-problems");
+      for (const line of item.reason.split("\n").filter(Boolean))
+        list.append(el("li", line));
+      content.append(list);
+    } else if (item.reason) content.append(el("p", item.reason));
     if (item.summary) content.append(el("p", item.summary));
     if (item.feedback)
       content.append(
         el("p", `Your instructions: ${item.feedback}`, "sync-request"),
       );
-    if (item.previous)
-      content.append(
-        el("p", "Continued from a previous attempt.", "sync-subtle"),
+    if (item.attempts?.length) {
+      const history = el("details", undefined, "sync-attempts"),
+        list = el("ol");
+      history.append(
+        el(
+          "summary",
+          `Attempt ${item.attempts.length + 1} · ${item.attempts.length} earlier ${item.attempts.length === 1 ? "attempt" : "attempts"}`,
+        ),
       );
+      for (const a of item.attempts) {
+        const entry = el("li");
+        entry.append(
+          el(
+            "strong",
+            `${statusLabel(a.status)}${a.finished ? ` · ${dateLabel(a.finished)}` : ""}`,
+          ),
+        );
+        if (a.feedback)
+          entry.append(el("p", `Instructions: ${a.feedback}`, "sync-subtle"));
+        if (a.reason) entry.append(el("p", a.reason.slice(0, 1200)));
+        list.append(entry);
+      }
+      history.append(list);
+      content.append(history);
+    }
     if (item.plan) {
       const d = item.plan.decision;
       content.append(
@@ -393,18 +438,55 @@ async function renderJob(job) {
       b.disabled = busy;
       content.append(b);
     }
+    if (job.kind === "sync" && item.status === "awaiting_confirmation") {
+      content.append(
+        el(
+          "p",
+          item.plan?.confirmationReason ||
+            "Review the changes before publishing.",
+          "sync-request",
+        ),
+      );
+      const confirm = button(
+        "Confirm publication",
+        async () =>
+          choose(
+            await api(`jobs/${job.id}/confirm`, "POST", { itemId: item.id }),
+          ),
+        "sync-button sync-button-primary sync-confirm",
+      );
+      confirm.disabled = busy;
+      content.append(confirm);
+    }
     if (
-      ["needs_review", "failed", "stopped", "interrupted"].includes(item.status)
+      [
+        "needs_review",
+        "failed",
+        "stopped",
+        "interrupted",
+        "awaiting_confirmation",
+      ].includes(item.status)
     ) {
       const feedback = el("div", undefined, "sync-feedback"),
-        label = el("label", "Instructions for Re-Sync"),
+        label = el(
+          "label",
+          item.status === "awaiting_confirmation"
+            ? "Or request changes (optional)"
+            : job.kind === "delete"
+              ? "Instructions for deletion preview"
+              : item.status === "needs_review"
+                ? "Your decision"
+                : "Instructions for Re-Sync (optional)",
+        ),
         input = el("textarea");
       input.id = `feedback-${item.id}`;
       label.htmlFor = input.id;
       input.rows = 3;
       input.maxLength = 16000;
       input.placeholder =
-        "Explain the correct product, version or how this file should be handled…";
+        job.kind === "delete"
+          ? "Clarify what to delete or keep, and which related pages should be checked…"
+          : "Explain the correct product, version or how this file should be handled…";
       input.setAttribute("aria-label", `Instructions for ${item.name}`);
       input.value = drafts.get(item.id) || "";
       input.oninput = () => drafts.set(item.id, input.value);
@@ -440,19 +522,31 @@ async function renderJob(job) {
           : reconvertIds.delete(item.id);
       forceLabel.append(force, document.createTextNode("Reconvert original"));
       const b = button(
-        "Re-Sync →",
-        async () =>
-          choose(
-            await api(`jobs/${job.id}/resync`, "POST", {
-              itemId: item.id,
-              feedback: input.value,
-              forceConvert: force.checked,
-            }),
-          ),
-        "sync-button sync-button-primary",
+        job.kind === "delete" ? "Regenerate deletion preview →" : "Re-Sync →",
+        async () => {
+          const next = await api(`jobs/${job.id}/resync`, "POST", {
+            itemId: item.id,
+            feedback: input.value,
+            ...(job.kind === "sync" ? { forceConvert: force.checked } : {}),
+          });
+          // Re-Sync replaces this card in place with a new attempt ID.
+          const attempt = next.items?.find((i) =>
+            i.attempts?.some((a) => a.id === item.id),
+          );
+          if (attempt) {
+            openCards.add(attempt.id);
+            drafts.delete(item.id);
+            reconvertIds.delete(item.id);
+          }
+          await choose(next);
+        },
+        item.status === "awaiting_confirmation"
+          ? "sync-button"
+          : "sync-button sync-button-primary",
       );
       b.disabled = busy;
-      actions.append(forceLabel, b);
+      if (job.kind === "sync") actions.append(forceLabel);
+      actions.append(b);
       feedback.append(label, input, actions);
       content.append(feedback);
     }
@@ -562,55 +656,129 @@ dropZone.ondrop = (e) => {
   if (e.dataTransfer?.files.length)
     action(() => uploadFiles(e.dataTransfer.files));
 };
-let selectedImport, importCache = "", importHistoryCache = "", importStarting = false;
+let selectedImport,
+  importCache = "",
+  importHistoryCache = "",
+  importStarting = false;
 async function importApi(route, method = "GET", body) {
-  const res = await fetch(`/api/sftp-sync/${route}`, {method, headers:{"X-Local-Token":token, ...(body ? {"Content-Type":"application/json"} : {})}, body:body ? JSON.stringify(body) : undefined});
-  if (res.status === 401) {location.href = "/login"; throw Error("Please sign in.");}
-  const data = await res.json(); if (!res.ok) throw Error(data.error || "Import request failed."); return data;
+  const res = await fetch(`/api/sftp-sync/${route}`, {
+    method,
+    headers: {
+      "X-Local-Token": token,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) {
+    location.href = "/login";
+    throw Error("Please sign in.");
+  }
+  const data = await res.json();
+  if (!res.ok) throw Error(data.error || "Import request failed.");
+  return data;
 }
 async function refreshImports() {
   const state = await importApi("status");
-  $("import-config").textContent = !state.configured ? `Set ${state.missing.join(", ")} in .env, then restart.` : (state.recoveryError || state.listError) ? (state.recoveryError || state.listError) : `${state.paths} configured ${state.paths === 1 ? "path" : "paths"}${state.invalid ? ` · ${state.invalid} invalid lines` : ""}`;
+  $("import-config").textContent = !state.configured
+    ? `Set ${state.missing.join(", ")} in .env, then restart.`
+    : state.recoveryError || state.listError
+      ? state.recoveryError || state.listError
+      : `${state.paths} configured ${state.paths === 1 ? "path" : "paths"}${state.invalid ? ` · ${state.invalid} invalid lines` : ""}`;
   $("import-paths").textContent = state.pathsFile;
-  $("import-run").disabled = importStarting || !!state.running || !state.configured || !!state.listError || (!state.paths && !state.invalid);
+  $("import-run").disabled =
+    importStarting ||
+    !!state.running ||
+    !state.configured ||
+    !!state.listError ||
+    (!state.paths && !state.invalid);
   $("import-run").textContent = state.running ? "Import running…" : "Run now →";
   const reports = state.reports;
-  if (!selectedImport && reports.length) selectedImport = state.running || reports[0].id;
-  const key = JSON.stringify({reports, selectedImport});
+  if (!selectedImport && reports.length)
+    selectedImport = state.running || reports[0].id;
+  const key = JSON.stringify({ reports, selectedImport });
   if (key !== importHistoryCache) {
-    importHistoryCache = key; $("import-history").replaceChildren();
+    importHistoryCache = key;
+    $("import-history").replaceChildren();
     for (const run of reports) {
-      const b = button("", async () => {selectedImport=run.id; importCache=""; await refreshImports();}, "sync-history-item");
-      b.append(el("strong", "SFTP import"), el("time", dateLabel(run.created)), badge(run.status), el("small",Object.entries(run.counts).map(([s,n])=>`${n} ${s.replaceAll("_"," ")}`).join(" · ")));
-      if (run.id === selectedImport) {b.classList.add("selected"); b.setAttribute("aria-current","true");}
+      const b = button(
+        "",
+        async () => {
+          selectedImport = run.id;
+          importCache = "";
+          await refreshImports();
+        },
+        "sync-history-item",
+      );
+      b.append(
+        el("strong", "SFTP import"),
+        el("time", dateLabel(run.created)),
+        badge(run.status),
+        el(
+          "small",
+          Object.entries(run.counts)
+            .map(([s, n]) => `${n} ${s.replaceAll("_", " ")}`)
+            .join(" · "),
+        ),
+      );
+      if (run.id === selectedImport) {
+        b.classList.add("selected");
+        b.setAttribute("aria-current", "true");
+      }
       $("import-history").append(b);
     }
   }
   if (!selectedImport) return;
-  const run = await importApi(`runs/${selectedImport}`), encoded=JSON.stringify(run);
-  if (encoded === importCache) return; importCache=encoded;
-  const holder=$("import-report"); holder.replaceChildren();
-  const heading=el("div",undefined,"sync-report-heading"), title=el("div");
-  title.append(el("h3","Import report"), badge(run.status)); heading.append(title);
-  if (run.status === "running") heading.append(button("Stop",()=>importApi(`runs/${run.id}/stop`,"POST",{})));
-  holder.append(heading,el("p",dateLabel(run.created),"sync-report-date"));
-  if (run.error) holder.append(el("p",run.error,"sync-file-error"));
+  const run = await importApi(`runs/${selectedImport}`),
+    encoded = JSON.stringify(run);
+  if (encoded === importCache) return;
+  importCache = encoded;
+  const holder = $("import-report");
+  holder.replaceChildren();
+  const heading = el("div", undefined, "sync-report-heading"),
+    title = el("div");
+  title.append(el("h3", "Import report"), badge(run.status));
+  heading.append(title);
+  if (run.status === "running")
+    heading.append(
+      button("Stop", () => importApi(`runs/${run.id}/stop`, "POST", {})),
+    );
+  holder.append(heading, el("p", dateLabel(run.created), "sync-report-date"));
+  if (run.error) holder.append(el("p", run.error, "sync-file-error"));
   for (const item of run.items) {
-    const card=el("details",undefined,"sync-card"), summary=el("summary"), body=el("div",undefined,"sync-card-body");
-    card.open=["failed","interrupted"].includes(item.status);
-    summary.append(el("span",item.path || `JSONL line ${item.line}`,"sync-card-title"),badge(item.status));
-    body.append(el("p",`Line ${item.line} · ${item.attempts} ${item.attempts === 1 ? "attempt" : "attempts"}${item.bytes!==undefined?` · ${fileSize(item.bytes)}`:""}`));
-    if (item.error) body.append(el("p",item.error,"sync-file-error"));
-    if (item.target) body.append(el("p",`Incoming file: ${item.target}`));
-    if (item.hash) body.append(el("code",`SHA256 ${item.hash}`));
-    card.append(summary,body); holder.append(card);
+    const card = el("details", undefined, "sync-card"),
+      summary = el("summary"),
+      body = el("div", undefined, "sync-card-body");
+    card.open = ["failed", "interrupted"].includes(item.status);
+    summary.append(
+      el("span", item.path || `JSONL line ${item.line}`, "sync-card-title"),
+      badge(item.status),
+    );
+    body.append(
+      el(
+        "p",
+        `Line ${item.line} · ${item.attempts} ${item.attempts === 1 ? "attempt" : "attempts"}${item.bytes !== undefined ? ` · ${fileSize(item.bytes)}` : ""}`,
+      ),
+    );
+    if (item.error) body.append(el("p", item.error, "sync-file-error"));
+    if (item.target) body.append(el("p", `Incoming file: ${item.target}`));
+    if (item.hash) body.append(el("code", `SHA256 ${item.hash}`));
+    card.append(summary, body);
+    holder.append(card);
   }
 }
-$("import-run").onclick=()=>action(async()=>{
-  if (importStarting) return; importStarting=true; $("import-run").disabled=true;
-  try {const run=await importApi("runs","POST",{}); selectedImport=run.id;importCache="";}
-  finally {importStarting=false;}
-});
+$("import-run").onclick = () =>
+  action(async () => {
+    if (importStarting) return;
+    importStarting = true;
+    $("import-run").disabled = true;
+    try {
+      const run = await importApi("runs", "POST", {});
+      selectedImport = run.id;
+      importCache = "";
+    } finally {
+      importStarting = false;
+    }
+  });
 (async () => {
   try {
     const response = await fetch("/api/auth/status"),

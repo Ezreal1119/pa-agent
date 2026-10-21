@@ -22,7 +22,7 @@ export async function preflightPackage(file: string, extension: string, config: 
     const name = bytes.subarray(offset + 46, offset + 46 + nameBytes).toString("utf8");
     if (flags & 1 || /(?:^|\/)\.\.(?:\/|$)|\\|^\/|:|\0/.test(name) || seen.has(name)) throw new Error("Unsafe, duplicate or encrypted ZIP entry.");
     seen.add(name); expanded += size;
-    if (expanded > config.maxExpandedBytes || size > config.maxExpandedBytes) throw new Error("Office package exceeds expanded size limit.");
+    if (expanded > config.maxExpandedBytes || size > config.maxExpandedBytes) throw new Error(`Office package exceeds expanded size limit ${config.maxExpandedBytes} bytes at ${name}: ${expanded} declared bytes.`);
     offset += 46 + nameBytes + extraBytes + commentBytes;
     if (offset > end) throw new Error("Invalid ZIP entry length.");
   }
@@ -32,13 +32,13 @@ export async function preflightPackage(file: string, extension: string, config: 
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) continue;
     const data = await entry.async("nodebuffer"); actualBytes += data.length;
-    if (actualBytes > config.maxExpandedBytes) throw new Error("Office package exceeds expanded size limit.");
+    if (actualBytes > config.maxExpandedBytes) throw new Error(`Office package exceeds expanded size limit ${config.maxExpandedBytes} bytes at ${entry.name}: ${actualBytes} actual bytes.`);
     if (/\/(?:media)\//i.test(entry.name) && /\.(png|jpe?g|webp)$/i.test(entry.name)) {
       const image = inspectImageHeader(data);
       if (!image || image.width < 1 || image.height < 1 || image.width * image.height > config.maxPixels) throw new Error("Embedded image exceeds pixel limit or has invalid content.");
     }
     if (!/\.(xml|rels)$/i.test(entry.name)) continue;
-    if (data.length > 8 * 1024 * 1024) throw new Error("Office XML part exceeds size limit.");
+    if (data.length > 8 * 1024 * 1024) throw new Error(`Office XML part exceeds size limit ${8 * 1024 * 1024} bytes at ${entry.name}: ${data.length} bytes.`);
     let xml: string;
     try { xml = decodeOfficeXml(data); }
     catch { throw new Error(`Invalid or unsupported Office XML encoding: ${entry.name}.`); }
@@ -47,9 +47,9 @@ export async function preflightPackage(file: string, extension: string, config: 
     if (valid !== true) throw new Error(`Invalid or unsafe Office XML: ${entry.name} (${valid.err.code}, line ${valid.err.line}, column ${valid.err.col}).`);
     if (/^xl\/worksheets\/[^/]+\.xml$/i.test(entry.name)) {
       sheets++; cells += [...xml.matchAll(/<(?:\w+:)?c(?:\s|>)/g)].length;
-      if (sheets > config.maxSheets || cells > config.maxCells) throw new Error("Workbook exceeds sheet or cell limit.");
+      if (sheets > config.maxSheets || cells > config.maxCells) throw new Error(`Workbook limit exceeded at ${entry.name}: ${sheets} worksheets (limit ${config.maxSheets}), ${cells} XML cells (limit ${config.maxCells}).`);
       let mergedArea = 0;
-      for (const match of xml.matchAll(/<(?:\w+:)?mergeCell\b[^>]*\bref=["']([^"']+)["']/g)) { const range = parseExcelRange(match[1]!); mergedArea += (range.endRow - range.startRow + 1) * (range.endColumn - range.startColumn + 1); if (mergedArea > config.maxCells) throw new Error("Workbook merged-cell area exceeds limit."); }
+      for (const match of xml.matchAll(/<(?:\w+:)?mergeCell\b[^>]*\bref=["']([^"']+)["']/g)) { const range = parseExcelRange(match[1]!); mergedArea += (range.endRow - range.startRow + 1) * (range.endColumn - range.startColumn + 1); if (mergedArea > config.maxCells) throw new Error(`Workbook merged-cell area ${mergedArea} exceeds limit ${config.maxCells} at ${entry.name}.`); }
     }
   }
   if (extension === ".pptx" && [...seen].filter(name => /^ppt\/slides\/slide\d+\.xml$/i.test(name)).length > config.maxPages) throw new Error("Presentation exceeds slide limit.");

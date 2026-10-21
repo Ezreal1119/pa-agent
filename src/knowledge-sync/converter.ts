@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { fileQueue } from "../file-tools/runner.js";
 import { visionTokens } from "../web/run-metrics.js";
+import { SYNC_MAX_SHEETS } from "./config.js";
 import { visionHttpError } from "./vision-http.js";
 import type { FileToolConfig } from "../file-tools/config.js";
 import {
@@ -21,7 +22,7 @@ export type Converter = (
   usage: Usage,
   update: () => Promise<void>,
 ) => Promise<Conversion>;
-export const CONVERSION_VERSION = 3;
+export const CONVERSION_VERSION = 4;
 export function createConverter(
   config: FileToolConfig,
   soffice: string,
@@ -114,7 +115,11 @@ export function createConverter(
               input,
               dir,
               soffice,
-              config: { ...config, vision: { ...config.vision, apiKey: "" } },
+              config: {
+                ...config,
+                maxSheets: SYNC_MAX_SHEETS,
+                vision: { ...config.vision, apiKey: "" },
+              },
             }),
           );
         }),
@@ -193,7 +198,11 @@ export function createConverter(
             },
           );
           if (!response.ok) {
-            throw await visionHttpError(response, image.label, config.vision.apiKey);
+            throw await visionHttpError(
+              response,
+              image.label,
+              config.vision.apiKey,
+            );
           }
           const chunks: Uint8Array[] = [];
           let size = 0;

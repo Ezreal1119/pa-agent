@@ -7,9 +7,12 @@
 1. **Incoming files** 批量上传，或把文件放到产品库的 `newly_added/` 后 Refresh。支持 PDF、DOCX、XLSX、PPTX、PNG/JPG/WebP、UTF-8 TXT/Markdown，每文件上限 **100 MiB**，独立于聊天附件的 30 MiB，不需要修改 `.env`。扫描和上传会忽略任意大小写的 `README.md`（包含子目录中的说明文件），不删除已有说明文件。同名资料上传自动生成不同名称。
 2. 勾选输入，点击 **Start Sync**。一批最多 50 个文件，完整转换文本的批次内存预算默认 16 MiB（`SYNC_MAX_BATCH_MARKDOWN_BYTES`）；超过时保留转换结果，报告提示分批 Re-Sync，不截断发布。只有一个维护任务执行。提交时固定文件列表与哈希；后来的文件留到下一批。关闭浏览器不取消任务。
 3. **Sync reports** 查看阶段、状态、已记录的文本/视觉 Token、版本依据、产品与 slot、逐文件差异、转换覆盖和清理结果。内容默认中文，控件英文。Token 是供应商实际返回的 usage，不是估算成本；缺失 usage 不补造。
-4. **Needs review / Failed / Interrupted / Stopped** 下填写说明，点 **Re-Sync**。产生独立尝试并保留历史。原件未变化时复用转换；识别错误、遗漏等反馈或 **Reconvert original** 强制重新转换。仅明确的管理员反馈可以授权新产品、旧版本或同版覆盖；仍须通过路径、覆盖与索引校验。
+4. 状态含义：**Needs your decision** 只表示 Agent 需要管理员回答业务问题（产品身份、版本先后、新产品授权、无法解释的冲突），报告写明具体问题；**Failed** 表示自动检查或处理失败、未发布，可直接 Re-Sync（说明可选）；**Awaiting confirmation** 只用于删除预览和非同名 Hub 覆盖。Agent 的 `finish_sync` 会当场运行后端校验，一次返回全部问题，Agent 在同一会话内最多修正 3 轮，路径/索引类技术问题不再交给管理员。
+   在报告中填写说明，点 **Re-Sync**。Re-Sync 原地重跑同一张报告卡片，旧尝试折叠为 “earlier attempts” 历史，不新开报告。原件未变化时复用转换；识别错误、遗漏等反馈或 **Reconvert original** 强制重新转换。仅明确的管理员反馈可以授权新产品、旧版本或同版覆盖；仍须通过路径、覆盖与索引校验。
    新产品身份和归属明确、仅缺少创建授权时，AI 会在该文件报告中生成 **AI-suggested instructions**。点击 **Use suggested instructions** 填入下方输入框，检查或修改后再点 **Re-Sync**。建议不会自动提交，也不构成授权；身份/slot 仍有歧义时只提示需要补充的信息。每次 Re-Sync 仅处理选中的这一份文件，重新核对当前知识库并维护相关索引；其他文件和旧报告保持独立。旧报告没有建议字段时仍按原流程手动填写。
-5. **Delete knowledge** 用自然语言描述要删除的资料，点 **Preview**。检查具体来源文件及索引差异后点击 **Confirm deletion**。预览期间知识库变化会拒绝提交，需要重新预览。歧义请求进入人工反馈，不自动扩大范围。
+   Hub 文件名与产品目录名只差空格、标点或大小写（如 `K388 Pro` → `K388-Pro.md`）时，后端自动对应，无需确认。`oldPaths` 中误写的原件路径（如 `.pdf`）自动映射到同名 Markdown。`index.md` 仅在新建 Hub/shared 节点时强制更新。
+   若 Agent 选择另一个现有 Hub，报告会显示具体对应路径并进入 **Awaiting confirmation**。逐文件查看差异，点击 **Confirm publication** 才发布。不维护永久映射，不因反馈里写了“确认”就跳过该按钮。预览后资料库发生变化会拒绝发布，需 Re-Sync 重新生成；批次后续文件的成功发布也可能使早先预览过期。
+5. **Delete knowledge** 用自然语言描述要删除的资料，点 **Preview**。检查具体来源文件及索引差异后点击 **Confirm deletion**。预览期间知识库变化会拒绝提交，需要重新预览。歧义请求进入人工反馈，不自动扩大范围。删除报告的补充输入通过 **Regenerate deletion preview** 重新生成预览，不显示 **Reconvert original**，也不会直接删除。
 
 新增、更新都由专属 Pi 会话读取候选全文和当前知识后判断。模型只能生成候选方案，不能直接写正式库。可信新版本替换旧 Markdown，源文完整保存；Hub、依赖页面、共享回链、index 和 log 同步校验。同批输入可互相读取和比较；冲突或预算不足保留原件等待反馈。历史目录中的时间戳不是版本证据。
 
@@ -26,9 +29,15 @@
 
 维护转换独立于聊天工具的截断输出。TXT/MD 保留 UTF-8 原文；XLSX 提取所有有效工作表、单元格值、公式/缓存、备注和合并信息。DOCX/PPTX 通过 MarkItDown 提取并补充结构文本，LibreOffice 渲染页面。PDF 每页渲染；图片及页面按重叠区域逐个调用视觉模型，保存覆盖记录。不得把未识别的图表或图片当作空白跳过。
 
-依赖缺失、显式源字体缺失、视觉配置缺失、重要区域不可识别、输出截断、页数不符、超出页/单元格/解包预算都会停止入库。带宏、ActiveX、嵌入对象或外部加载内容的 Office 文件拒绝转换。旧 DOC/XLS/PPT、加密文件需提供支持格式的可读取副本。
+依赖缺失、显式源字体缺失、视觉配置缺失、重要区域不可识别、输出截断、页数不符、超出页/单元格/解包预算都会停止入库。带宏、ActiveX、非 XLSX 嵌入对象或外部加载内容的 Office 文件拒绝转换。按管理员要求，内嵌 XLSX 不读取：仅在私有转换副本移除包及关联引用，记录跳过清单，并在 Markdown 注明覆盖范围；不修改上传原件。不再因内嵌 XLSX 单独失败。其绑定的预览图标按 shapeId 精确排除，其他图片、图表仍须完整识别。旧 DOC/XLS/PPT、加密文件需提供支持格式的可读取副本。
 
 当前保守限制：带视觉对象且存在隐藏工作表、隐藏行列或指定打印区域的 XLSX，无法证明渲染覆盖完整，会保留源文件并要求复核/提供完整导出版本，不盲目发布。显式字体检查不能代替视觉核对；样式复杂的文件仍可能需要安装原字体或提供可靠 PDF 导出。通过视觉检查代表模型报告可读，不等于人工逐字校对保证。
+
+SYNC 的工作表上限单独固定为 **200**，不读取 `FILE_MAX_SHEETS`；聊天仍使用原设置（默认 20）。单元格/解包大小、页数、像素、超时和进程内存限制保留，超限报告显示实际数量、上限和相关对象。转换缓存版本升为 4，之前的转换首次 Re-Sync 会重新生成。
+
+维护 Agent 可用 `patch_candidate` 提交带 SHA256 基线的精确局部替换；旧片段须唯一匹配，基线冲突拒绝。`log.md` 不再由模型整页重写：模型提交本次 `logEntry`（缺省用 summary/reason），后台保留完整历史后追加。日志是审计历史，不作为需要清除旧来源路径的活跃依赖页面。其他 Hub、目录、主题与依赖页校验不放宽。
+
+状态区分 **Pending / Converting / Converted · waiting / Analyzing / Publishing**，先完成本批转换供版本比较，再逐份分析；Converted 表示等待分析，并非多个 Agent 正同时运行。
 
 候选索引修改合计最多 8 MiB、最多 100 个变更文件；超过时要求缩小任务，不截断发布。
 
@@ -96,7 +105,14 @@ systemctl status product-expert.service --no-pager
 | POST | `/api/sync/jobs/:id/resync` | `{itemId, feedback, forceConvert?}`，返回 202 |
 | POST | `/api/sync/jobs/:id/cleanup` | `{itemId}`，重试原件清理 |
 | POST | `/api/sync/delete-preview` | `{prompt}`，创建预览任务返回 202 |
-| POST | `/api/sync/jobs/:id/confirm` | `{}`，提交指定预览返回 202 |
+| POST | `/api/sync/jobs/:id/confirm` | 删除预览 `{}`；单文件发布确认 `{itemId}`，返回 202 |
+| GET | `/api/sync/library` | 知识库递归文件列表 `{files, maxEditBytes}` |
+| GET | `/api/sync/library/file?path=...` | 单文件元数据；`.md`/`.txt` ≤2 MiB 附 `text` 与 `hash` |
+| PUT | `/api/sync/library/file` | `{path, text, expectedHash}`，哈希不符 409，Sync 运行中 409，只读文件 403 |
+
+## Library
+
+Library Tab 递归显示 `urovo-product-expert/`（跳过点路径与符号链接），Markdown 可预览或看源码。可编辑 `.md`/`.txt`（≤2 MiB，含 MEMORY.md）；`newly_added/`、`SKILL.md`、`SYNC.md`、`SYNC_PROMPT.md` 和其他格式只读。保存前显示 diff；服务端核对打开时哈希，在知识库写锁内原子写入，旧版备份到 `.data/maintenance-backups/library-edits/<时间>/`，并追加 `edits.jsonl`。手工编辑不会重新校验索引，改 Hub/index 时需自行保持链接一致。
 
 
 侧栏另有独立的 [Memory Injection](memory-injection.md) 对话框，仅在管理员确认预览后维护主MEMORY.md，不属于资料Synchronize任务，也不改MEMORY_EXTRA.md。

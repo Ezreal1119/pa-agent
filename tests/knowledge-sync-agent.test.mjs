@@ -6,7 +6,7 @@ import os from "node:os";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { createPlanner } from "../dist/knowledge-sync/agent.js";
-import { emptyUsage } from "../dist/knowledge-sync/core.js";
+import { emptyUsage, hash } from "../dist/knowledge-sync/core.js";
 
 function reply(res, tool, usage = { prompt_tokens: 10, completion_tokens: 5 }) {
   res.writeHead(200, { "content-type": "text/event-stream" });
@@ -81,6 +81,41 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
     },
     { name: "finish_sync", args: decision },
   ];
+  calls.splice(
+    calls.length - 1,
+    0,
+    {
+      name: "patch_candidate",
+      args: {
+        path: "product-knowledge-vault/index.md",
+        expectedHash: "0".repeat(64),
+        replacements: [{ before: "replacement", after: "bad" }],
+      },
+    },
+    {
+      name: "patch_candidate",
+      args: {
+        path: "product-knowledge-vault/index.md",
+        expectedHash: hash("replacement"),
+        replacements: [{ before: "e", after: "bad" }],
+      },
+    },
+    {
+      name: "patch_candidate",
+      args: {
+        path: "product-knowledge-vault/index.md",
+        expectedHash: hash("replacement"),
+        replacements: [{ before: "replacement", after: "patched" }],
+      },
+    },
+    {
+      name: "write_candidate",
+      args: {
+        path: "product-knowledge-vault/log.md",
+        text: "overwrite history",
+      },
+    },
+  );
   server = createServer(async (req, res) => {
     let text = "";
     for await (const c of req) text += c;
@@ -119,6 +154,11 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   };
   const result = await createPlanner(options)(input);
   assert.equal(result.decision.action, "add");
+  assert.equal(
+    result.staged.get("product-knowledge-vault/index.md"),
+    "patched",
+  );
+  assert.ok(!result.staged.has("product-knowledge-vault/log.md"));
   assert.ok(usage.input > 0);
   assert.ok(usage.requests >= 7);
   const names = payloads[0].tools.map((t) => t.function.name);
@@ -128,6 +168,13 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   const all = JSON.stringify(payloads);
   assert.match(all, /Read all segments before submitting/);
   assert.match(all, /Protected path/);
+  assert.match(all, /Candidate baseline conflict/);
+  assert.match(all, /Each replacement must match exactly once/);
+  assert.match(all, /backend appends the log/);
+  // finish_sync validates in-tool and returns every problem for repair.
+  assert.match(all, /submitted\\":false/);
+  assert.match(all, /New products require administrator feedback/);
+  assert.ok(names.includes("product_hubs"));
   assert.match(
     all,
     /Read all segments before submitting: product-knowledge-vault\/index.md/,
@@ -141,10 +188,17 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
     }),
     /without a structured decision|budget/,
   );
-  const suggestion = "这是新产品 T5000，允许创建产品目录。将这份修改记录放入 T5000/others，并创建产品 Hub、更新相关索引。";
-  const review = { ...decision, action: "review", products: ["T5000"],
-    suggestedFeedback: suggestion };
-  calls.splice(0, calls.length,
+  const suggestion =
+    "这是新产品 T5000，允许创建产品目录。将这份修改记录放入 T5000/others，并创建产品 Hub、更新相关索引。";
+  const review = {
+    ...decision,
+    action: "review",
+    products: ["T5000"],
+    suggestedFeedback: suggestion,
+  };
+  calls.splice(
+    0,
+    calls.length,
     { name: "finish_sync", args: review },
     { name: "read_candidate_source", args: {} },
     { name: "read_candidate_source", args: { offset: 20000 } },
@@ -152,11 +206,22 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   );
   index = 0;
   payloads.length = 0;
-  const reviewed = await createPlanner(options)({ ...input, usage: emptyUsage() });
+  const reviewed = await createPlanner(options)({
+    ...input,
+    usage: emptyUsage(),
+  });
   assert.equal(reviewed.decision.suggestedFeedback, suggestion);
-  const finish = payloads[0].tools.find(t => t.function.name === "finish_sync");
-  assert.equal(finish.function.parameters.properties.suggestedFeedback.maxLength, 16000);
+  const finish = payloads[0].tools.find(
+    (t) => t.function.name === "finish_sync",
+  );
+  assert.equal(
+    finish.function.parameters.properties.suggestedFeedback.maxLength,
+    16000,
+  );
   assert.ok(!finish.function.parameters.required.includes("suggestedFeedback"));
   assert.match(JSON.stringify(payloads), /Read all segments before submitting/);
-  assert.match(JSON.stringify(payloads), /NEVER administrator feedback or permission/);
+  assert.match(
+    JSON.stringify(payloads),
+    /NEVER administrator feedback or permission/,
+  );
 });

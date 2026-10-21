@@ -17,6 +17,15 @@ export class SyncError extends Error {
     super(message);
   }
 }
+/** All plan problems at once; review=true only when each needs a business decision. */
+export class PlanError extends SyncError {
+  constructor(
+    readonly problems: string[],
+    readonly review = false,
+  ) {
+    super(problems.join("\n"));
+  }
+}
 export function relative(p: string) {
   if (
     !p ||
@@ -240,6 +249,8 @@ export type Conversion = {
 };
 export type Decision = {
   suggestedFeedback?: string;
+  productHubs?: { product: string; path: string }[];
+  logEntry?: string;
   action: "add" | "update" | "review" | "delete";
   reason: string;
   summary: string;
@@ -251,9 +262,28 @@ export type Decision = {
   authorizedException: boolean;
   reviewedPaths: string[];
 };
-export type Plan = { decision: Decision; changes: Change[]; baseline: string };
+export type Plan = {
+  decision: Decision;
+  changes: Change[];
+  baseline: string;
+  confirmationReason?: string;
+};
+export type Attempt = {
+  id: string;
+  status: string;
+  reason?: string;
+  summary?: string;
+  feedback: string;
+  started?: string;
+  finished?: string;
+  elapsedMs?: number;
+  textUsage: Usage;
+  visualUsage: Usage;
+  model?: string;
+};
 export type Item = {
   id: string;
+  attempts?: Attempt[];
   name: string;
   sourceHash: string;
   bytes: number;
@@ -287,4 +317,12 @@ export type Job = {
   finished?: string;
 };
 export const terminal = (s: string) =>
-  !["queued", "running", "stopping", "waiting_to_publish"].includes(s);
+  ![
+    "queued",
+    "running",
+    "converting",
+    "converted",
+    "analyzing",
+    "stopping",
+    "waiting_to_publish",
+  ].includes(s);

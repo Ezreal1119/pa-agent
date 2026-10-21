@@ -168,63 +168,117 @@ test("review retains original; feedback makes a new attempt and unchanged curren
     (await f.service.resync(first.id, first.items[0].id, "确认采用这一版")).id,
   );
   assert.equal(observed, "确认采用这一版");
+  assert.equal(second.id, first.id);
+  assert.equal(second.items.length, 1);
   assert.equal(second.items[0].status, "published", second.items[0].reason);
   assert.equal(second.items[0].previous, first.items[0].id);
-  assert.equal((await f.service.get(first.id)).items[0].status, "needs_review");
+  assert.deepEqual(
+    second.items[0].attempts.map((a) => [a.id, a.status]),
+    [[first.items[0].id, "needs_review"]],
+  );
+  assert.equal(f.service.list().length, 1);
 });
 
 test("new-product suggestions remain drafts; per-file Re-Sync uses only submitted instructions and current knowledge", async (t) => {
-  const suggestion = "这是新产品 T5000，允许创建产品目录。将这份修改记录放入 T5000/others，并创建产品 Hub、更新相关索引。";
+  const suggestion =
+    "这是新产品 T5000，允许创建产品目录。将这份修改记录放入 T5000/others，并创建产品 Hub、更新相关索引。";
   const source = "T5000/others/changelog_202610200000/changes.md";
   const productHub = "product-knowledge-vault/products/T5000.md";
   const seen = [];
   const f = await setup(t, {
     planner: () => async (input) => {
-      seen.push({ feedback: input.feedback, index: input.base.get(idx), batch: input.batch.length });
-      const decision = { ...proposal(input, "add").decision,
-        products: ["T5000"], slot: "others", oldPaths: [], newPath: source,
-        reviewedPaths: [idx], reason: "新产品需确认" };
-      if (!input.feedback) return {
-        decision: { ...decision, action: "review", suggestedFeedback: suggestion },
-        staged: new Map([[idx, "This must never publish during review"]]),
+      seen.push({
+        feedback: input.feedback,
+        index: input.base.get(idx),
+        batch: input.batch.length,
+      });
+      const decision = {
+        ...proposal(input, "add").decision,
+        products: ["T5000"],
+        slot: "others",
+        oldPaths: [],
+        newPath: source,
+        reviewedPaths: [idx],
+        reason: "新产品需确认",
       };
-      return { decision, staged: new Map([
-        [productHub, `# T5000\n${source}\nConverted; original removed after successful sync`],
-        [idx, `${input.base.get(idx)}\n[[products/T5000|T5000]]`],
-        [log, "Added T5000"],
-      ]) };
+      if (!input.feedback)
+        return {
+          decision: {
+            ...decision,
+            action: "review",
+            suggestedFeedback: suggestion,
+          },
+          staged: new Map([[idx, "This must never publish during review"]]),
+        };
+      return {
+        decision,
+        staged: new Map([
+          [
+            productHub,
+            `# T5000\n${source}\nConverted; original removed after successful sync`,
+          ],
+          [idx, `${input.base.get(idx)}\n[[products/T5000|T5000]]`],
+          [log, "Added T5000"],
+        ]),
+      };
     },
   });
   const a = await upload(f.service, "T5000.txt", "T5000 revision history"),
     b = await upload(f.service, "other.txt", "Other unresolved document");
   const first = await done(f.service, (await f.service.start([a.id, b.id])).id);
-  assert.ok(first.items.every(i => i.status === "needs_review" && i.feedback === ""));
+  assert.ok(
+    first.items.every((i) => i.status === "needs_review" && i.feedback === ""),
+  );
   assert.equal(first.items[0].plan.decision.suggestedFeedback, suggestion);
   assert.deepEqual(first.items[0].plan.changes, []);
   assert.equal((await f.service.incoming()).length, 2);
-  assert.equal(await fs.stat(path.join(f.knowledge, source)).catch(() => null), null);
-  const empty = await done(f.service, (await f.service.resync(first.id, first.items[0].id, "")).id);
+  assert.equal(
+    await fs.stat(path.join(f.knowledge, source)).catch(() => null),
+    null,
+  );
+  const empty = await done(
+    f.service,
+    (await f.service.resync(first.id, first.items[0].id, "")).id,
+  );
   assert.equal(empty.items[0].status, "needs_review");
   assert.equal(seen.at(-1).feedback, "");
-  await fs.appendFile(path.join(f.knowledge, idx), "\nExternal update before Re-Sync");
+  await fs.appendFile(
+    path.join(f.knowledge, idx),
+    "\nExternal update before Re-Sync",
+  );
   const edited = suggestion + " 保留已有的外部索引更新。";
-  const second = await done(f.service, (await f.service.resync(first.id, first.items[0].id, edited)).id);
-  assert.equal(second.items.length, 1);
+  const second = await done(
+    f.service,
+    (await f.service.resync(first.id, first.items[0].id, edited)).id,
+  );
+  assert.equal(second.id, first.id);
+  assert.equal(second.items.length, 2);
   assert.equal(second.items[0].status, "published", second.items[0].reason);
+  assert.equal(second.items[0].attempts.length, 2);
+  assert.ok(second.items[0].attempts.every((a) => a.feedback === ""));
   assert.equal(seen.at(-1).feedback, edited);
   assert.equal(seen.at(-1).batch, 1);
   assert.match(seen.at(-1).index, /External update before Re-Sync/);
-  assert.match(await fs.readFile(path.join(f.knowledge, idx), "utf8"), /External update before Re-Sync/);
+  assert.match(
+    await fs.readFile(path.join(f.knowledge, idx), "utf8"),
+    /External update before Re-Sync/,
+  );
   assert.equal((await f.service.incoming()).length, 1);
-  assert.equal((await f.service.get(first.id)).items[1].status, "needs_review");
-  assert.equal((await f.service.get(first.id)).items[0].feedback, "");
+  assert.equal(second.items[1].status, "needs_review");
+  assert.equal(second.items[1].id, first.items[1].id);
 });
 
 test("suggestions cannot accompany publication or exceed the feedback limit", () => {
   const d = { ...proposal({}).decision, suggestedFeedback: "Authorize this" };
-  for (const invalid of [d, { ...d, action: "review", suggestedFeedback: " " },
-    { ...d, action: "review", suggestedFeedback: "X".repeat(16001) }])
-    assert.throws(() => buildPlan(new Map(), new Map(), invalid, "text", ""), /review-only drafts/);
+  for (const invalid of [
+    d,
+    { ...d, action: "review", suggestedFeedback: " " },
+    { ...d, action: "review", suggestedFeedback: "X".repeat(16001) },
+  ])
+    assert.throws(
+      () => buildPlan(new Map(), new Map(), invalid, "text", ""),
+      /review-only drafts/,
+    );
 });
 
 test("delete preview has no mutations, requires confirmation, and stale preview fails closed", async (t) => {
@@ -239,7 +293,7 @@ test("delete preview has no mutations, requires confirmation, and stale preview 
   assert.ok(await fs.stat(path.join(f.knowledge, old)));
   await fs.appendFile(path.join(f.knowledge, old), "\nexternal change");
   const bad = await done(f.service, (await f.service.confirm(preview.id)).id);
-  assert.equal(bad.items[0].status, "needs_review");
+  assert.equal(bad.items[0].status, "failed");
   assert.ok(await fs.stat(path.join(f.knowledge, old)));
   const p2 = await done(
     f.service,
@@ -622,4 +676,275 @@ test("Sync streams exactly 100 MiB and rejects one extra byte without leaving a 
   );
   assert.equal(ignored.ignored, true);
   assert.deepEqual(await fs.readdir(f.service.inbox), ["boundary.pdf"]);
+});
+
+test("backend appends operation log without rewriting history and requires per-file confirmation for a noncanonical existing Hub", async (t) => {
+  const customHub = "product-knowledge-vault/products/DT-610.md";
+  const f = await setup(t, {
+    planner: () => async (input) => {
+      const p = proposal(input);
+      p.staged.set(customHub, p.staged.get(hub));
+      p.staged.delete(hub);
+      p.staged.delete(log);
+      p.staged.set(idx, "[[products/DT-610|DT610]]");
+      p.decision.productHubs = [{ product: "DT610", path: customHub }];
+      p.decision.reviewedPaths = [customHub, idx];
+      p.decision.logEntry = "Only this operation; do not repeat history.";
+      return p;
+    },
+  });
+  await fs.rename(
+    path.join(f.knowledge, hub),
+    path.join(f.knowledge, customHub),
+  );
+  await fs.writeFile(path.join(f.knowledge, idx), "[[products/DT-610|DT610]]");
+  const history = `# History\n${old}\n` + "historical entry\n".repeat(7000);
+  await fs.writeFile(path.join(f.knowledge, log), history);
+  const file = await upload(f.service);
+  const report = await done(f.service, (await f.service.start([file.id])).id);
+  assert.equal(report.status, "awaiting_confirmation", report.items[0].reason);
+  assert.match(report.items[0].plan.confirmationReason, /DT610 → .*DT-610/);
+  assert.equal(await fs.readFile(path.join(f.knowledge, log), "utf8"), history);
+  assert.ok(await fs.stat(path.join(f.knowledge, "newly_added/spec.txt")));
+  await assert.rejects(f.service.confirm(report.id, "unrelated"), /No pending/);
+  await f.service.confirm(report.id, report.items[0].id);
+  const published = await done(f.service, report.id);
+  assert.equal(
+    published.items[0].status,
+    "published",
+    published.items[0].reason,
+  );
+  assert.equal(published.items[0].sourceDeleted, true);
+  const result = await fs.readFile(path.join(f.knowledge, log), "utf8");
+  assert.ok(result.startsWith(history));
+  assert.equal(result.match(/Only this operation/g).length, 1);
+  assert.equal(
+    await fs.stat(path.join(f.knowledge, hub)).catch(() => null),
+    null,
+  );
+});
+
+test("Hub confirmation detects intervening library changes and retains input", async (t) => {
+  const customHub = "product-knowledge-vault/products/DT-610.md";
+  const f = await setup(t, {
+    planner: () => async (input) => {
+      const p = proposal(input);
+      p.staged.set(customHub, p.staged.get(hub));
+      p.staged.delete(hub);
+      p.staged.set(idx, "[[products/DT-610|DT610]]");
+      p.decision.productHubs = [{ product: "DT610", path: customHub }];
+      p.decision.reviewedPaths = [customHub, idx];
+      return p;
+    },
+  });
+  await fs.rename(
+    path.join(f.knowledge, hub),
+    path.join(f.knowledge, customHub),
+  );
+  const file = await upload(f.service);
+  const report = await done(f.service, (await f.service.start([file.id])).id);
+  assert.equal(report.status, "awaiting_confirmation", report.items[0].reason);
+  await fs.writeFile(path.join(f.knowledge, idx), "External update");
+  await f.service.confirm(report.id, report.items[0].id);
+  const stale = await done(f.service, report.id);
+  assert.equal(stale.items[0].status, "failed");
+  assert.match(stale.items[0].reason, /Knowledge changed/);
+  assert.ok(await fs.stat(path.join(f.knowledge, "newly_added/spec.txt")));
+  assert.ok(await fs.stat(path.join(f.knowledge, old)));
+});
+
+test("sequential batch exposes converting, converted waiting and analyzing independently", async (t) => {
+  let resumeConversion, resumeAnalysis, signalAnalysis;
+  const conversionGate = new Promise((r) => (resumeConversion = r));
+  const analysisGate = new Promise((r) => (resumeAnalysis = r));
+  const analyzing = new Promise((r) => (signalAnalysis = r));
+  t.after(() => {
+    resumeConversion();
+    resumeAnalysis();
+  });
+  let calls = 0;
+  const f = await setup(t, {
+    converter: () => async (source) => {
+      if (++calls === 2) await conversionGate;
+      return {
+        markdown: "candidate",
+        sourceHash: hash(await fs.readFile(source)),
+        coverage: ["Complete"],
+        visual: emptyUsage(),
+        version: 1,
+      };
+    },
+    planner: () => async () => {
+      signalAnalysis();
+      await analysisGate;
+      return {
+        decision: { ...proposal({}).decision, action: "review" },
+        staged: new Map(),
+      };
+    },
+  });
+  const a = await upload(f.service, "a.txt", "a"),
+    b = await upload(f.service, "b.txt", "b"),
+    c = await upload(f.service, "c.txt", "c");
+  const job = await f.service.start([a.id, b.id, c.id]);
+  for (let n = 0; n < 500 && calls < 2; n++)
+    await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    (await f.service.get(job.id)).items.map((i) => i.status),
+    ["converted", "converting", "queued"],
+  );
+  resumeConversion();
+  await analyzing;
+  assert.deepEqual(
+    (await f.service.get(job.id)).items.map((i) => i.status),
+    ["analyzing", "converted", "converted"],
+  );
+  resumeAnalysis();
+  assert.equal((await done(f.service, job.id)).status, "completed");
+});
+
+test("multiple Hub previews wait for the batch, require explicit item selection and reject stale later confirmations", async (t) => {
+  let resume, entered;
+  const gate = new Promise((r) => (resume = r));
+  const inSecond = new Promise((r) => (entered = r));
+  t.after(() => resume());
+  let attempts = 0;
+  const customHub = "product-knowledge-vault/products/DT-610.md";
+  const f = await setup(t, {
+    planner: () => async (input) => {
+      if (++attempts === 2) {
+        entered();
+        await gate;
+      }
+      const p = proposal(input);
+      p.staged.set(customHub, p.staged.get(hub));
+      p.staged.delete(hub);
+      p.staged.set(idx, "[[products/DT-610|DT610]]");
+      p.decision.productHubs = [{ product: "DT610", path: customHub }];
+      p.decision.reviewedPaths = [customHub, idx];
+      return p;
+    },
+  });
+  await fs.rename(
+    path.join(f.knowledge, hub),
+    path.join(f.knowledge, customHub),
+  );
+  await fs.writeFile(path.join(f.knowledge, idx), "[[products/DT-610|DT610]]");
+  const a = await upload(f.service, "a.txt"),
+    b = await upload(f.service, "b.txt");
+  const job = await f.service.start([a.id, b.id]);
+  await inSecond;
+  const active = await f.service.get(job.id);
+  assert.equal(active.status, "running");
+  assert.equal(active.items[0].status, "awaiting_confirmation");
+  assert.equal(active.items[1].status, "analyzing");
+  await assert.rejects(
+    f.service.confirm(job.id, active.items[0].id),
+    /No pending/,
+  );
+  resume();
+  const ready = await done(f.service, job.id);
+  assert.equal(ready.status, "awaiting_confirmation");
+  await assert.rejects(f.service.confirm(job.id), /Choose one pending file/);
+  await f.service.confirm(job.id, ready.items[0].id);
+  const first = await done(f.service, job.id);
+  assert.equal(first.items[0].status, "published");
+  assert.equal(first.items[1].status, "awaiting_confirmation");
+  await f.service.confirm(job.id, ready.items[1].id);
+  const second = await done(f.service, job.id);
+  assert.equal(second.items[1].status, "failed");
+  assert.match(second.items[1].reason, /Knowledge changed/);
+  assert.ok(await fs.stat(path.join(f.knowledge, "newly_added/b.txt")));
+});
+
+test("Hub names differing only by spacing resolve automatically without confirmation or index edits", async (t) => {
+  const product = "K388 Pro",
+    current = "K388 Pro/specs/default_202601010000/spec.md",
+    added = "K388 Pro/others/release-notes_202610210000/notes.md",
+    spaced = "product-knowledge-vault/products/K388-Pro.md";
+  const f = await setup(t, {
+    planner: () => async () => ({
+      decision: {
+        action: "add",
+        reason: "固件发布记录",
+        summary: "新增 others 资料",
+        products: [product],
+        slot: "others",
+        oldPaths: [],
+        newPath: added,
+        versionEvidence: "",
+        authorizedException: false,
+        reviewedPaths: [],
+      },
+      staged: new Map([[spaced, `# K388 Pro\n${current}\n${added}`]]),
+    }),
+  });
+  for (const [p, text] of [
+    [current, "# K388 Pro spec"],
+    [spaced, `# K388 Pro\n${current}`],
+  ]) {
+    await fs.mkdir(path.dirname(path.join(f.knowledge, p)), {
+      recursive: true,
+    });
+    await fs.writeFile(path.join(f.knowledge, p), text);
+  }
+  const { resolveHub } = await import("../dist/knowledge-sync/validation.js");
+  assert.equal(resolveHub(await catalog(f.knowledge), product), spaced);
+  const file = await upload(f.service, "notes.txt", "K388 Pro release notes");
+  const report = await done(f.service, (await f.service.start([file.id])).id);
+  assert.equal(report.items[0].status, "published", report.items[0].reason);
+  assert.equal(report.items[0].plan.confirmationReason, undefined);
+  assert.ok(await fs.stat(path.join(f.knowledge, added)));
+});
+
+test("deletion plans map original binaries to their Markdown and report every problem at once", async (t) => {
+  const f = await setup(t);
+  const base = await catalog(f.knowledge);
+  const p = proposal({}, "delete");
+  p.decision.oldPaths = [old, old.replace(/\.md$/, ".pdf")];
+  const plan = buildPlan(base, p.staged, p.decision, "", "", true);
+  assert.deepEqual(plan.decision.oldPaths, [old]);
+  const bad = proposal({});
+  bad.staged.set("product-knowledge-vault/products/OTHER.md", "# Other");
+  bad.staged.set(hub, "missing sources");
+  bad.decision.reason = "";
+  assert.throws(
+    () => buildPlan(base, bad.staged, bad.decision, "new", ""),
+    (e) =>
+      e.problems.length >= 3 &&
+      e.review === false &&
+      e.problems.some((m) => /Unrelated product Hub change/.test(m)) &&
+      e.problems.some((m) => /coverage is incomplete/.test(m)) &&
+      e.problems.some((m) => /decision and change explanation/.test(m)),
+  );
+});
+
+test("validation failures are Failed, not Needs review, and Re-Sync retries in the same report", async (t) => {
+  let broken = true;
+  const f = await setup(t, {
+    planner: () => async (input) => {
+      const p = proposal(input);
+      if (broken) p.staged.set(hub, "Hub without source coverage");
+      return p;
+    },
+  });
+  const file = await upload(f.service);
+  const first = await done(f.service, (await f.service.start([file.id])).id);
+  assert.equal(first.items[0].status, "failed");
+  assert.match(first.items[0].reason, /coverage is incomplete/);
+  assert.equal((await f.service.incoming()).length, 1);
+  broken = false;
+  const second = await done(
+    f.service,
+    (await f.service.resync(first.id, first.items[0].id, "")).id,
+  );
+  assert.equal(second.id, first.id);
+  assert.equal(second.items[0].status, "published", second.items[0].reason);
+  assert.equal(second.items[0].attempts[0].status, "failed");
+  assert.equal(f.service.list().length, 1);
+  await assert.rejects(
+    f.service.resync(first.id, first.items[0].id, ""),
+    /already committed/,
+  );
 });

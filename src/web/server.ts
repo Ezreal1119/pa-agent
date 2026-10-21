@@ -43,6 +43,7 @@ import { runMcpAgent } from "../mcp/runner.js";
 import { SftpSyncService } from "../sftp-sync/service.js";
 import { sftpConfig } from "../sftp-sync/config.js";
 import { SyncService } from "../knowledge-sync/service.js";
+import { KnowledgeLibrary, LIBRARY_MAX_EDIT_BYTES } from "../knowledge-sync/library.js";
 import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
 import { createConverter, type Converter } from "../knowledge-sync/converter.js";
@@ -128,6 +129,7 @@ export async function createWebServer(options: WebOptions = {}) {
     planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
     converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
   await synchronize.init();
+  const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
   const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});
   await sftpSync.init();
   const memoryInjection = new MemoryInjectionService({dataDir, modelId: () => settings.modelId, redact,
@@ -491,6 +493,12 @@ export async function createWebServer(options: WebOptions = {}) {
       if (url.pathname.startsWith("/api/sync/")) {
         if (machine) throw new HttpError(403, "Maintenance requires administrator login.");
         const route = url.pathname.slice("/api/sync/".length);
+        if (route === "library" && method === "GET") return json(res, 200, { files: await library.tree(), maxEditBytes: LIBRARY_MAX_EDIT_BYTES });
+        if (route === "library/file" && method === "GET") return json(res, 200, await library.read(url.searchParams.get("path") ?? ""));
+        if (route === "library/file" && method === "PUT") {
+          const body = await readBody(req, 4 * LIBRARY_MAX_EDIT_BYTES);
+          return json(res, 200, await library.save(body.path, body.text, body.expectedHash));
+        }
         if (route === "incoming" && method === "GET") return json(res, 200, { files: await synchronize.incoming(), maxFileBytes: SYNC_MAX_FILE_BYTES });
         if (route === "incoming" && method === "POST") { const file=await synchronize.upload(url.searchParams.get("name") ?? "", req);return json(res,"ignored" in file?200:201,file); }
         if (route === "jobs" && method === "GET") return json(res, 200, { jobs: synchronize.list() });
@@ -501,7 +509,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (match && method === "POST") {
           const body = await readBody(req);
           if (match[2] === "stop") return json(res, 200, await synchronize.stop(match[1]!));
-          if (match[2] === "confirm") return json(res, 202, await synchronize.confirm(match[1]!));
+          if (match[2] === "confirm") return json(res, 202, await synchronize.confirm(match[1]!, body.itemId));
           if (match[2] === "resync") return json(res, 202, await synchronize.resync(match[1]!, body.itemId, body.feedback ?? "", body.forceConvert === true));
           if (match[2] === "cleanup") return json(res, 200, await synchronize.cleanup(match[1]!, body.itemId));
         }
@@ -826,6 +834,7 @@ export async function createWebServer(options: WebOptions = {}) {
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
         "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-library.js": [path.join(resourcesDir, "web/synchronize-library.js"), "text/javascript; charset=utf-8"],
         "/synchronize.css": [path.join(resourcesDir, "web/synchronize.css"), "text/css; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],

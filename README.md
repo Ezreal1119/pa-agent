@@ -286,6 +286,8 @@ MCP agent runs share the existing execution gate. Each task reports input/output
 
 管理员侧栏新增 **Synchronize** → `/synchronize`。支持批量导入、完整转换、版本/slot 判断、候选索引修改和事务发布；报告反馈 **Re-Sync**；自然语言删除先预览再确认。只维护 `urovo-product-expert`，不改 SKILL/MEMORY 或 UMS。失败/疑问保留原件，成功后清理；普通问答不能检索 `newly_added`。
 
+SYNC 单独支持最多 200 张工作表；内嵌 XLSX 按管理员要求跳过并注明。Hub 名称不同可预览后逐文件 **Confirm publication**；日志由后台追加，索引支持基线校验的局部修改。删除报告用 **Regenerate deletion preview**，不显示文件重新转换选项。此次无需新增环境变量、依赖或 systemd 修改。
+
 使用、状态、恢复、预算、安全边界、API 与 Ubuntu 新依赖见 [Synchronize 说明](docs/synchronize.md)。依赖检查 `npm run check:sync`，定向验证 `npm run test:sync`，完整回归 `npm test`。部署必须同步本次 systemd 只读挂载调整，保留你现有的 root/专用用户设置。正式启用后停止旧脚本/rsync 对知识库的覆盖同步。没有新增自动采集或定时 Sync。
 
 

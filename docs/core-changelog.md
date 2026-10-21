@@ -4,6 +4,12 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Synchronize 新增 Library Tab：递归浏览知识库（跳过点路径与符号链接），Markdown 预览/源码查看；`.md`/`.txt`（≤2 MiB，含 MEMORY.md）可编辑，保存前显示 diff，按打开时哈希防覆盖，写锁内原子写入，旧版备份到 `maintenance-backups/library-edits/` 并追加 `edits.jsonl`。Sync 运行时、`newly_added/`、SKILL/SYNC/SYNC_PROMPT.md 只读。手工编辑不重新校验索引。
+
+- Synchronize 减少无效人工确认：`finish_sync` 当场校验并一次返回全部问题供 Agent 自修（最多 3 轮）；Hub 按目录名自动对应（空格/标点差异）；`oldPaths` 原件路径映射到 Markdown；`index.md` 仅新建 Hub/shared 时强制。Needs your decision 只表示业务问题，校验/过期失败改为 Failed。Re-Sync 原地重跑同一报告并保留尝试历史，删除预览同样原地重生成。
+
+- Synchronize：维护工作表上限独立 200，内嵌 XLSX 按管理员要求跳过并报告；非同名现有 Hub 逐文件预览确认；后台追加审计日志，提供带基线校验的局部索引编辑；区分转换/等待/分析状态，删除预览不再显示 Reconvert。详见 2026-10-21 批次维护修复记录。
+
 - Prompt 管理弹窗预览完整上下文组成、Standard/MCP 差异及实际工具定义；管理员可维护逐条系统指令。指令通过统一组装模块在每个 run 读取快照并注入 system，已有 session 下一 run 生效。详见 2026-10-21 Prompt 记录。
 
 - Synchronize 新产品待确认报告支持 AI 生成逐文件建议指令，管理员点击填入、修改后再显式 Re-Sync。建议不作为权限或自动反馈，不新增模型连接、配置项或批量授权。详见 2026-10-20 新产品建议记录。
@@ -662,3 +668,23 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 浏览器：在隔离数据根验证添加/编辑、自动预览、保存、展开/折叠、MCP模式工具从12项变5项、未保存关闭/继续编辑/放弃、重新打开保留已保存值；390px iframe 移动端夹具验证入口、布局和删除全部后保存。移动端仅测试代理移除 frame-ancestors 以允许同源嵌入，正式应用响应头保持原样。截图与日志在 .data/debug/prompt/（prompt-dialog.png、prompt-mobile.png、targeted.log、full-tests.log）；模型为本机模拟，未请求真实供应商或进行 Ubuntu/VPS 验证。构建、前端语法及git diff检查通过。
 
 本轮最终复核：补充 agent_start 重入时保留当前 run 快照（仅在存在新 run 预读快照时替换），以及保存成功后收起未保存放弃提示。最终 Node 22.23.2 全量仍为204项通过、无失败/取消/跳过，约19.1秒；上文26.3秒为首次全量耗时。语法及git diff检查再次通过，临时浏览器页面和测试服务已关闭。
+
+## 2026-10-21：Synchronize 批次转换、Hub 确认与索引维护修复
+
+原因：生产批次的修改记录含 21–83 张小工作表，被与聊天共用的 20 张限制拦截；内嵌 XLSX 和 `K388 Pro`/`K388-Pro.md` 命名差异分别触发转换、Hub 校验；模型整页输出约 96k 字符历史 log 导致大量重复 Token。管理员明确要求跳过内嵌 XLSX，不配置永久映射，改为确认发布，并移除删除页的 Reconvert。
+
+行为与兼容性：
+
+- 维护转换单独固定最多 200 张工作表，保留现有 XML 单元格、解包大小、页数、像素、超时、进程内存等限制；聊天 `FILE_MAX_SHEETS`（默认 20）及 30 MiB 上传不变。超限显示实际数量、上限和触发部件。维护缓存版本升为 4，旧缓存下一次 Re-Sync 会重新转换。
+- 仅私有转换副本移除内嵌 XLSX、内部关系及其 shapeId 明确关联的预览图标，不打开嵌入文件；覆盖记录及发布 Markdown 明确注明省略内容。其他嵌入格式、宏、ActiveX、外部加载仍拒绝，真实图片/图表仍需视觉覆盖。
+- Agent 可提交本次 `productHubs` 选择，不建立永久映射。使用非同名现有 Hub 时仍检查路径、完整来源覆盖、依赖与链接，随后进入逐文件 Awaiting confirmation；管理员点击 **Confirm publication** 才写入。确认校验基线，外部或同批其他发布造成的变化要求 Re-Sync，不能用点击确认绕过。批次执行完之前保持 Running，多个待确认项目须指定 itemId。成功后才清理对应原件，失败保留。
+- 新增维护专用 `patch_candidate`：旧正文 SHA256、唯一匹配片段、原子候选变更和原有大小/权限限制。`finish_sync.logEntry` 只含本次条目（未填则用 summary/reason）；后台保留 log 原文后追加，模型不能重写历史 log。历史 log 不再作为清除旧来源路径的活跃依赖，其他索引页仍须复核。旧报告继续可读。
+- 状态分别为 Pending / Converting / Converted waiting / Analyzing / Publishing；重启时未完成转换/分析仍标记 Interrupted。删除报告隐藏 Reconvert，补充输入和按钮改为 Instructions for deletion preview / Regenerate deletion preview；只生成预览，仍需 Confirm deletion。
+- 无新增环境变量、依赖、systemd 或自动任务。更新 README、Synchronize 使用/API 文档。未运行正式 Sync、未部署或修改 VPS 知识数据。
+
+验证（本机 Node 22.23.2）：
+
+- TypeScript 构建通过，全量 **210/210**，无失败、跳过或取消。覆盖实际 worker 的 200 张工作表、201 张拒绝、聊天仍 20、单元格预算、嵌入跳过、未知嵌入拒绝、保留非目标图形；SDK 接模拟模型验证局部修改、旧 hash/重复片段拒绝、日志写保护；隔离知识副本验证确认前不发布/不删源、日志完整保留、单文件/多文件确认、过期预览拒绝及转换等待状态。
+- 实际资料隔离转换：`SQ29M修改记录.xlsx` 83 张表 → 153184 UTF-8 字节；`SQ29MB修改记录.xlsx` 6 张表 → 54650 字节，明确跳过 `xl/embeddings/Workbook1.xlsx`；`K388Pro海外版本修改记录.xlsx` 2 张表 → 13241 字节。当前版本从原件重新转换，三份原文件哈希均未改变；未发布到业务库。
+- 浏览器实际检查隔离管理员页面：删除报告没有 Reconvert，显示 Regenerate deletion preview；Hub 报告显示路径和 Confirm publication。截图、转换日志及全量测试结果在忽略目录 `.data/debug/sync-fixes/`。
+- 上述模型测试为模拟文本/视觉接口，真实文件转换使用原生依赖；本轮没有真实模型判断/发布验证，也没有新的 Ubuntu 2G 资源实测。此前的生产限制调查与本机成功转换不能作为真实模型发布成功的证据。
