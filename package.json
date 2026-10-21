@@ -26,6 +26,7 @@
     "test:web-tools": "npm run build && node --test tests/web-tools.test.mjs",
     "test:mcp": "npm run build && node --test tests/mcp.test.mjs",
     "test:file-create": "npm run build && NODE_ENV=production FILE_WORKER_IMAGE= node --test tests/file-create.test.mjs",
+    "test:prompt": "npm run build && node --test tests/prompt*.test.mjs tests/session-policy.test.mjs",
     "test:sync": "npm run build && node --test tests/knowledge-sync*.test.mjs",
     "check:sync": "node scripts/check-sync-runtime.mjs",
     "sftp:sync": "npm run build && node dist/sftp-sync/cli.js",

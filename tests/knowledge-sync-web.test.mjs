@@ -32,6 +32,7 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
           action: "review",
           reason: "新产品需确认",
           summary: "等待人工反馈",
+          suggestedFeedback: "这是新产品 T5000，允许创建产品目录，并创建产品 Hub、更新相关索引。",
           products: [],
           slot: "",
           oldPaths: [],
@@ -197,6 +198,11 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
     })
   ).json();
   assert.equal(persisted.items[0].reason, "新产品需确认");
+  assert.equal(
+    persisted.items[0].plan.decision.suggestedFeedback,
+    (await options.sync.planner()()).decision.suggestedFeedback,
+  );
+  assert.equal(persisted.items[0].feedback, "");
   assert.equal(
     (
       await fs.readdir(

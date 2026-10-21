@@ -108,6 +108,16 @@ export function buildPlan(
   feedback: string,
   deletion = false,
 ): Plan {
+  if (
+    d.suggestedFeedback !== undefined &&
+    (d.action !== "review" ||
+      typeof d.suggestedFeedback !== "string" ||
+      !d.suggestedFeedback.trim() ||
+      d.suggestedFeedback.length > 16000)
+  )
+    throw new SyncError(
+      "Suggested instructions are review-only drafts of at most 16000 characters.",
+    );
   if (d.action === "review")
     return { decision: d, changes: [], baseline: fingerprint(base) };
   if (deletion !== (d.action === "delete"))

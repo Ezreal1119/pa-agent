@@ -4,6 +4,10 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Prompt 管理弹窗预览完整上下文组成、Standard/MCP 差异及实际工具定义；管理员可维护逐条系统指令。指令通过统一组装模块在每个 run 读取快照并注入 system，已有 session 下一 run 生效。详见 2026-10-21 Prompt 记录。
+
+- Synchronize 新产品待确认报告支持 AI 生成逐文件建议指令，管理员点击填入、修改后再显式 Re-Sync。建议不作为权限或自动反馈，不新增模型连接、配置项或批量授权。详见 2026-10-20 新产品建议记录。
+
 - SFTP活动任务保留停止轮询定时器的进程引用，任务结束再清理，修复Node 22等待停止/超时时进程提前退出及测试连带取消。新增独立子进程回归，详见2026-10-20 Node 22修复记录。
 
 - Synchronize新增Source imports独立Tab及手动SFTP单次拉取；JSONL仅path，凭证在.env，哈希去重、串行原子投递、跨进程锁/停止/恢复，持久报告放.data/logs/sftp_sync。暂不启用定时与企微通知。详见2026-10-20 SFTP记录。
@@ -630,3 +634,31 @@ Core边界：增加textOnly会话profile，保留现有必需技能/记忆每run
 行为/兼容性：活动SFTP任务的停止标记轮询不再unref，保证任务在等待停止信号或无其他活动句柄的超时时保持进程存活；成功、失败、取消等路径仍在finally清理轮询并释放锁。保持JSONL、哈希/发布状态、重试、报告及API格式不变，无.env、依赖或systemd改动，不触发知识Sync。新增独立子进程回归：没有真实socket的静默传输须等待超时、写入失败报告、不推进哈希/不发布部分文件，然后自行退出；父测试设置15秒上限检测定时器泄漏，避免仅在测试进程增加保活掩盖问题。docs/sftp-sync.md同步说明部署版本验证和更新方式。
 
 验证：使用Node 22.23.2运行npm run test:sftp，12项全部通过、无取消/跳过；同版本完整npm test198项通过，0失败/取消/跳过，约35.5秒。隔离副本仅恢复旧unref行为时，新子进程用例按预期失败（尚未结束的顶层await提前退出），证明回归能捕获原故障。git diff检查通过。日志.data/debug/sftp-sync-node22-fix/{targeted,full-tests,original-regression}.log。测试在本机macOS/ARM64运行；网络为本机SSH夹具/模拟连接，未使用真实SFTP/模型、未写正式资料或.env、未修改patrick-agent、未部署VPS，也未代替用户提交推送。
+
+
+## 2026-10-20 — Synchronize 新产品建议指令
+
+原因：新产品资料需管理员明确授权创建目录和 Hub，用户希望报告给出可直接使用的提示词，避免记忆授权措辞。
+
+行为/兼容性：维护 finish_sync 增加可选 suggestedFeedback，由同一次维护模型判断生成，无额外模型请求。SYNC.md 要求完整读取候选、检查现有库，产品身份与 slot 明确且仅缺创建授权时，按报告语言生成针对该文件的目录、slot、Hub 和相关索引指令；有身份/归属歧义、版本覆盖冲突或删除请求时不编造授权建议。带建议的提交须完整读取候选，后台仅接受 review 决策中的非空、最多16000字符草稿，review 不发布任何候选修改。建议保存于原有报告决策字段，沿用原有持久化；旧报告不要求该字段。
+
+UI：逐文件 Needs review 中显示 AI-suggested instructions 和 Use suggested instructions。点击后才填入可编辑输入框，说明必须检查并点击 Re-Sync 才提交；不自动替换实际反馈，不自动执行。编辑或清空后轮询保留草稿。Re-Sync 沿用现有单文件新尝试、当前知识快照、转换复用、索引校验和历史保留机制；建议不进入可信反馈。无需修改.env、依赖或systemd；未修改正式知识库、patrick-agent，未部署VPS、未提交推送。
+
+验证：本机 macOS/ARM64、Node 22.23.2，专项 test:sync 首次23项通过（前端回归加入前），新增实际前端渲染器/事件处理夹具1项通过；完整 npm test 201项全部通过，无失败/取消/跳过（约19.6秒）。覆盖 Pi SDK 接收可选建议字段及全文读取保护、建议不能发布、超限/空白拒绝、HTTP报告重启持久化、空白 Re-Sync 不采用建议、编辑后仅处理当前文件且重新读取外部更新、其他文件及历史不变。前端夹具验证文本安全显示、点击填入不发送请求、编辑/清空轮询保留、只有 Re-Sync 发送输入框内容及旧报告兼容。真实本机浏览器在隔离数据根确认建议展示、填入与修改，截图 .data/debug/sync-suggested-instructions/report.png；模型为脚本化/模拟响应，未请求真实模型或在Ubuntu验收。日志在同目录 targeted.log、full-tests.log。构建、脚本语法和 git diff 检查通过。
+
+
+## 2026-10-21 — Prompt 完整预览与管理员系统指令
+
+原因：用户需要查看普通问答完整 session/run 请求的组成，并维护作为 system 消息发送的追加指令，保存后无需重建对话。
+
+行为：侧栏 Memory Injection 上方增加 Prompt dialog；模型参数、System 各分区、Messages 示例和 Tools 完整 schema 均可折叠，支持 Expand all/Collapse all、Standard/MCP。真实静态配置、能力说明、Skill 元数据、工作目录、完整产品 SKILL/主 MEMORY/EXTRA MEMORY 来自后台；附件、历史、本次问题和运行工具交互明确标注 Example，不读取真实会话、不调用模型。逐项 Add/Edit/Delete，草稿预览自动更新，保存前 Unsaved changes，关闭/Reload 有放弃草稿保护；保存期间冻结编辑，错误与并发冲突保留草稿。全局快捷键尊重所有已打开 dialog，避免编辑中触发新建对话。
+
+Core：新增共享提示词分区/组装模块和共享工具工厂，实际请求与预览使用同一内容来源及顺序。管理员条目以 unordered list 注入 Administrator-provided instructions，紧随基础 system.md，仍属于同一 system 消息；不改写基础文件。run 开始时同时读取指令与知识快照，工具循环内保持固定，下次 run 重读；Web/WeCom/MCP/Core 共用，SYNC/Memory Injection 专用 Agent 不注入。保留五轮裁剪、附件绑定与工具权限；指令不写入 SDK transcript。现有无配置部署为空列表，继续原行为。
+
+持久化/接口：.data/prompt-instructions.json（Git 忽略、普通文件600），最多100项/每项2000字符/合计64KiB UTF-8，拒绝空白及控制字符。固定路径、符号/硬链接检查、UTF-8/结构/文件大小校验，proper-lockfile 跨进程保存锁、revision 校验和原子发布；损坏时显式拒绝推理，不默默清空。GET /api/prompt、POST /api/prompt/preview、PUT /api/prompt 沿用管理员 Cookie/Origin/CSRF；仅允许指定字段，无任意路径或凭证返回。无新.env、依赖或systemd要求，添加 npm run test:prompt，README同步更新。已有 Synchronize 未提交改动保留；未改正式知识、Memory、.env或patrick-agent，未部署或代替用户提交推送。
+
+验证：macOS/ARM64，Node 22.23.2 下专项13项、全量 npm test204项全部通过，0失败/取消/跳过，全量约26.3秒。用实际 Pi SDK 与本机 HTTP 模型夹具捕获请求，确认 system 文本和全部启用工具名称/描述/schema 与预览一致；同一 session 下一 run 更新、run 内两次推理保持旧快照、清空后移除指令段、MCP textOnly 无 memory/文件工具、坏配置推理前失败、历史不累积指令。真实 Web/WeCom HTTP 问答验证读取已保存新指令。管理员 API 覆盖登录/Origin/CSRF/机器凭证隔离、预览不保存/不建session/不调用模型、不暴露测试API key、重启保存、旧 revision 拒绝；存储覆盖并发、模拟磁盘写失败保持原内容和清理、大小/控制字符/符号与硬链接拒绝。
+
+浏览器：在隔离数据根验证添加/编辑、自动预览、保存、展开/折叠、MCP模式工具从12项变5项、未保存关闭/继续编辑/放弃、重新打开保留已保存值；390px iframe 移动端夹具验证入口、布局和删除全部后保存。移动端仅测试代理移除 frame-ancestors 以允许同源嵌入，正式应用响应头保持原样。截图与日志在 .data/debug/prompt/（prompt-dialog.png、prompt-mobile.png、targeted.log、full-tests.log）；模型为本机模拟，未请求真实供应商或进行 Ubuntu/VPS 验证。构建、前端语法及git diff检查通过。
+
+本轮最终复核：补充 agent_start 重入时保留当前 run 快照（仅在存在新 run 预读快照时替换），以及保存成功后收起未保存放弃提示。最终 Node 22.23.2 全量仍为204项通过、无失败/取消/跳过，约19.1秒；上文26.3秒为首次全量耗时。语法及git diff检查再次通过，临时浏览器页面和测试服务已关闭。

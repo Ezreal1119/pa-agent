@@ -239,6 +239,7 @@ export type Conversion = {
   version: number;
 };
 export type Decision = {
+  suggestedFeedback?: string;
   action: "add" | "update" | "review" | "delete";
   reason: string;
   summary: string;

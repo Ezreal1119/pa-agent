@@ -303,8 +303,12 @@ export function createPlanner(options: {
             versionEvidence: Type.String(),
             authorizedException: Type.Boolean(),
             reviewedPaths: Type.Array(Type.String()),
+            suggestedFeedback: Type.Optional(
+              Type.String({ minLength: 1, maxLength: 16000 }),
+            ),
           }),
           (a) => {
+            if (a.suggestedFeedback) readFully("@candidate", input.markdown);
             if (a.action !== "review") {
               readFully("@candidate", input.markdown);
               for (const p of new Set([

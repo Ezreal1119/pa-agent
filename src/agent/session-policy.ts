@@ -1,18 +1,26 @@
 import fs from "node:fs/promises";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { recentRounds } from "./context-window.js";
-import { loadRunKnowledge } from "./knowledge.js";
+import { loadRunKnowledgeSections } from "./knowledge.js";
+import { PromptInstructionsStore } from "../prompts/instructions.js";
+import { composePrompt, type PromptSection } from "../prompts/composition.js";
 import type { SessionRetention } from "./retention.js";
 
 /** Enforce at the SDK boundary rather than depending on optional model tool calls. */
-export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention): Promise<void> {
-  let snapshot: Promise<string> | undefined;
-  let nextSnapshot: Promise<string> | undefined;
+export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention, promptOptions?: { sections: PromptSection[]; attachments?: () => Promise<PromptSection> }): Promise<void> {
+  type Snapshot = { knowledge: string[]; instructions: string[] };
+  const store = new PromptInstructionsStore(dataDir);
+  const load = async (): Promise<Snapshot> => {
+    const [knowledge, state] = await Promise.all([loadRunKnowledgeSections(dataDir), store.load()]);
+    return { knowledge, instructions: state.instructions };
+  };
+  let snapshot: Promise<Snapshot> | undefined;
+  let nextSnapshot: Promise<Snapshot> | undefined;
   let busy = false;
   let knownFile = session.sessionManager.getSessionFile();
   let persisted = knownFile ? await exists(knownFile) : false;
   const unsubscribe = session.agent.subscribe(event => {
-    if (event.type === "agent_start") {
+    if (event.type === "agent_start" && nextSnapshot) {
       snapshot = nextSnapshot;
       nextSnapshot = undefined;
     }
@@ -25,8 +33,10 @@ export async function installSessionPolicy(session: AgentSession, dataDir: strin
   session.agent.streamFunction = async (model, context, options) => {
     // Read failures stop this request before any inference. SDK extension hook errors
     // are normally swallowed, so required resources are loaded here instead.
-    const knowledge = await (snapshot ??= loadRunKnowledge(dataDir));
-    return stream(model, { ...context, systemPrompt: `${context.systemPrompt ?? ""}\n\n${knowledge}` }, options);
+    const state = await (snapshot ??= load());
+    const composed = composePrompt(promptOptions?.sections ?? [{id:"base",title:"Base system prompt",content:context.systemPrompt ?? ""}],
+      state.instructions, state.knowledge, await promptOptions?.attachments?.());
+    return stream(model, { ...context, systemPrompt: composed.system }, options);
   };
 
   const prompt = session.prompt.bind(session);
@@ -44,7 +54,7 @@ export async function installSessionPolicy(session: AgentSession, dataDir: strin
       release = await retention.activate(file);
       if (file && persisted && !await exists(file)) throw new Error("Session has been cleaned up. Start a new session.");
       // One fresh snapshot per user run, shared by all of its tool/inference steps.
-      nextSnapshot = Promise.resolve(await loadRunKnowledge(dataDir));
+      nextSnapshot = Promise.resolve(await load());
       await prompt(text, options);
     } finally {
       nextSnapshot = undefined;

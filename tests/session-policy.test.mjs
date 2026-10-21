@@ -272,3 +272,47 @@ test('UMS is discoverable and read on demand without loading its MEMORY, includi
 test('missing UMS deployment does not block startup or ordinary runs',async t=>{
  const f=await fixture(t);await rm(path.join(f.dataDir,'ums-expert'),{recursive:true});const runtime=await f.runtime();const session=await runtime.createSession();f.sessions.push(session);await session.prompt('product only');assert.ok(!systemText(f.requests.at(-1)).includes('<name>ums-expert</name>'));assert.ok(systemText(f.requests.at(-1)).includes('urovo-product-expert-MEMORY-v1'));
 });
+
+nodeTest('administrator instructions match preview, refresh each run, stay fixed across tools, and never enter history', {timeout:30000}, async t => {
+  const { PromptInstructionsStore } = await import('../dist/prompts/instructions.js');
+  const { previewPrompt } = await import('../dist/prompts/composition.js');
+  const f = await fixture(t), runtime = await f.runtime();
+  const store = new PromptInstructionsStore(f.dataDir);
+  let saved = await store.load();
+  saved = await store.save(['ADMIN_INSTRUCTION_V1: 用中文回答。'], saved.revision);
+  const session = await runtime.createSession(); f.sessions.push(session);
+  const preview = await previewPrompt(runtime.config, false, saved.instructions);
+  const source = path.join(f.root,'reference.md'); await writeFile(source,'VERIFIED');
+  let sent = false;
+  f.setHandler(async () => {
+    if (!sent) { sent=true; saved=await store.save(['ADMIN_INSTRUCTION_V2: 使用表格。'],saved.revision); return {tool:source}; }
+    return {content:'done'};
+  });
+  await session.prompt('first');
+  assert.equal(f.requests.length,2);
+  for (const body of f.requests) {
+    assert.equal(systemText(body),preview.system);
+    assert.match(systemText(body),/ADMIN_INSTRUCTION_V1/);
+    assert.ok(!systemText(body).includes('ADMIN_INSTRUCTION_V2'));
+    assert.deepEqual(body.tools.map(t=>({name:t.function.name,description:t.function.description,parameters:t.function.parameters})),preview.tools);
+  }
+  const text=systemText(f.requests[0]);
+  assert.ok(text.indexOf('Administrator-provided instructions')>text.indexOf('# Agent'));
+  assert.ok(text.indexOf('Administrator-provided instructions')<text.indexOf('Available skills') || !text.includes('Available skills'));
+  await session.prompt('second');
+  assert.match(systemText(f.requests.at(-1)),/ADMIN_INSTRUCTION_V2/);
+  assert.ok(!systemText(f.requests.at(-1)).includes('ADMIN_INSTRUCTION_V1'));
+  assert.ok(!(await readFile(session.sessionFile,'utf8')).includes('ADMIN_INSTRUCTION_'));
+  const mcp = await runtime.createSession(SessionManager.inMemory(f.root),{textOnly:true}); f.sessions.push(mcp);
+  await mcp.prompt('text only');
+  const mcpPreview = await previewPrompt(runtime.config,true,saved.instructions);
+  assert.equal(systemText(f.requests.at(-1)),mcpPreview.system);
+  assert.ok(!mcpPreview.tools.some(t=>['memory','excel_create','image_read'].includes(t.name)));
+  await store.save([],saved.revision);
+  await session.prompt('third');
+  assert.ok(!systemText(f.requests.at(-1)).includes('Administrator-provided instructions'));
+  await writeFile(store.file,'invalid JSON');
+  const count=f.requests.length;
+  await assert.rejects(session.prompt('should not infer'),/damaged/);
+  assert.equal(f.requests.length,count);
+});

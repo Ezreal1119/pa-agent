@@ -434,8 +434,8 @@ $('settings-form').addEventListener('submit', async event => {
 });
 $('stop').addEventListener('click', async () => { if (state.uploadAbort) { state.uploadAbort.abort(); return; } state.cancelBeforeRun = true; if (!state.current) return note('Cancelling this run…'); $('stop').disabled = true; try { await api(`/api/sessions/${state.current}/stop`, { method: 'POST', body: '{}' }); note('Stopping this run…'); } catch (error) { toast(error.message); } finally { $('stop').disabled = false; } });
 document.addEventListener('keydown', event => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (!dialog.open && !sessionDialog.open) newChat(); }
-  if (event.key === 'Escape' && !dialog.open && !sessionDialog.open) { setInspector(false); setSidebar(false); }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (!document.querySelector('dialog[open]')) newChat(); }
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]')) { setInspector(false); setSidebar(false); }
 });
 (async () => {
   try {

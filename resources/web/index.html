@@ -4,8 +4,8 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Product Expert workspace for product knowledge, UMS, and conversations.">
   <title>Product Expert · Workspace</title>
-  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/memory-injection.css">
-  <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script><script defer src="/memory-injection.js"></script>
+  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/memory-injection.css"><link rel="stylesheet" href="/prompt.css">
+  <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script><script defer src="/memory-injection.js"></script><script defer src="/prompt.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -17,6 +17,7 @@
       <nav id="sessions" class="session-list" aria-label="Recent conversations"><p class="empty-sessions">Your product conversations start here.</p></nav>
       <div class="sidebar-bottom">
         <div class="local-card"><span class="local-dot"></span><div>Knowledge workspace<small>Conversations retained for 30 days</small></div><span class="local-symbol">⌁</span></div>
+        <button id="prompt-open" class="settings-button"><span>≡</span> Prompt <span class="settings-arrow">↗</span></button>
         <button id="memory-injection-open" class="settings-button"><span>◇</span> Memory Injection <span class="settings-arrow">↗</span></button>
         <a class="settings-button" href="/synchronize"><span>⇄</span> Synchronize <span class="settings-arrow">↗</span></a>
         <a id="contacts-open" class="settings-button" href="/wecom-contacts"><span>♧</span> WeCom contacts <span class="settings-arrow">↗</span></a>
@@ -133,6 +134,18 @@
       <p id="settings-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions"><button type="button" id="settings-cancel" class="secondary-button">Cancel</button><button type="submit" id="settings-save" class="primary-button">Save and apply <span>↗</span></button></div>
     </form>
+  </dialog>
+  <dialog id="prompt-dialog" aria-labelledby="prompt-title">
+    <div class="dialog-heading"><div><span class="eyebrow">MODEL CONTEXT</span><h2 id="prompt-title">Prompt</h2></div><button id="prompt-close" type="button" class="icon-close" aria-label="Close prompt">×</button></div>
+    <p class="dialog-copy">Inspect the model context and manage additional system instructions. Saved changes apply to the next run, including existing conversations.</p>
+    <div class="prompt-toolbar"><label>Your instructions</label><span id="prompt-count"></span><button id="prompt-add" type="button" class="secondary-button">Add instruction</button></div>
+    <ul id="prompt-instructions" aria-label="System instructions"></ul>
+    <p id="prompt-error" class="form-error" role="alert" hidden></p>
+    <div class="prompt-toolbar"><label for="prompt-mode">Preview</label><select id="prompt-mode"><option value="standard">Standard</option><option value="mcp">MCP · Text only</option></select><button id="prompt-expand" type="button" class="secondary-button">Expand all</button><button id="prompt-collapse" type="button" class="secondary-button">Collapse all</button></div>
+    <p id="prompt-preview-status" role="status"></p>
+    <div id="prompt-preview" aria-label="Prompt composition preview"></div>
+    <div id="prompt-discard" hidden><p>Discard unsaved changes?</p><button id="prompt-keep" type="button" class="secondary-button">Keep editing</button> <button id="prompt-discard-confirm" type="button" class="secondary-button">Discard changes</button></div>
+    <div class="prompt-footer"><span id="prompt-status" role="status"></span><button id="prompt-reload" type="button" class="secondary-button">Reload</button><button id="prompt-cancel" type="button" class="secondary-button">Close</button><button id="prompt-save" type="button" class="primary-button">Save changes</button></div>
   </dialog>
   <dialog id="memory-injection-dialog" aria-labelledby="memory-injection-title">
     <form id="memory-injection-form">

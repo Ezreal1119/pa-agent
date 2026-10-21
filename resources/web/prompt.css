@@ -1,0 +1,130 @@
+#prompt-dialog {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: 90dvh;
+  padding: 26px;
+  border-radius: 18px;
+  overflow: auto;
+  background: var(--canvas);
+}
+#prompt-dialog h2 {
+  margin: 6px 0 0;
+  font-size: 25px;
+}
+.prompt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.prompt-toolbar label {
+  font-weight: 550;
+  margin-right: auto;
+}
+.prompt-toolbar select {
+  padding: 7px;
+  border: 1px solid #d9e2d3;
+  border-radius: 6px;
+  background: #fff;
+}
+#prompt-instructions {
+  padding-left: 20px;
+  margin: 12px 0;
+}
+#prompt-instructions li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+#prompt-instructions input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid #d9e2d3;
+  border-radius: 8px;
+  background: #fff;
+}
+#prompt-count,
+#prompt-status,
+#prompt-preview-status {
+  font-size: 12px;
+  color: #71816b;
+  line-height: 1.6;
+}
+#prompt-preview details {
+  border: 1px solid #e0e6da;
+  border-radius: 8px;
+  margin: 9px 0;
+  padding: 11px;
+  background: #fff;
+}
+#prompt-preview details details {
+  margin-left: 12px;
+  background: #fafbf8;
+}
+#prompt-preview summary {
+  cursor: pointer;
+  font-weight: 550;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+#prompt-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.65 ui-monospace,
+    SFMono-Regular,
+    monospace;
+  max-width: 100%;
+  margin-bottom: 0;
+}
+.prompt-footer {
+  position: sticky;
+  bottom: -26px;
+  background: var(--canvas);
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#prompt-status {
+  flex: 1;
+  min-width: 160px;
+}
+#prompt-discard {
+  padding: 14px;
+  background: #fff4e7;
+  border: 1px solid #ecdac2;
+  border-radius: 8px;
+  margin: 12px 0;
+}
+#prompt-discard p {
+  margin: 0 0 10px;
+}
+#prompt-dialog .dialog-copy {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  #prompt-dialog {
+    padding: 16px;
+    width: calc(100vw - 16px);
+  }
+  #prompt-instructions {
+    padding-left: 0;
+  }
+  #prompt-instructions li {
+    gap: 6px;
+  }
+  #prompt-preview details details {
+    margin-left: 0;
+  }
+  .prompt-footer {
+    bottom: -16px;
+  }
+  .prompt-toolbar {
+    gap: 8px;
+  }
+}

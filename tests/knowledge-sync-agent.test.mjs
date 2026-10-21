@@ -141,4 +141,22 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
     }),
     /without a structured decision|budget/,
   );
+  const suggestion = "这是新产品 T5000，允许创建产品目录。将这份修改记录放入 T5000/others，并创建产品 Hub、更新相关索引。";
+  const review = { ...decision, action: "review", products: ["T5000"],
+    suggestedFeedback: suggestion };
+  calls.splice(0, calls.length,
+    { name: "finish_sync", args: review },
+    { name: "read_candidate_source", args: {} },
+    { name: "read_candidate_source", args: { offset: 20000 } },
+    { name: "finish_sync", args: review },
+  );
+  index = 0;
+  payloads.length = 0;
+  const reviewed = await createPlanner(options)({ ...input, usage: emptyUsage() });
+  assert.equal(reviewed.decision.suggestedFeedback, suggestion);
+  const finish = payloads[0].tools.find(t => t.function.name === "finish_sync");
+  assert.equal(finish.function.parameters.properties.suggestedFeedback.maxLength, 16000);
+  assert.ok(!finish.function.parameters.required.includes("suggestedFeedback"));
+  assert.match(JSON.stringify(payloads), /Read all segments before submitting/);
+  assert.match(JSON.stringify(payloads), /NEVER administrator feedback or permission/);
 });

@@ -6,6 +6,9 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parse as parseEnv } from "dotenv";
 import { AgentRuntime } from "../agent/runtime.js";
+import { resolveConfig } from "../config.js";
+import { PromptInstructionsStore } from "../prompts/instructions.js";
+import { previewPrompt } from "../prompts/composition.js";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_SKILLS, ON_DEMAND_SKILLS, loadRunKnowledge } from "../agent/knowledge.js";
 import { REASONING_MODES, isReasoningMode, isDeepSeekModel, applyDeepSeekReasoning, type ReasoningMode } from "../agent/reasoning.js";
@@ -43,7 +46,7 @@ import { SyncService } from "../knowledge-sync/service.js";
 import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
 import { createConverter, type Converter } from "../knowledge-sync/converter.js";
-import { SyncError } from "../knowledge-sync/core.js";
+import { SyncError, knowledgeLock } from "../knowledge-sync/core.js";
 import { MemoryInjectionService } from "../memory-injection/service.js";
 import { createMemoryPlanner, type MemoryPlanner } from "../memory-injection/planner.js";
 
@@ -97,6 +100,7 @@ export async function createWebServer(options: WebOptions = {}) {
     boundedSetting(options.maxConcurrentRuns ?? process.env.AGENT_MAX_CONCURRENT_RUNS ?? diskEnv.AGENT_MAX_CONCURRENT_RUNS, 2, 1, 8, "AGENT_MAX_CONCURRENT_RUNS"),
     boundedSetting(options.runQueueLimit ?? process.env.AGENT_RUN_QUEUE_LIMIT ?? diskEnv.AGENT_RUN_QUEUE_LIMIT, 8, 0, 100, "AGENT_RUN_QUEUE_LIMIT")
   );
+  const promptStore = new PromptInstructionsStore(dataDir);
   const records = new Map<string, RecordState>();
   const deletedIds = new Set<string>();
   let runtime: AgentRuntime | undefined;
@@ -341,12 +345,12 @@ export async function createWebServer(options: WebOptions = {}) {
     for (const r of records.values()) list.set(r.id, { id: r.id, title: r.title, updated: r.updated, running: r.running });
     return [...list.values()].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 100);
   }
-  async function readBody(req: IncomingMessage) {
+  async function readBody(req: IncomingMessage, maxBytes = 65536) {
     if (!(req.headers["content-type"] ?? "").startsWith("application/json")) throw new HttpError(415, "Send the request as JSON.");
     const parts: Buffer[] = []; let size = 0;
     for await (const part of req) {
       size += part.length;
-      if (size > 65536) throw new HttpError(413, "The request is too large. Shorten your question.");
+      if (size > maxBytes) throw new HttpError(413, "The request is too large. Shorten your question.");
       parts.push(part);
     }
     try {
@@ -426,6 +430,25 @@ export async function createWebServer(options: WebOptions = {}) {
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
         auth.logout(req, res, secureCookies); return json(res, 200, { ok: true });
+      }
+      if (url.pathname === "/api/prompt" || url.pathname === "/api/prompt/preview") {
+        if (machine) throw new HttpError(403, "Prompt management requires administrator login.");
+        if (url.search) throw new HttpError(400, "Prompt management does not accept query parameters.");
+        if (url.pathname === "/api/prompt" && method === "GET") return json(res, 200, await promptStore.load());
+        if (url.pathname === "/api/prompt" && method === "PUT") {
+          const body = await readBody(req, 262144);
+          if (Object.keys(body).some(k => !["instructions", "revision"].includes(k))) throw new HttpError(400, "Only instructions and revision are accepted.");
+          return json(res, 200, await promptStore.save(body.instructions, body.revision));
+        }
+        if (url.pathname === "/api/prompt/preview" && method === "POST") {
+          const body = await readBody(req, 262144);
+          if (Object.keys(body).some(k => !["instructions", "mode"].includes(k)) || !["standard", "mcp"].includes(body.mode)) throw new HttpError(400, "Provide instructions and standard or mcp mode.");
+          const config = resolveConfig({cwd,dataDir,resourcesDir,model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled});
+          const release = await knowledgeLock(path.join(dataDir,"urovo-product-expert")).read();
+          try { return json(res, 200, {...await previewPrompt(config,body.mode === "mcp",body.instructions), reasoning: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default"}); }
+          finally { release(); }
+        }
+        throw new HttpError(405, "Unsupported prompt operation.");
       }
       if (url.pathname.startsWith("/api/memory-injection/")) {
         if (machine) throw new HttpError(403, "Main memory requires administrator login.");
@@ -807,6 +830,8 @@ export async function createWebServer(options: WebOptions = {}) {
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
+        "/prompt.js": [path.join(resourcesDir, "web/prompt.js"), "text/javascript; charset=utf-8"],
+        "/prompt.css": [path.join(resourcesDir, "web/prompt.css"), "text/css; charset=utf-8"],
         "/memory-injection.js": [path.join(resourcesDir, "web/memory-injection.js"), "text/javascript; charset=utf-8"],
         "/memory-injection.css": [path.join(resourcesDir, "web/memory-injection.css"), "text/css; charset=utf-8"],
         "/app.js": [path.join(resourcesDir, "web/app.js"), "text/javascript; charset=utf-8"],

@@ -408,6 +408,27 @@ async function renderJob(job) {
       input.setAttribute("aria-label", `Instructions for ${item.name}`);
       input.value = drafts.get(item.id) || "";
       input.oninput = () => drafts.set(item.id, input.value);
+      const suggestion = item.plan?.decision.suggestedFeedback;
+      if (job.kind === "sync" && item.status === "needs_review" && suggestion) {
+        const box = el("div", undefined, "sync-suggestion"),
+          use = button("Use suggested instructions", () => {
+            input.value = suggestion;
+            drafts.set(item.id, suggestion);
+            input.focus();
+          });
+        use.disabled = busy;
+        box.append(
+          el("strong", "AI-suggested instructions"),
+          el("p", suggestion, "sync-suggestion-text"),
+          el(
+            "p",
+            "Review and edit before submitting. Nothing is authorized until you click Re-Sync.",
+            "sync-subtle",
+          ),
+          use,
+        );
+        feedback.append(box);
+      }
       const actions = el("div", undefined, "sync-feedback-actions"),
         forceLabel = el("label"),
         force = el("input");

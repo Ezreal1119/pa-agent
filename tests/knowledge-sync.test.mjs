@@ -173,6 +173,60 @@ test("review retains original; feedback makes a new attempt and unchanged curren
   assert.equal((await f.service.get(first.id)).items[0].status, "needs_review");
 });
 
+test("new-product suggestions remain drafts; per-file Re-Sync uses only submitted instructions and current knowledge", async (t) => {
+  const suggestion = "这是新产品 T5000，允许创建产品目录。将这份修改记录放入 T5000/others，并创建产品 Hub、更新相关索引。";
+  const source = "T5000/others/changelog_202610200000/changes.md";
+  const productHub = "product-knowledge-vault/products/T5000.md";
+  const seen = [];
+  const f = await setup(t, {
+    planner: () => async (input) => {
+      seen.push({ feedback: input.feedback, index: input.base.get(idx), batch: input.batch.length });
+      const decision = { ...proposal(input, "add").decision,
+        products: ["T5000"], slot: "others", oldPaths: [], newPath: source,
+        reviewedPaths: [idx], reason: "新产品需确认" };
+      if (!input.feedback) return {
+        decision: { ...decision, action: "review", suggestedFeedback: suggestion },
+        staged: new Map([[idx, "This must never publish during review"]]),
+      };
+      return { decision, staged: new Map([
+        [productHub, `# T5000\n${source}\nConverted; original removed after successful sync`],
+        [idx, `${input.base.get(idx)}\n[[products/T5000|T5000]]`],
+        [log, "Added T5000"],
+      ]) };
+    },
+  });
+  const a = await upload(f.service, "T5000.txt", "T5000 revision history"),
+    b = await upload(f.service, "other.txt", "Other unresolved document");
+  const first = await done(f.service, (await f.service.start([a.id, b.id])).id);
+  assert.ok(first.items.every(i => i.status === "needs_review" && i.feedback === ""));
+  assert.equal(first.items[0].plan.decision.suggestedFeedback, suggestion);
+  assert.deepEqual(first.items[0].plan.changes, []);
+  assert.equal((await f.service.incoming()).length, 2);
+  assert.equal(await fs.stat(path.join(f.knowledge, source)).catch(() => null), null);
+  const empty = await done(f.service, (await f.service.resync(first.id, first.items[0].id, "")).id);
+  assert.equal(empty.items[0].status, "needs_review");
+  assert.equal(seen.at(-1).feedback, "");
+  await fs.appendFile(path.join(f.knowledge, idx), "\nExternal update before Re-Sync");
+  const edited = suggestion + " 保留已有的外部索引更新。";
+  const second = await done(f.service, (await f.service.resync(first.id, first.items[0].id, edited)).id);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].status, "published", second.items[0].reason);
+  assert.equal(seen.at(-1).feedback, edited);
+  assert.equal(seen.at(-1).batch, 1);
+  assert.match(seen.at(-1).index, /External update before Re-Sync/);
+  assert.match(await fs.readFile(path.join(f.knowledge, idx), "utf8"), /External update before Re-Sync/);
+  assert.equal((await f.service.incoming()).length, 1);
+  assert.equal((await f.service.get(first.id)).items[1].status, "needs_review");
+  assert.equal((await f.service.get(first.id)).items[0].feedback, "");
+});
+
+test("suggestions cannot accompany publication or exceed the feedback limit", () => {
+  const d = { ...proposal({}).decision, suggestedFeedback: "Authorize this" };
+  for (const invalid of [d, { ...d, action: "review", suggestedFeedback: " " },
+    { ...d, action: "review", suggestedFeedback: "X".repeat(16001) }])
+    assert.throws(() => buildPlan(new Map(), new Map(), invalid, "text", ""), /review-only drafts/);
+});
+
 test("delete preview has no mutations, requires confirmation, and stale preview fails closed", async (t) => {
   const f = await setup(t, {
     planner: () => async (input) => proposal(input, "delete"),
