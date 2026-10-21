@@ -1,0 +1,39 @@
+[Unit]
+Description=Import latest eligible product library additions and updates
+Wants=network-online.target
+After=network-online.target
+# Independent of product-expert.service. Does not start knowledge Sync.
+
+[Service]
+Type=oneshot
+User=productexpert
+Group=productexpert
+WorkingDirectory=/opt/ProductExpertCloud
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# CLI reads .env with dotenv. Execute existing build; never build in the timer.
+ExecStart=/usr/bin/env node --max-old-space-size=256 /opt/ProductExpertCloud/dist/library-import/cli.js
+TimeoutStartSec=infinity
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+LimitCORE=0
+MemoryAccounting=yes
+MemoryHigh=700M
+MemoryMax=900M
+MemorySwapMax=256M
+CPUQuota=100%
+TasksMax=64
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/ProductExpertCloud/.data/logs/library_sync
+ReadWritePaths=/opt/ProductExpertCloud/.data/urovo-product-expert/newly_added

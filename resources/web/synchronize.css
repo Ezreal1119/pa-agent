@@ -1335,3 +1335,7 @@
 @media (max-width: 600px) {
   .sync-feedback .sync-decision-option { padding: 12px; gap: 10px; }
 }
+
+/* Source import providers retain independent controls and report histories. */
+.library-import-panel { margin-top: 24px; }
+.library-import-panel .sync-card-body { overflow-wrap: anywhere; }

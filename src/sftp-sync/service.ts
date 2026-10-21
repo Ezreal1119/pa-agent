@@ -120,11 +120,20 @@ export class SftpSyncService {
     const [s,t]=await Promise.all([fs.lstat(stage).catch(e=>{if(e.code==='ENOENT')return;throw e;}),fs.lstat(target).catch(e=>{if(e.code==='ENOENT')return;throw e;})]);
     if(s?.isSymbolicLink() || t?.isSymbolicLink() || s && !s.isFile() || t && !t.isFile())throw new SyncError('Unsafe import publication path.');
     if(s && t && s.ino===t.ino && s.dev===t.dev)await fs.unlink(stage);
-    if(t) {
-      if(await this.digest(target)!==pending.hash)throw new SyncError('Pending inbox file changed; publication requires manual review.');
+    else if(t) {
+      if(await this.digest(target)===pending.hash)await fs.rm(stage,{force:true});
+      else if(!s)throw new SyncError('Pending inbox file changed; publication requires manual review.');
+      else if(await this.digest(stage)!==pending.hash)throw new SyncError('Pending delivery cannot be verified. Preserve state and reports for manual recovery.');
+      else {
+        // Replace an unsynced copy atomically: exclusive hardlink then rename.
+        const replacement=`.sftp-${randomUUID()}.part`;
+        await fs.link(stage,await safePath(this.inbox,replacement));
+        try {await fs.rename(path.join(this.inbox,replacement),target);} finally {await fs.rm(path.join(this.inbox,replacement),{force:true});}
+        await fs.unlink(stage);
+      }
     } else {
       if(!s || await this.digest(stage)!==pending.hash)throw new SyncError('Pending delivery cannot be verified. Preserve state and reports for manual recovery.');
-      await fs.link(stage,target); // atomic, complete file, exclusive: never overwrites
+      await fs.link(stage,target); // atomic, complete file, exclusive
       await fs.unlink(stage);
     }
     await this.syncDir(this.inbox);
@@ -149,6 +158,8 @@ export class SftpSyncService {
     }
     const work=await safePath(this.root,'work');await fs.mkdir(work,{recursive:true,mode:0o700});
     for(const file of await fs.readdir(work))if(/^[a-f0-9-]{36}\.part$/.test(file))await fs.unlink(await safePath(work,file));
+    for(const file of await fs.readdir(this.inbox).catch((e:{code?:string})=>{if(e.code==='ENOENT')return [];throw e;}))
+      if(/^\.sftp-[a-f0-9-]{36}\.part$/.test(file))await fs.unlink(path.join(this.inbox,file)).catch(()=>{});
   }
   async start():Promise<ImportRun> {
     if(this.closing || this.starting || this.running)throw new SyncError('An SFTP import is running or shutting down.',409);
@@ -212,10 +223,9 @@ export class SftpSyncService {
           if(!after.isFile() || before.size!==after.size || before.mtime!==after.mtime || bytes!==before.size)throw Object.assign(new Error('Remote file changed or download was incomplete; no file published.'),{code:'REMOTE_CHANGED'});
           item.bytes=bytes;item.hash=digest.digest('hex');
           if(entry.hash===item.hash){item.status='unchanged';item.target=entry.target;await fs.unlink(stage);break;}
-          const name=path.posix.basename(item.path),extension=path.extname(name),stem=Array.from(path.basename(name,extension)).reduce((s,c)=>Buffer.byteLength(s+c)<=140?s+c:s,'');
-          let target=name;
-          try{await fs.lstat(path.join(this.inbox,target));target=`${stem}__sftp_${key.slice(0,8)}_${randomUUID().slice(0,8)}${extension}`;}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
-          if(!this.validTarget(target))throw new Error('Unsafe local filename.');
+          const name=path.posix.basename(item.path);
+          if(!this.validTarget(name))throw new Error('Unsafe local filename.');
+          const target=name;
           entry.pending={hash:item.hash,target,stage:part};state.files[key]=entry;
           await this.saveState(state);
           await this.publish(entry,state);

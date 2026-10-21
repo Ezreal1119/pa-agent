@@ -40,6 +40,9 @@ import { McpService } from "../mcp/service.js";
 import { handleMcp } from "../mcp/http.js";
 import { runMcpAgent } from "../mcp/runner.js";
 
+import { LibraryImportService } from "../library-import/service.js";
+import { libraryConfig } from "../library-import/config.js";
+import { createClassifier } from "../library-import/classifier.js";
 import { SftpSyncService } from "../sftp-sync/service.js";
 import { sftpConfig } from "../sftp-sync/config.js";
 import { SyncService } from "../knowledge-sync/service.js";
@@ -68,6 +71,7 @@ export async function createWebServer(options: WebOptions = {}) {
     if (error.code === "ENOENT") return {} as Record<string, string>;
     throw error;
   });
+  const libraryOptions = libraryConfig({ ...diskEnv, ...process.env });
   const sftpOptions = sftpConfig(cwd, dataDir, { ...diskEnv, ...process.env });
   const mcpOptions = mcpConfig(options.mcp, { ...diskEnv, ...process.env });
   const mcpAccess = new McpAccess(mcpOptions.apiKey);
@@ -117,6 +121,7 @@ export async function createWebServer(options: WebOptions = {}) {
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
     if (webConfig.apiKey) message = message.split(webConfig.apiKey).join("[REDACTED]");
+    if (libraryOptions.password) message = message.split(libraryOptions.password).join("[REDACTED]");
     if (sftpOptions.password) message = message.split(sftpOptions.password).join("[REDACTED]");
     if (adminPassword) message = message.split(adminPassword).join("[REDACTED]");
     if (fileConfig.vision.apiKey) message = message.split(fileConfig.vision.apiKey).join("[REDACTED]");
@@ -133,6 +138,9 @@ export async function createWebServer(options: WebOptions = {}) {
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
   const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});
   await sftpSync.init();
+  const libraryImports = new LibraryImportService({dataDir, config:libraryOptions, modelConfigured:configured, modelId:()=>settings.modelId, redact,
+    classifier:() => createClassifier({...settings}, agentSettings.effort, signal => runGate.acquire(signal))});
+  await libraryImports.init();
   const memoryInjection = new MemoryInjectionService({dataDir, attachments: new MemoryAttachments(dataDir, () => fileConfig), modelId: () => settings.modelId, redact,
     planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
   await memoryInjection.init();
@@ -483,6 +491,22 @@ export async function createWebServer(options: WebOptions = {}) {
           return json(res, 202, await memoryInjection.confirm(match[1]!));
         }
         throw new HttpError(404, "Memory operation not found.");
+      }
+      if (url.pathname.startsWith("/api/library-import/")) {
+        if (machine) throw new HttpError(403, "Imports require administrator login.");
+        const route = url.pathname.slice("/api/library-import/".length);
+        if (route === "status" && method === "GET") return json(res, 200, await libraryImports.status());
+        if (route === "runs" && method === "POST") {
+          if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Library import uses the latest upstream report; request parameters are not accepted.");
+          return json(res, 202, await libraryImports.start());
+        }
+        const match = route.match(/^runs\/([a-f0-9-]{36})(\/stop)?$/);
+        if (match && !match[2] && method === "GET") return json(res, 200, await libraryImports.get(match[1]!));
+        if (match && match[2] && method === "POST") {
+          if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Stop accepts only the saved run ID.");
+          return json(res, 200, await libraryImports.stop(match[1]!));
+        }
+        throw new HttpError(404, "Import operation not found.");
       }
       if (url.pathname.startsWith("/api/sftp-sync/")) {
         if (machine) throw new HttpError(403, "Imports require administrator login.");
@@ -871,11 +895,13 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
+    const libraryClosing = libraryImports.close();
     const sftpClosing = sftpSync.close();
     const syncClosing = synchronize.close();
     const memoryClosing = memoryInjection.close();
     await mcp?.close();
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
+    await libraryClosing;
     await sftpClosing;
     await syncClosing;
     await memoryClosing;

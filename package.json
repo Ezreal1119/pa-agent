@@ -31,7 +31,8 @@
     "check:sync": "node scripts/check-sync-runtime.mjs",
     "sftp:sync": "npm run build && node dist/sftp-sync/cli.js",
     "test:sftp": "npm run build && node --test tests/sftp-sync*.test.mjs",
-    "sftp:check-host": "npm run build && node dist/sftp-sync/probe.js"
+    "sftp:check-host": "npm run build && node dist/sftp-sync/probe.js",
+    "library:import": "node dist/library-import/cli.js"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",

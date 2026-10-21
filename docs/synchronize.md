@@ -10,7 +10,7 @@
 4. 状态含义：**Needs your decision** 只表示 Agent 需要管理员回答业务问题（产品身份、版本先后、新产品授权、无法解释的冲突），报告写明具体问题；**Failed** 表示自动检查或处理失败、未发布，可直接 Re-Sync（说明可选）；**Awaiting confirmation** 只用于删除预览和非同名 Hub 覆盖。Agent 的 `finish_sync` 会当场运行后端校验，一次返回全部问题，Agent 在同一会话内最多修正 3 轮，路径/索引类技术问题不再交给管理员。
    在报告中填写说明，点 **Re-Sync**。Re-Sync 原地重跑同一张报告卡片，旧尝试折叠为 “earlier attempts” 历史，不新开报告。原件未变化时复用转换；识别错误、遗漏等反馈或 **Reconvert original** 强制重新转换。仅明确的管理员反馈可以授权新产品、旧版本或同版覆盖；仍须通过路径、覆盖与索引校验。
    新产品身份和归属明确、仅缺少创建授权时，AI 会在该文件报告中生成 **AI-suggested instructions**。点击 **Use suggested instructions** 填入下方输入框，检查或修改后再点 **Re-Sync**。建议不会自动提交，也不构成授权；身份/slot 仍有歧义时只提示需要补充的信息。每次 Re-Sync 仅处理选中的这一份文件，重新核对当前知识库并维护相关索引；其他文件和旧报告保持独立。旧报告没有建议字段时仍按原流程手动填写。
-   Hub 文件名与产品目录名只差空格、标点或大小写（如 `K388 Pro` → `K388-Pro.md`）时，后端自动对应，无需确认。`oldPaths` 中误写的原件路径（如 `.pdf`）自动映射到同名 Markdown。`index.md` 仅在新建 Hub/shared 节点时强制更新。
+   Hub 文件名与产品目录名只差空格、标点或大小写（如 `K388 Pro` → `K388-Pro.md`）时，后端自动对应，无需确认。`oldPaths` 中误写的原件路径（如 `.pdf`）自动映射到同名 Markdown。`index.md` 仅在新建 Hub/shared 节点时强制更新。替换/删除时 `reviewedPaths` 只需覆盖直接引用该旧来源的页面，不要求复核仅通过 Hub/`index.md` 间接关联的无关产品页。
    若 Agent 选择另一个现有 Hub，报告会显示具体对应路径并进入 **Awaiting confirmation**。逐文件查看差异，点击 **Confirm publication** 才发布。不维护永久映射，不因反馈里写了“确认”就跳过该按钮。预览后资料库发生变化会拒绝发布，需 Re-Sync 重新生成；批次后续文件的成功发布也可能使早先预览过期。
 5. **Delete knowledge** 用自然语言描述要删除的资料，点 **Preview**。检查具体来源文件及索引差异后点击 **Confirm deletion**。预览期间知识库变化会拒绝提交，需要重新预览。歧义请求进入人工反馈，不自动扩大范围。删除报告的补充输入通过 **Regenerate deletion preview** 重新生成预览，不显示 **Reconvert original**，也不会直接删除。
 
@@ -131,3 +131,8 @@ Library Tab 递归显示 `urovo-product-expert/`（跳过点路径与符号链�
 详细判断依据和来源版本说明默认折叠到 **Decision details and evidence**；当前选项不放宽原有校验或删除确认。无法合理列出有限选项时，Agent 只提问并保留自由输入。旧报告若 reason 中有明确“选项 A：… / Option A: …”行，可直接显示对应原文卡片；没有明确行则保留输入框，之后 Re-Sync 可生成结构化问题和选项，不额外调用模型改写旧报告。选项只是一份待选择草案，不是管理员授权；新的 run 必须重新核对当前知识库。
 
 本轮按要求不运行构建、测试、浏览器或真实模型验证。
+
+
+## Library source imports (2026-10-21)
+
+Source imports now contains independent **SFTP imports** and **Library imports** sections. Library imports selects only the latest complete upstream report's added/updated keys, classifies eligible document metadata using the shared text model and delivers verified PDF/PPTX/XLSX/DOCX files into Incoming. Run now / Stop and histories are separate; neither source importer starts knowledge Sync. Configuration, weekly Monday 06:00 Beijing timer templates, persistence and failure handling are described in [Library imports](library-import.md). Templates were generated only; this implementation round ran no build, tests, model/download requests or VPS operations.

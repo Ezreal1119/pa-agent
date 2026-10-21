@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly library import on Monday 06:00 Beijing time
+
+[Timer]
+OnCalendar=Mon *-*-* 06:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=product-expert-library-import.service
+
+[Install]
+WantedBy=timers.target

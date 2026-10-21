@@ -82,19 +82,12 @@ export function primeIndex(base: Map<string, string>) {
   }
   return index;
 }
+/** Pages that cite the given source paths. Indirect Hub/index citations are not included. */
 export function dependents(base: Map<string, string>, paths: string[]) {
-  const found = new Set(paths);
-  let added = true;
-  const index = primeIndex(base);
-  while (added) {
-    added = false;
-    for (const [p, refs] of index)
-      if (!found.has(p) && refs.some((r) => found.has(r))) {
-        found.add(p);
-        added = true;
-      }
-  }
-  return [...found].filter((p) => !paths.includes(p));
+  const sources = new Set(paths);
+  return [...primeIndex(base)]
+    .filter(([p, refs]) => !sources.has(p) && refs.some((r) => sources.has(r)))
+    .map(([p]) => p);
 }
 
 function links(text: string) {

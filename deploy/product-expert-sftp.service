@@ -1,0 +1,17 @@
+[Unit]
+Description=Product Expert SFTP file import
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/ProductExpertCloud
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --max-old-space-size=128 /opt/ProductExpertCloud/dist/sftp-sync/cli.js
+TimeoutStartSec=2h
+TimeoutStopSec=30s
+UMask=0077
+MemoryMax=256M
+CPUQuota=50%

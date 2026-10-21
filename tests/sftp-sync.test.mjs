@@ -26,7 +26,7 @@ test('SFTP path-only JSONL validates traversal, reserved names, malformed lines 
   assert.equal(entries.length,8);assert.equal(entries.filter(e=>!e.error).length,1);
   assert(!JSON.stringify(entries).includes('do-not-echo'));
 });
-test('SFTP streams complete files, keeps hash after Sync removes original, delivers changed contents without overwrite, and keeps private reports', {timeout:15000},async t=>{
+test('SFTP streams complete files, keeps hash after Sync removes original, replaces an unsynced inbox copy, and keeps private reports', {timeout:15000},async t=>{
   const f=await fixture(t);
   let report=await f.run();assert.equal(report.status,'completed');assert.equal(report.items[0].status,'downloaded');
   const target=path.join(f.service.inbox,report.items[0].target);
@@ -36,8 +36,9 @@ test('SFTP streams complete files, keeps hash after Sync removes original, deliv
   await fs.unlink(target);report=await f.run();assert.equal(report.items[0].status,'unchanged');assert.deepEqual(await fs.readdir(f.service.inbox),[]);
   f.setBytes(Buffer.from('new file'));report=await f.run();assert.equal(report.items[0].status,'downloaded');
   const original=path.join(f.service.inbox,report.items[0].target);
-  f.setBytes(Buffer.from('third version'));report=await f.run();assert.equal(report.items[0].status,'downloaded');assert.notEqual(report.items[0].target,path.basename(original));
-  assert.equal((await fs.readFile(original)).toString(),'new file');
+  f.setBytes(Buffer.from('third version'));report=await f.run();assert.equal(report.items[0].status,'downloaded');assert.equal(report.items[0].target,path.basename(original));
+  assert.equal((await fs.readFile(original)).toString(),'third version');
+  assert.deepEqual(await fs.readdir(f.service.inbox),[path.basename(original)]);
   assert.deepEqual(await fs.readdir(path.join(f.service.root,'work')),[]);
   assert.equal((await fs.stat(path.join(f.service.root,report.id+'.json'))).mode & 0o777,0o600);
   const saved=(await Promise.all((await fs.readdir(f.service.root)).filter(n=>n.endsWith('.json')).map(n=>fs.readFile(path.join(f.service.root,n),'utf8')))).join('');

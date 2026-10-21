@@ -678,7 +678,7 @@ async function refresh() {
   try {
     await incoming();
     await loadHistory();
-    await refreshImports();
+    await Promise.all([refreshImports(), refreshLibraryImports()]);
   } finally {
     polling = false;
   }
@@ -897,6 +897,77 @@ $("import-run").onclick = () =>
       importStarting = false;
     }
   });
+let selectedLibraryImport, libraryImportCache = "", libraryImportHistoryCache = "", libraryImportStarting = false;
+async function libraryImportApi(route, method = "GET", body) {
+  const res = await fetch(`/api/library-import/${route}`, {
+    method,
+    headers: { "X-Local-Token": token, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { location.href = "/login"; throw Error("Please sign in."); }
+  const data = await readJson(res);
+  if (!res.ok) throw Error(data.error || "Library import request failed.");
+  return data;
+}
+async function refreshLibraryImports() {
+  const state = await libraryImportApi("status");
+  $("library-import-config").textContent = state.configurationError || (!state.configured
+    ? `Set ${state.missing.join(", ")} in .env, then restart.`
+    : state.recoveryError || "Configured · latest completed library report only");
+  $("library-import-schedule").textContent = state.schedule;
+  $("library-import-run").disabled = libraryImportStarting || !!state.running || !state.configured || !!state.recoveryError;
+  $("library-import-run").textContent = state.running ? "Import running…" : "Run now →";
+  if (!selectedLibraryImport && state.reports.length) selectedLibraryImport = state.running || state.reports[0].id;
+  const historyKey = JSON.stringify([state.reports, selectedLibraryImport]);
+  if (historyKey !== libraryImportHistoryCache) {
+    libraryImportHistoryCache = historyKey;
+    $("library-import-history").replaceChildren();
+    for (const report of state.reports) {
+      const b = button("", async () => { selectedLibraryImport = report.id; libraryImportCache = ""; await refreshLibraryImports(); }, "sync-history-item");
+      b.append(el("strong", "Library import"), el("time", dateLabel(report.created)), badge(report.status),
+        el("small", Object.entries(report.counts).map(([status, count]) => `${count} ${status.replaceAll("_", " ")}`).join(" · ")));
+      if (report.id === selectedLibraryImport) { b.classList.add("selected"); b.setAttribute("aria-current", "true"); }
+      $("library-import-history").append(b);
+    }
+  }
+  if (!selectedLibraryImport) return;
+  const report = await libraryImportApi(`runs/${selectedLibraryImport}`), encoded = JSON.stringify(report);
+  if (encoded === libraryImportCache) return;
+  libraryImportCache = encoded;
+  const holder = $("library-import-report"), heading = el("div", undefined, "sync-report-heading"), title = el("div");
+  holder.replaceChildren();
+  title.append(el("h3", "Library import report"), badge(report.status)); heading.append(title);
+  if (["running", "stopping"].includes(report.status)) heading.append(button("Stop", () => libraryImportApi(`runs/${report.id}/stop`, "POST", {})));
+  holder.append(heading, el("p", dateLabel(report.created), "sync-report-date"));
+  if (report.sourceReport) holder.append(el("p", `Source report: ${report.sourceReport} · ${dateLabel(report.sourceCompletedAt)}`));
+  if (report.model) holder.append(el("p", `Model snapshot: ${report.model}`, "sync-subtle"));
+  const usage = report.usage;
+  holder.append(el("p", `Recorded text tokens: ${usage.input.toLocaleString()} input / ${usage.output.toLocaleString()} output · ${usage.recorded}/${usage.requests} requests with usage`, "sync-subtle"));
+  if (report.error) holder.append(el("p", report.error, "sync-file-error"));
+  if (!report.items.length && report.status === "running") holder.append(el("p", "Loading the latest upstream report…", "sync-subtle"));
+  for (const item of report.items) {
+    const card = el("details", undefined, "sync-card"), summary = el("summary"), body = el("div", undefined, "sync-card-body");
+    card.open = ["failed", "needs_review", "interrupted"].includes(item.status);
+    summary.append(el("span", item.name || item.key, "sync-card-title"), badge(item.status));
+    body.append(el("p", `${item.change} · ${item.documentType || "No document type"}`), el("p", item.displayPath));
+    if (item.stage) body.append(el("p", `Failed stage: ${item.stage}`));
+    if (item.category) body.append(el("p", `Classification: ${item.category}${item.classificationCached ? " · cached" : ""}${item.model ? ` · ${item.model}` : ""}`));
+    if (item.reason) body.append(el("p", item.reason));
+    if (item.error) body.append(el("p", item.error, "sync-file-error"));
+    body.append(el("p", `${item.attempts} download attempts${item.bytes !== undefined ? ` · ${fileSize(item.bytes)}` : ""}`));
+    if (item.usage.requests) body.append(el("p", `Recorded tokens: ${item.usage.input} / ${item.usage.output} · ${item.usage.recorded}/${item.usage.requests} requests with usage`, "sync-subtle"));
+    if (item.target) body.append(el("p", `Incoming file: ${item.target}`));
+    if (item.hash) body.append(el("code", `SHA256 ${item.hash}`));
+    card.append(summary, body);holder.append(card);
+  }
+}
+$("library-import-run").onclick = () => action(async () => {
+  if (libraryImportStarting) return;
+  libraryImportStarting = true; $("library-import-run").disabled = true;
+  try { const report = await libraryImportApi("runs", "POST", {}); selectedLibraryImport = report.id; libraryImportCache = ""; }
+  finally { libraryImportStarting = false; }
+});
+
 (async () => {
   try {
     const response = await fetch("/api/auth/status"),

@@ -589,11 +589,19 @@ test("new product requires feedback; encoded and relative source dependencies ca
   const oldSpace = "DT610/specs/old_202601010000/spec sheet.md";
   base.set(oldSpace, "old");
   const derived = "product-knowledge-vault/comparisons/example.md";
+  const hubPage = "product-knowledge-vault/products/Direct.md";
+  const sibling = "product-knowledge-vault/pb/CT48.md";
   base.set(
     derived,
     "[Source](../../DT610/specs/old_202601010000/spec%20sheet.md)",
   );
-  assert.ok(dependents(base, [oldSpace]).includes(derived));
+  base.set(hubPage, `${oldSpace}\n[[pb/CT48]]`);
+  base.set(sibling, "unrelated product page");
+  assert.deepEqual(
+    dependents(base, [oldSpace]).sort(),
+    [derived, hubPage].sort(),
+  );
+  assert.ok(!dependents(base, [oldSpace]).includes(sibling));
   const p = proposal({}, "add");
   p.decision.products = ["NEW"];
   p.decision.oldPaths = [];

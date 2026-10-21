@@ -296,11 +296,17 @@ SYNC 单独支持最多 200 张工作表；内嵌 XLSX 按管理员要求跳过�
 The sidebar **Memory Injection** entry above Synchronize opens one dialog. Describe additions, corrections or deletions, generate a preview, resolve any questions, then confirm the exact proposed changes to `memory/urovo-product-expert/MEMORY.md`. This administrator-only workflow does not change `MEMORY_EXTRA.md` or expose a write tool to ordinary chat. It shares the configured model and effort, keeps backups/audit records, and rejects stale previews. Existing systemd deployments must remove the main-memory `ReadOnlyPaths` line before saving. The dialog accepts one optional image, document or UTF-8 text attachment (up to 30 MiB) with your written request; replace/remove is supported and attachment changes require a fresh preview. File contents are evidence only, and memory is written only after confirmation. The dialog also offers **Download Memory File** to download the current saved main `MEMORY.md` without a model call or any modification. See [workflow, API and VPS upgrade](docs/memory-injection.md).
 
 
-### Manual SFTP source imports
+### SFTP source imports
 
 Synchronize → **Source imports** supports **Run now** and per-file reports. Configure the `SFTP_*` values from `.env.example`, and create the ignored `.data/sftp_sync_paths.jsonl` with one `{"path":"/remote/file.xlsx"}` per line. `npm run sftp:sync` performs the same one-shot import without a browser; `npm run test:sftp` runs its checks. See [configuration and recovery](docs/sftp-sync.md).
 
-Changed files are downloaded into `urovo-product-expert/newly_added/`, then processed separately with **Start Sync**. Identical SHA256 content is not delivered again, even after Sync removes the original. Pure SFTP still needs to read remote content to compare hashes. Reports/state remain under `.data/logs/sftp_sync/`. No scheduling, additional service, or WeCom notification is enabled.
+Changed files are downloaded into `urovo-product-expert/newly_added/`, then processed separately with **Start Sync**. Identical SHA256 content is not delivered again, even after Sync removes the original. Pure SFTP still needs to read remote content to compare hashes. Reports/state remain under `.data/logs/sftp_sync/`. `deploy/product-expert-sftp.service` and `.timer` preserve the administrator-supplied VPS configuration: root, existing compiled CLI, daily **03:00 Asia/Shanghai**, with catch-up after downtime. Templates are not installed/enabled automatically; an existing VPS with identical units needs no change. Library imports uses separate units. No WeCom notification is enabled.
 
 
 Synchronize 的 **Needs your decision** 报告支持根据问题生成单选卡片，并保留 **Additional instructions** 自由输入；选择后点击 **Re-Sync** 才提交，判断依据默认折叠。旧报告中的明确选项行也可显示为卡片。本轮未执行验证。
+
+### Weekly library imports
+
+Synchronize → **Source imports → Library imports** adds independent manual Run now / Stop and persistent per-file reports. Only the latest completed upstream report's added/updated entries are considered; the shared text model classifies five supported document categories from metadata, and the program validates PDF/PPTX/XLSX/DOCX (100 MiB), downloads and deduplicates into `newly_added/`. It does not run knowledge Sync or backfill old reports.
+
+Configure `LIBRARY_IMPORT_BASE_URL` and `LIBRARY_IMPORT_ADMIN_PASSWORD` in the ignored server `.env`. `npm run library:import` runs the existing compiled CLI without rebuilding. Reports/state/cache live in `.data/logs/library_sync/`. Standalone systemd templates schedule Monday 06:00 **Asia/Shanghai**, with one catch-up after downtime; templates are not installed/enabled automatically. See [configuration, installation, API and recovery](docs/library-import.md). This implementation round did **not** run build/tests, real model/download validation, or deployment.

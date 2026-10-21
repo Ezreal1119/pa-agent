@@ -4,6 +4,12 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- 补齐 `deploy/product-expert-sftp.service` / `.timer`，原样保存管理员提供的 VPS 配置：root 运行既有 dist CLI，每天北京时间 03:00，Persistent 补跑，128 MiB JS 堆、256M 服务内存、50% CPU、2h 超时。README/SFTP 说明补充安装与仓库/VPS 配置的区别；未改动 VPS、未安装启用或执行验证。见 2026-10-21 SFTP 模板同步记录。
+
+- 独立 Library imports：Synchronize → Source imports 网页入口及 `/api/library-import/*` 管理员接口，最新完整资料库报告 added/updated 合并当前元信息、五类 AI 分类缓存、100 MiB 四格式串行下载/结构校验、来源哈希去重与版本保留、跨进程锁/停止/恢复。`npm run library:import` 直接运行已有构建；新增每周一北京时间 06:00 的独立 service/timer 模板（未安装/启用），状态报告放 `.data/logs/library_sync/`。本轮按要求未运行构建、测试或真实请求，见下方 2026-10-21 资料库导入记录。
+
+- Synchronize 替换/删除时只要求复核直接引用旧来源的页面，不再把 Hub/`index.md` 的间接引用扩散到无关产品页。SFTP 远端同路径有新内容且旧副本仍在 Incoming 时原子覆盖该文件，不再另存 `__sftp_…` 后缀；Sync 已消耗原件后的后续变更仍作为新 Incoming 文件。
+
 - Memory Injection 支持单份30MiB图片/文档/UTF-8文本附件，可替换/移除；专用 Agent 复用现有文件读取与视觉能力，先读取证据，再预览确认主记忆。更换附件须重新预览，文件留在隔离临时存储。本轮未执行验证。见 2026-10-21 主记忆单附件记录。
 
 - Synchronize 待决报告新增问题与动态单选卡片，保留补充输入和显式 Re-Sync；依据默认折叠，旧报告明确选项行可直接展示为卡片。选项仅为草案，不自动授权或提交。本轮未执行验证。见 2026-10-21 待决选项界面记录。
@@ -723,3 +729,20 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - Agent：有附件才注册受限 `read_memory_attachment`，由固定文件类型转发只读文件工具，或分段读取唯一UTF-8文件。无任意文件、网络、命令和写工具。内含指令不构成权限；附件未成功读取不能提交修改。仅抽取管理员要求中适合长期保存的事实，不整篇复制。读取沿用聊天工具的限制/视觉配置，不引入完整SYNC转换或LibreOffice依赖。
 - 运行与兼容：纯文字3分钟/8次请求不变；附件预览5分钟/24次文本请求、20次读取，视觉保留已有预算，独立显示已记录视觉Token。只改主Memory预览入口，不改MEMORY_EXTRA、正式知识库或聊天附件。无新依赖、env或systemd要求；旧文本请求和预览记录继续兼容。
 - 验证：依管理员要求未运行构建、测试、浏览器、真实文件读取、模型或机器人验证，也未部署VPS。这里仅记录代码实现，不宣称验证通过。
+
+
+## 2026-10-21 — 每周资料库导入
+
+- 原因：资料库每周更新，管理员只需要检查最新完整报告的 added/updated，挑选指定五类文档送到 newly_added，再自行启动知识 Sync；不回溯、不跟踪远端删除、不推送企微。
+- 实现：新增 `src/library-import/` 配置、公开 HTTPS/DNS 固定解析下载、纯元信息分类器、独立文档结构检查子进程、持久服务与 CLI。通过 key 合并当前文件清单、去重变化；支持 PDF/PPTX/XLSX/DOCX ≤100 MiB，排除旧格式；分类为 accessories_guide / product_brochure(PB) / presentation / specs / user_guide / outside / uncertain，仅前五类下载。共用现有文本模型/思考设置，整批快照，无工具/知识/Memory 注入。
+- 一致性与错误处理：原子状态/JSONL 报告、分类缓存、按来源+内容去重、同名异内容另存 __library 后缀、预发布日志及经证明的发布恢复、跨 Web/CLI 心跳锁和停止标记；有限重试、超时、磁盘余量、长度/实际格式/XML/CRC/PDF 检查。认证或磁盘/连接批次故障停止其余文件；不明确的崩溃发布保留状态并要求人工处理，不猜测已投递。CLI 崩溃后 Web 轮询可在锁过期后恢复报告。源二进制不进入正式资料区。
+- 接口/UI：Source imports 分别展示 SFTP 与 Library 的配置、Run now、Stop、历史及逐文件状态/依据/实际返回 Token；`/api/library-import/status`、`runs`、`runs/<id>`、`runs/<id>/stop` 沿用管理员 Cookie/Origin/CSRF，机器凭证无权访问，不返回配置密码。普通聊天和已有 SFTP/Synchronize 改动保留。
+- 运行/兼容性：新增 `.env.example` 的 LIBRARY_IMPORT_BASE_URL / LIBRARY_IMPORT_ADMIN_PASSWORD 占位；未配置时界面提示，普通问答仍可用。无新 npm 依赖；新增 `library:import` 直接运行 dist，不每周重建。独立 systemd service/timer 仅模板，每周一 Asia/Shanghai 06:00，Persistent 漏跑补一次；无需主 Web 服务在运行。README/使用说明补充部署步骤和边界。
+- 验证结果：**按用户要求，本轮未运行构建、typecheck、测试、浏览器、真实模型、真实下载、VPS/资源或定时器验证。** 仅编写未执行的模拟测试夹具与后续验证清单；不能记为已通过。未提交/推送代码，未部署、未安装/启用定时器，未写入真实凭证或修改正式知识/Memory。
+
+## 2026-10-21 — SFTP systemd 模板同步
+
+- 原因：管理员已在 VPS 手工配置 SFTP service/timer，本地仓库缺少对应模板，要求以其贴出的 VPS 内容为准保存。
+- 修改：新增 `deploy/product-expert-sftp.service` 与 `deploy/product-expert-sftp.timer`，保留 root、工作目录、直接运行 dist CLI、128 MiB JS 堆、256M 内存、50% CPU、2h/30s 超时及每天 Asia/Shanghai 03:00/Persistent 的配置；README 和 SFTP 使用说明追加模板安装步骤、与 Library 每周任务的独立关系、Git 不自动更新 `/etc/systemd/system/` 的边界。
+- 兼容性：仅新增部署模板与文档，不更改导入实现、凭证、路径列表或已有工作区改动。与贴出内容一致的 VPS 无需重新安装或重启；仅凭 unit 内容不推断 timer 已启用。
+- 验证：沿用管理员要求，未运行构建、测试、systemd 校验或真实 SFTP 请求；未访问/修改 VPS，未安装/启用任务，未提交或推送代码。配置来源为管理员提供的文本，非独立远端核验。

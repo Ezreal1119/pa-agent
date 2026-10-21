@@ -1,6 +1,6 @@
-# Manual SFTP source imports
+# SFTP source imports
 
-The importer reads a configured SFTP account and a path-only JSONL list. It downloads changed contents into the product knowledge `newly_added/` inbox. Knowledge classification/conversion/publication is a separate **Start Sync** action. It never writes/deletes remote files. No scheduled task, new daemon, or WeCom notification is installed.
+The importer reads a configured SFTP account and a path-only JSONL list. It downloads changed contents into the product knowledge `newly_added/` inbox. Knowledge classification/conversion/publication is a separate **Start Sync** action. It never writes/deletes remote files. Manual Web/CLI runs and an optional daily systemd timer share the same implementation. Repository templates do not install or enable services automatically; no WeCom notification is provided.
 
 ## VPS configuration
 
@@ -42,7 +42,7 @@ chmod 600 /opt/ProductExpertCloud/.data/sftp_sync_paths.jsonl
 systemctl restart product-expert.service
 ```
 
-Open **Synchronize → Source imports → Run now**. Results persist when the browser closes. Inspect **Downloaded**, **Unchanged**, or the reason for each failed path; a mixed batch finishes as **Completed with errors**. Newly delivered files appear in **Incoming files**. Select them and click **Start Sync** when ready.
+Open **Synchronize → Source imports → SFTP imports → Run now**. Results persist when the browser closes. Inspect **Downloaded**, **Unchanged**, or the reason for each failed path; a mixed batch finishes as **Completed with errors**. Newly delivered files appear in **Incoming files**. Select them and click **Start Sync** when ready.
 
 Alternatively run a one-shot CLI:
 
@@ -52,6 +52,34 @@ npm run sftp:sync
 ```
 
 It returns nonzero for failures/partial failures/stops. The web service and CLI share a cross-process lock; concurrent imports are rejected. The JSONL list is read afresh at each start, so editing paths does not require a restart. Changing credentials/configuration requires restarting product-expert. No WeCom service restart is needed. Existing `ReadWritePaths=.../.data` covers both inbox and reports; no systemd template change is required. If rsync preserved Mac ownership, ensure these writable directories belong to the service user; do not make files world-writable.
+
+## Daily systemd timer
+
+`deploy/product-expert-sftp.service` and `deploy/product-expert-sftp.timer` reproduce the VPS configuration supplied by the administrator on 2026-10-21. The service runs as root, invokes the existing compiled CLI directly (128 MiB JS heap, 256M service memory limit, 50% CPU quota, two-hour job timeout), and reads `.env` from `/opt/ProductExpertCloud`. It does not rebuild or require the Web service to be running.
+
+The timer uses `OnCalendar=*-*-* 03:00:00 Asia/Shanghai`: **daily at 03:00 Beijing time**, independent of the VPS timezone. `Persistent=true` allows one catch-up after downtime. The matching basename automatically selects `product-expert-sftp.service` without an explicit `Unit=`. Library imports has separate units and a separate Monday 06:00 Beijing schedule.
+
+For the VPS that already has these identical files, adding repository templates requires **no reinstall, daemon reload or restart**. Git pull only updates the repository; it does not synchronize `/etc/systemd/system/`.
+
+For a new installation, first build the code and configure `.env` and the JSONL list as above, then explicitly install and enable the units:
+
+```bash
+cd /opt/ProductExpertCloud
+sudo install -m 644 deploy/product-expert-sftp.service /etc/systemd/system/
+sudo install -m 644 deploy/product-expert-sftp.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now product-expert-sftp.timer
+systemctl list-timers --all product-expert-sftp.timer
+```
+
+To trigger one run or inspect its log:
+
+```bash
+sudo systemctl start product-expert-sftp.service
+sudo journalctl -u product-expert-sftp.service -n 100 --no-pager
+```
+
+The templates preserve the supplied root configuration. If deploying with another account, adapt its access to the code, `.env`, JSONL, reports and inbox. The active VPS unit contents were provided by the administrator; timer enablement and runtime behavior were not remotely inspected or validated in this template-sync change.
 
 ## Inputs and persistence
 
@@ -64,7 +92,7 @@ It returns nonzero for failures/partial failures/stops. The web service and CLI 
 
 ## Failure handling and recovery
 
-Download to a private temporary file, enforce size, verify received length and compare remote size/mtime before/after. Unstable/incomplete files do not reach the inbox. Fully received files are fsynced and published via an exclusive atomic hardlink, so a consumer never sees a partial file and existing names are never overwritten. Collisions receive a source/random suffix; report records the actual inbox filename. This requires staging and inbox to reside on the same filesystem (the standard `.data` layout); an `EXDEV` error is reported rather than falling back to a partial copy.
+Download to a private temporary file, enforce size, verify received length and compare remote size/mtime before/after. Unstable/incomplete files do not reach the inbox. Fully received files are fsynced and published via an exclusive atomic hardlink, so a consumer never sees a partial file. If the same remote path later has new bytes while the previous copy is still in Incoming files (not yet consumed by Sync), the inbox file is replaced atomically (hardlink a complete staging copy, then rename). After Sync has consumed the original, a later remote change is a new Incoming file under the original name. This requires staging and inbox to reside on the same filesystem (the standard `.data` layout); an `EXDEV` error is reported rather than falling back to a partial copy.
 
 The durable journal is saved before publication. State advances only after complete inbox delivery; verified pending publication resumes on the next run/startup. A changed pending destination fails closed for administrator investigation. After a successful Sync consumes the source, its recorded hash still prevents re-delivery. If a crash occurs in the small delivery/state-commit interval and another consumer has already removed the delivered file, recovery can no longer prove that delivery: it stops for review rather than silently acknowledging or downloading it again. Preserve state, report and staging when investigating. Do not reset state merely to clear an error, because that intentionally allows re-importing old content.
 
@@ -76,6 +104,6 @@ Missing configuration or a recoverable SFTP journal problem is shown in Source i
 
 ## Verification
 
-`npm run test:sftp` covers path-only input, size/path restrictions, complete streaming, content dedup after inbox cleanup, collision protection, retries and partial batches, cancellation, shared locking, pending publication recovery, links and admin HTTP access. Transport fixtures are simulated; real remote validation is recorded separately in the core changelog. VPS/Ubuntu validation must not be inferred from local tests.
+`npm run test:sftp` covers path-only input, size/path restrictions, complete streaming, content dedup after inbox cleanup, replacing an unsynced copy, retries and partial batches, cancellation, shared locking, pending publication recovery, links and admin HTTP access. Transport fixtures are simulated; real remote validation is recorded separately in the core changelog. VPS/Ubuntu validation must not be inferred from local tests.
 
 Active imports keep the stop-polling timer referenced until completion, then clear it. This prevents Node 22 CLI/test processes from exiting while waiting for a transfer deadline or a cross-process stop request. Regression coverage uses a separate process without a real socket, checks that the deadline is recorded, and requires the process to exit after cleanup. Run the suite using the deployed Node version; Node 25 results alone do not establish Node 22 compatibility. This correction needs only a code update and rebuild, with no `.env`, dependency or systemd change.

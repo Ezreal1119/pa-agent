@@ -292,7 +292,7 @@ export function createPlanner(options: {
         ),
         tool(
           "source_dependents",
-          "Find direct and transitive index pages referencing source paths.",
+          "Find pages that directly cite these source paths. Indirect Hub or index citations are not listed.",
           Type.Object({ paths: Type.Array(Type.String()) }),
           (a) => ({ paths: dependents(input.base, a.paths) }),
         ),
