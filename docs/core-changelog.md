@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Library imports HTTP 请求补充 `User-Agent: Mozilla/5.0`，修复 UROVO 文件源站拒绝无 User-Agent 请求的兼容问题；匿名重定向继续携带 UA，API 管理员凭证仍不向下载地址转发，DNS/HTTPS 校验保留。无依赖、env 或 systemd 修改。基于本机 HEAD 对照定位，本轮未构建/执行新增模拟测试或实际下载；见 2026-10-21 资料库下载 User-Agent 修复。
+
 - 修复 Library imports PDF 校验 worker 的 TS2353：移除锁定 PDF.js 6.1.200 已不支持的 `isEvalSupported` 初始化参数，保留字体与严格解析配置，不升级依赖或绕过类型检查。依据管理员 VPS 编译报错及本机依赖类型/源码检查修正；本轮未运行构建或测试。见 2026-10-21 PDF 校验编译兼容修正。
 
 - 补齐 `deploy/product-expert-sftp.service` / `.timer`，原样保存管理员提供的 VPS 配置：root 运行既有 dist CLI，每天北京时间 03:00，Persistent 补跑，128 MiB JS 堆、256M 服务内存、50% CPU、2h 超时。README/SFTP 说明补充安装与仓库/VPS 配置的区别；未改动 VPS、未安装启用或执行验证。见 2026-10-21 SFTP 模板同步记录。
@@ -754,3 +756,10 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - 原因：管理员在 VPS 执行构建时遇到 `verify-worker.ts` 的 TS2353；新增 worker 使用了当前锁定 PDF.js 版本 `DocumentInitParameters` 中已不存在的 `isEvalSupported`。
 - 修正：移除该无效参数，保留 `useSystemFonts=false`、`disableFontFace=true`、`stopAtErrors=true` 和原有隔离结构检查。未升级/新增依赖，未通过 any 或断言绕过类型检查，不改变聊天或 SYNC 的 PDF 工具。
 - 验证：只读取本机已安装 PDF.js 6.1.200 的类型声明/构建源码及项目现有调用方式；沿用用户要求，未执行构建、测试或真实 PDF/模型/下载验证。VPS 报错为用户提供证据，本地修正尚未执行编译确认；未提交、推送或部署。
+
+## 2026-10-21 — 资料库下载 User-Agent 修复
+
+- 原因：VPS 已成功读取最新资料库报告并分类，但首个 PDF 下载返回 403，按既有规则停止后续文件。本机使用 Node 对同一公开 URL 仅发送 HEAD：无 UA 为 403；仅加 `User-Agent: Mozilla/5.0` 为 200（application/pdf）；仅加 Referer 仍为 403。
+- 修改：HTTP 传输层默认加入 `User-Agent: Mozilla/5.0`，默认头与显式凭证头分开处理，避免新增 UA 意外触发禁止匿名重定向的判断；每次匿名重定向保留 UA，仍重新验证公开 HTTPS/DNS 地址。管理员 API 请求仍禁止重定向，文件下载不带管理员密码、Authorization、Cookie 或 Referer。补充使用说明及模拟回归夹具，覆盖初始/重定向 UA、凭证不转发和私网重定向拒绝。
+- 兼容性：不新增依赖、不修改 env/systemd、去重状态或分类缓存。同步代码并构建后重新运行原任务即可重试失败和未尝试条目，无需清空状态。未改变 401/403 批次停止策略。
+- 验证：故障定位证据仅为本机真实 HEAD 响应头对照；未进行文件 GET 下载或 VPS 远端核验。修复阶段沿用用户要求，未运行构建、typecheck、模拟测试、真实模型或下载验证；未提交/推送、部署或重启服务，不宣称 VPS 下载已成功。

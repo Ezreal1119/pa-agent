@@ -31,7 +31,9 @@ export async function publicUrl(value: string, signal?: AbortSignal) {
 export async function request(value: string, signal: AbortSignal, headers: Record<string,string> = {}, redirects = 0): Promise<IncomingMessage> {
   const {url,address}=await publicUrl(value,signal); signal.throwIfAborted();
   return new Promise((resolve,reject)=>{
-    const req=https.get(url,{headers,signal,agent:false,lookup:((_host: string, options: {all?: boolean}, callback: (...args: any[])=>void)=> options?.all ? callback(null,[address]) : callback(null,address.address,address.family)) as any},res=>{
+    // Some public file origins reject Node's default request without a User-Agent.
+    // Keep this default separate from explicit headers so anonymous redirects still work.
+    const req=https.get(url,{headers:{'User-Agent':'Mozilla/5.0',...headers},signal,agent:false,lookup:((_host: string, options: {all?: boolean}, callback: (...args: any[])=>void)=> options?.all ? callback(null,[address]) : callback(null,address.address,address.family)) as any},res=>{
       const status=res.statusCode || 0;
       if (status>=300 && status<400) {
         res.destroy();
