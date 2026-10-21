@@ -382,12 +382,19 @@ export function createPlanner(options: {
             logEntry: Type.Optional(
               Type.String({ minLength: 1, maxLength: 16000 }),
             ),
+            reviewQuestion: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+            reviewOptions: Type.Optional(Type.Array(Type.Object({
+              id: Type.String({ pattern: "^[a-zA-Z0-9_-]{1,40}$" }),
+              label: Type.String({ minLength: 1, maxLength: 120 }),
+              description: Type.String({ minLength: 1, maxLength: 1000 }),
+              instructions: Type.String({ minLength: 1, maxLength: 6000 }),
+            }), { minItems: 2, maxItems: 8 })),
             suggestedFeedback: Type.Optional(
               Type.String({ minLength: 1, maxLength: 16000 }),
             ),
           }),
           (a) => {
-            if (a.suggestedFeedback) readFully("@candidate", input.markdown);
+            if (a.suggestedFeedback || a.reviewOptions?.length) readFully("@candidate", input.markdown);
             if (a.action !== "review") {
               readFully("@candidate", input.markdown);
               for (const p of new Set([

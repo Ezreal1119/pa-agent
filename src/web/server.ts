@@ -48,6 +48,7 @@ import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
 import { createConverter, type Converter } from "../knowledge-sync/converter.js";
 import { SyncError, knowledgeLock } from "../knowledge-sync/core.js";
+import { MemoryAttachments } from "../memory-injection/attachments.js";
 import { MemoryInjectionService } from "../memory-injection/service.js";
 import { createMemoryPlanner, type MemoryPlanner } from "../memory-injection/planner.js";
 
@@ -132,7 +133,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
   const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});
   await sftpSync.init();
-  const memoryInjection = new MemoryInjectionService({dataDir, modelId: () => settings.modelId, redact,
+  const memoryInjection = new MemoryInjectionService({dataDir, attachments: new MemoryAttachments(dataDir, () => fileConfig), modelId: () => settings.modelId, redact,
     planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
   await memoryInjection.init();
   const getRuntime = async () => {
@@ -460,10 +461,19 @@ export async function createWebServer(options: WebOptions = {}) {
           res.writeHead(200, {"Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": 'attachment; filename="MEMORY.md"', "Content-Length": bytes.length});
           res.end(bytes); return;
         }
+        if (url.pathname === "/api/memory-injection/attachments" && method === "POST") {
+          if ([...url.searchParams.keys()].some(key => key !== "name")) throw new HttpError(400, "Only a filename is accepted.");
+          return json(res, 201, await memoryInjection.uploadAttachment(url.searchParams.get("name") ?? "", req));
+        }
+        const attachmentMatch = url.pathname.match(/^\/api\/memory-injection\/attachments\/([a-f0-9-]{36})$/);
+        if (attachmentMatch && method === "DELETE") {
+          if (url.search) throw new HttpError(400, "Only the attachment ID is accepted.");
+          return json(res, 200, await memoryInjection.removeAttachment(attachmentMatch[1]));
+        }
         if (url.pathname === "/api/memory-injection/previews" && method === "POST") {
           const body = await readBody(req);
-          if (Object.keys(body).length !== 1 || !("prompt" in body)) throw new HttpError(400, "Only a prompt is accepted.");
-          return json(res, 202, await memoryInjection.preview(body.prompt));
+          if (!("prompt" in body) || Object.keys(body).some(key => !["prompt", "attachmentId"].includes(key))) throw new HttpError(400, "Only a prompt and one optional attachmentId are accepted.");
+          return json(res, 202, await memoryInjection.preview(body.prompt, body.attachmentId));
         }
         const match = url.pathname.match(/^\/api\/memory-injection\/previews\/([a-f0-9-]{36})(\/confirm)?$/);
         if (match && method === "GET" && !match[2]) return json(res, 200, await memoryInjection.get(match[1]!));

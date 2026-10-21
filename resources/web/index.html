@@ -153,6 +153,16 @@
       <p class="dialog-copy">Describe what to remember, correct, or remove. Review the proposed changes before updating main memory. Extra memory stays separate.</p>
       <label for="memory-injection-prompt">Your instructions</label>
       <textarea id="memory-injection-prompt" rows="4" maxlength="16000" placeholder="Describe the facts to add, correct, or forget…" required></textarea>
+      <div class="memory-attachment-toolbar">
+        <button id="memory-injection-attach" type="button" class="secondary-button">Attach file</button>
+        <span class="settings-help">Optional · One image, document or UTF-8 text file · Up to 30 MB</span>
+        <input id="memory-injection-file" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md,.log,.java,.json,.csv,.xml,.yaml,.yml,.html,.js,.ts,.py,.sql,.c,.h,.cpp,.go,.rs" hidden>
+      </div>
+      <div id="memory-injection-attachment" class="memory-attachment" role="group" aria-label="Selected memory attachment" hidden>
+        <span class="memory-attachment-icon" aria-hidden="true">▤</span>
+        <span class="memory-attachment-info"><strong id="memory-injection-attachment-name"></strong><span id="memory-injection-attachment-size"></span></span>
+        <button id="memory-injection-attachment-remove" type="button" class="secondary-button">Remove</button>
+      </div>
       <div class="memory-preview-toolbar"><span id="memory-injection-status" role="status">No changes until you confirm.</span><button id="memory-injection-preview" type="submit" class="secondary-button">Generate preview</button></div>
       <p id="memory-injection-error" class="form-error" role="alert" hidden></p>
       <section id="memory-injection-result" aria-label="Memory change preview" hidden>

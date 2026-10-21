@@ -247,7 +247,15 @@ export type Conversion = {
   sourceHash: string;
   version: number;
 };
+export type ReviewOption = {
+  id: string;
+  label: string;
+  description: string;
+  instructions: string;
+};
 export type Decision = {
+  reviewQuestion?: string;
+  reviewOptions?: ReviewOption[];
   suggestedFeedback?: string;
   productHubs?: { product: string; path: string }[];
   logEntry?: string;

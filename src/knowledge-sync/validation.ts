@@ -170,6 +170,24 @@ export function buildPlan(
     throw new SyncError(
       "Suggested instructions are review-only drafts of at most 16000 characters.",
     );
+  // Choices are model proposals, not authorization. Only a user's explicit
+  // Re-Sync submission turns a chosen option into task feedback.
+  const safeReviewText = (value: unknown, max: number) =>
+    typeof value === "string" && !!value.trim() && value.length <= max &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+  if (d.reviewQuestion !== undefined &&
+      (d.action !== "review" || !safeReviewText(d.reviewQuestion, 500)))
+    throw new SyncError("Review question must be review-only text of at most 500 characters.");
+  if (d.reviewOptions !== undefined) {
+    const options = d.reviewOptions;
+    if (d.action !== "review" || !d.reviewQuestion || !Array.isArray(options) ||
+        options.length < 2 || options.length > 8 ||
+        options.some(o => !o || typeof o.id !== "string" || !/^[a-zA-Z0-9_-]{1,40}$/.test(o.id) ||
+          !safeReviewText(o.label, 120) || !safeReviewText(o.description, 1000) || !safeReviewText(o.instructions, 6000)) ||
+        new Set(options.map(o => o.id)).size !== options.length ||
+        options.reduce((n, o) => n + o.instructions.length, 0) > 32000)
+      throw new SyncError("Review options require a question and 2–8 unique, bounded choices for action=review only.");
+  }
   if (d.action === "review")
     return { decision: d, changes: [], baseline: fingerprint(base) };
   const problems: string[] = [];

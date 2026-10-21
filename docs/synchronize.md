@@ -122,3 +122,12 @@ Library Tab 递归显示 `urovo-product-expert/`（跳过点路径与符号链�
 ## Manual source imports
 
 **Source imports** is a separate fourth tab for SFTP ingestion. `Run now` reads `.data/sftp_sync_paths.jsonl` (path-only), downloads changed content into `newly_added`, and records per-file reports in `.data/logs/sftp_sync/`. It does not start knowledge Sync. **Incoming files**, **Sync reports**, and **Delete knowledge** keep their existing roles. Configuration, CLI usage and recovery: [SFTP imports](sftp-sync.md). No timer or WeCom notification is enabled.
+
+
+## 待决问题的选择卡片
+
+**Needs your decision** 报告优先显示简短问题，Agent 根据实际业务提供 2–8 个互斥单选卡片。默认不选；可 **Clear selection**，也可仅在 **Additional instructions** 中自行描述。选择不会触发请求或修改知识库，只有点击 **Re-Sync**（删除报告为 **Regenerate deletion preview**）才将该选项完整指令与补充文字一起作为本次反馈提交。可展开 **View selected instructions** 查看将提交的原始选项指令；组合反馈仍限制 16000 字符。选项和输入都为空时，有选项的待决条目不允许空提交。
+
+详细判断依据和来源版本说明默认折叠到 **Decision details and evidence**；当前选项不放宽原有校验或删除确认。无法合理列出有限选项时，Agent 只提问并保留自由输入。旧报告若 reason 中有明确“选项 A：… / Option A: …”行，可直接显示对应原文卡片；没有明确行则保留输入框，之后 Re-Sync 可生成结构化问题和选项，不额外调用模型改写旧报告。选项只是一份待选择草案，不是管理员授权；新的 run 必须重新核对当前知识库。
+
+本轮按要求不运行构建、测试、浏览器或真实模型验证。

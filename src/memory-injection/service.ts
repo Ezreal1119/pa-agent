@@ -5,12 +5,13 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mainMemoryFile } from "../agent/memory-paths.js";
 import { parseMemoryEntries, renderMemoryEntry } from "../agent/extra-memory.js";
 import { atomic, emptyUsage, hash, knowledgeLock, readJson, safePath, SyncError, type Usage } from "../knowledge-sync/core.js";
+import type { MemoryAttachments, MemoryAttachment } from "./attachments.js";
 import type { MemoryPlanner, Operation, Proposal } from "./planner.js";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 type Change = {action: Operation["action"]; id: string; reason: string; before: string; after: string};
 type Status = "planning" | "ready" | "needs_clarification" | "committing" | "committed" | "failed" | "conflict";
-type Job = {id: string; created: string; expires: number; status: Status; prompt: string; model: string; usage: Usage; summary: string; questions: string[]; changes: Change[]; before: string; next: string; revision: string; nextRevision: string; error?: string; backup?: string; committed?: string};
+type Job = {id: string; created: string; expires: number; status: Status; prompt: string; attachment?: MemoryAttachment; visualUsage?: Usage; model: string; usage: Usage; summary: string; questions: string[]; changes: Change[]; before: string; next: string; revision: string; nextRevision: string; error?: string; backup?: string; committed?: string};
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown, max: number) => typeof value === "string" && value.length <= max;
 
@@ -21,7 +22,7 @@ export class MemoryInjectionService {
   private controller?: AbortController;
   private busy = false;
   private closed = false;
-  constructor(private options: {dataDir: string; planner: () => MemoryPlanner; modelId: () => string; redact: (error: unknown) => string}) {
+  constructor(private options: {dataDir: string; planner: () => MemoryPlanner; modelId: () => string; redact: (error: unknown) => string; attachments?: MemoryAttachments}) {
     this.directory = path.join(options.dataDir, "memory-injection");
   }
   private file(id: string) {
@@ -65,6 +66,7 @@ export class MemoryInjectionService {
     return {memory, revision: hash(memory)};
   }
   async init() {
+    await this.options.attachments?.prune();
     await safePath(this.directory);
     const files = await fs.readdir(this.directory).catch(e => { if (e.code === "ENOENT") return []; throw e; });
     for (const file of files.filter(f => /^[a-f0-9-]{36}\.json$/.test(f))) {
@@ -87,7 +89,7 @@ export class MemoryInjectionService {
   private run(job: Job, task: (signal: AbortSignal) => Promise<void>) {
     this.activeId = job.id;
     this.controller = new AbortController();
-    const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(180000)]);
+    const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(job.attachment ? 300000 : 180000)]);
     this.active = task(signal).catch(async error => {
       // The file replacement may have succeeded before writing the receipt failed.
       const published = job.nextRevision && ["committing", "committed"].includes(job.status) &&
@@ -99,16 +101,32 @@ export class MemoryInjectionService {
     // Persist failures without an unhandled rejection if storage itself becomes unavailable.
     void this.active.catch(() => {});
   }
-  async preview(prompt: unknown) {
+  async uploadAttachment(name: string, stream: AsyncIterable<Uint8Array>) {
+    if (!this.options.attachments) throw new SyncError("Memory attachments are unavailable.", 503);
+    this.reserve();
+    try { return await this.options.attachments.upload(name, stream); }
+    finally { this.busy = false; }
+  }
+  async removeAttachment(id: unknown) {
+    if (!this.options.attachments) throw new SyncError("Memory attachments are unavailable.", 503);
+    this.reserve();
+    try { return await this.options.attachments.remove(id); }
+    finally { this.busy = false; }
+  }
+  async preview(prompt: unknown, attachmentId?: unknown) {
     if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 16000) throw new SyncError("Enter a memory request of at most 16000 characters.");
     this.reserve();
     try {
       const snapshot = await this.snapshot();
+      if (attachmentId !== undefined && !this.options.attachments) throw new SyncError("Memory attachments are unavailable.", 503);
+      const attachment = attachmentId === undefined ? undefined : await this.options.attachments!.describe(attachmentId);
       const planner = this.options.planner();
-      const job: Job = {id: randomUUID(), created: new Date().toISOString(), expires: Date.now() + 30 * 60000, status: "planning", prompt, model: this.options.modelId(), usage: emptyUsage(), summary: "", questions: [], changes: [], before: snapshot.memory, next: "", revision: snapshot.revision, nextRevision: ""};
+      const job: Job = {id: randomUUID(), created: new Date().toISOString(), expires: Date.now() + 30 * 60000, status: "planning", prompt, ...(attachment ? {attachment, visualUsage: emptyUsage()} : {}), model: this.options.modelId(), usage: emptyUsage(), summary: "", questions: [], changes: [], before: snapshot.memory, next: "", revision: snapshot.revision, nextRevision: ""};
       await this.save(job);
       this.run(job, async signal => {
-        const proposal = await planner({prompt, memory: snapshot.memory, signal, usage: job.usage});
+        const attachmentInput = job.attachment
+          ? await this.options.attachments!.bind(job.attachment, job.id, job.visualUsage!) : undefined;
+        const proposal = await planner({prompt, memory: snapshot.memory, signal, usage: job.usage, attachment: attachmentInput});
         signal.throwIfAborted();
         this.prepare(job, proposal);
         await this.save(job);

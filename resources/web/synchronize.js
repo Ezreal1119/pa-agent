@@ -34,6 +34,7 @@ function setTab(name, updateUrl = true) {
     window.history.replaceState(null, "", url);
   }
 }
+const selectedChoices = new Map();
 const drafts = new Map(),
   openCards = new Set(),
   reconvertIds = new Set();
@@ -320,6 +321,35 @@ function metric(label, value) {
   box.append(el("small", label), el("strong", value));
   return box;
 }
+// Older reports may contain explicit "选项 A / Option A" lines rather than
+// structured choices. Expose only those literal proposals, never invent consent.
+function reviewChoices(item) {
+  const d = item.plan?.decision;
+  if (item.status !== "needs_review") return [];
+  if (Array.isArray(d?.reviewOptions) && d.reviewOptions.length >= 2)
+    return d.reviewOptions;
+  const options = [];
+  for (const raw of (item.reason || "").split("\n")) {
+    const line = raw.trim().replace(/^(?:[-*•]\s*)+/, "");
+    const match = /^(?:选项|Option)\s*([A-H1-8])\s*[:：.)、-]\s*(.+)$/i.exec(line);
+    if (!match) continue;
+    const text = match[2].trim();
+    if (!text || text.length > 6000) continue;
+    const split = text.search(/[。；;]|\.\s/);
+    const title = split > 0 ? text.slice(0, split) : text;
+    options.push({ id: `legacy-${match[1].toLowerCase()}`, label: title.slice(0, 120),
+      description: (split > 0 ? text.slice(split + 1).trim() : text).slice(0, 1000), instructions: text });
+  }
+  return options.length >= 2 && options.length <= 8 && new Set(options.map(o => o.id)).size === options.length ? options : [];
+}
+function reviewQuestion(item, choices) {
+  if (item.plan?.decision.reviewQuestion) return item.plan.decision.reviewQuestion;
+  if (choices.length) {
+    const line = (item.reason || "").split("\n").find(s => /(?:需要.*(?:回答|决定).*问题|(?:question|decision)\s*:)/i.test(s));
+    if (line) return line.replace(/^\s*[-*•]\s*/, "").replace(/^.*?[:：]\s*/, "").slice(0, 500);
+  }
+  return "How should this document be handled?";
+}
 async function renderJob(job) {
   const key = JSON.stringify({ job, busy });
   if (
@@ -394,13 +424,25 @@ async function renderJob(job) {
     content.append(metrics);
     const hint = statusHint(item.status, job.kind);
     if (hint) content.append(el("p", hint, "sync-hint"));
-    if (item.reason?.includes("\n")) {
-      const list = el("ul", undefined, "sync-problems");
-      for (const line of item.reason.split("\n").filter(Boolean))
-        list.append(el("li", line));
-      content.append(list);
-    } else if (item.reason) content.append(el("p", item.reason));
-    if (item.summary) content.append(el("p", item.summary));
+    const choices = reviewChoices(item);
+    let decisionAnchor, decisionEvidence;
+    if (item.status === "needs_review") {
+      content.append(el("p", reviewQuestion(item, choices), "sync-decision-question"));
+      const evidence = el("details", undefined, "sync-decision-evidence");
+      decisionEvidence = evidence;
+      decisionAnchor = el("div", undefined, "sync-decision-actions");
+      evidence.append(el("summary", "Decision details and evidence"));
+      if (item.reason) evidence.append(el("p", item.reason));
+      if (item.summary) evidence.append(el("p", item.summary));
+      content.append(decisionAnchor, evidence);
+    } else {
+      if (item.reason?.includes("\n")) {
+        const list = el("ul", undefined, "sync-problems");
+        for (const line of item.reason.split("\n").filter(Boolean)) list.append(el("li", line));
+        content.append(list);
+      } else if (item.reason) content.append(el("p", item.reason));
+      if (item.summary) content.append(el("p", item.summary));
+    }
     if (item.feedback)
       content.append(
         el("p", `Your instructions: ${item.feedback}`, "sync-request"),
@@ -439,7 +481,7 @@ async function renderJob(job) {
           "sync-subtle",
         ),
       );
-      if (d.versionEvidence) content.append(el("p", d.versionEvidence));
+      if (d.versionEvidence) (decisionEvidence || content).append(el("p", d.versionEvidence));
       for (const change of item.plan.changes) content.append(diff(change));
     }
     if (item.coverage) {
@@ -502,10 +544,10 @@ async function renderJob(job) {
           "label",
           item.status === "awaiting_confirmation"
             ? "Or request changes (optional)"
-            : job.kind === "delete"
-              ? "Instructions for deletion preview"
-              : item.status === "needs_review"
-                ? "Your decision"
+            : item.status === "needs_review"
+              ? "Additional instructions"
+              : job.kind === "delete"
+                ? "Instructions for deletion preview"
                 : "Instructions for Re-Sync (optional)",
         ),
         input = el("textarea");
@@ -513,19 +555,59 @@ async function renderJob(job) {
       label.htmlFor = input.id;
       input.rows = 3;
       input.maxLength = 16000;
-      input.placeholder =
-        job.kind === "delete"
+      input.placeholder = item.status === "needs_review"
+        ? "Add details, or describe a different decision in your own words…"
+        : job.kind === "delete"
           ? "Clarify what to delete or keep, and which related pages should be checked…"
           : "Explain the correct product, version or how this file should be handled…";
       input.setAttribute("aria-label", `Instructions for ${item.name}`);
       input.value = drafts.get(item.id) || "";
-      input.oninput = () => drafts.set(item.id, input.value);
+      input.oninput = () => { drafts.set(item.id, input.value); updateSubmit(); };
+      let clearChoice;
+      const choiceCards = [];
+      const choicePreview = el("details", undefined, "sync-choice-preview"),
+        choiceText = el("p");
+      choicePreview.append(el("summary", "View selected instructions"), choiceText);
+      const updateSubmit = () => {
+        const chosen = choices.find(o => o.id === selectedChoices.get(item.id));
+        b.disabled = busy || (choices.length > 0 && !chosen && !input.value.trim());
+        if (clearChoice) clearChoice.disabled = busy || !chosen;
+        choicePreview.hidden = !chosen;
+        choiceText.textContent = chosen?.instructions || "";
+        for (const card of choiceCards) card.node.dataset.selected = String(card.id === chosen?.id);
+      };
+      if (choices.length) {
+        const group = el("fieldset", undefined, "sync-decision-options");
+        group.append(el("legend", "Choose an option"));
+        for (const option of choices) {
+          const card = el("label", undefined, "sync-decision-option"),
+            radio = el("input"), text = el("span", undefined, "sync-option-copy");
+          radio.type = "radio";
+          radio.name = `decision-${item.id}`;
+          radio.value = option.id;
+          radio.checked = selectedChoices.get(item.id) === option.id;
+          radio.disabled = busy;
+          radio.onchange = () => { if (radio.checked) { selectedChoices.set(item.id, option.id); updateSubmit(); } };
+          text.append(el("strong", option.label), el("span", option.description));
+          card.append(radio, text);
+          choiceCards.push({ id: option.id, node: card, radio });
+          group.append(card);
+        }
+        clearChoice = button("Clear selection", () => {
+          selectedChoices.delete(item.id);
+          for (const card of choiceCards) card.radio.checked = false;
+          updateSubmit();
+        }, "sync-button sync-clear-choice");
+        feedback.append(group, clearChoice, choicePreview,
+          el("p", "Nothing is applied until you submit. Choose an option or write your own instructions below.", "sync-subtle"));
+      }
       const suggestion = item.plan?.decision.suggestedFeedback;
-      if (job.kind === "sync" && item.status === "needs_review" && suggestion) {
+      if (job.kind === "sync" && item.status === "needs_review" && suggestion && !choices.length) {
         const box = el("div", undefined, "sync-suggestion"),
           use = button("Use suggested instructions", () => {
             input.value = suggestion;
             drafts.set(item.id, suggestion);
+            updateSubmit();
             input.focus();
           });
         use.disabled = busy;
@@ -554,9 +636,14 @@ async function renderJob(job) {
       const b = button(
         job.kind === "delete" ? "Regenerate deletion preview →" : "Re-Sync →",
         async () => {
+          const chosen = choices.find(o => o.id === selectedChoices.get(item.id));
+          const instruction = chosen
+            ? `${chosen.instructions}${input.value.trim() ? `\n\nAdditional instructions:\n${input.value}` : ""}`
+            : input.value;
+          if (instruction.length > 16000) throw new Error("Combined instructions must be at most 16000 characters.");
           const next = await api(`jobs/${job.id}/resync`, "POST", {
             itemId: item.id,
-            feedback: input.value,
+            feedback: instruction,
             ...(job.kind === "sync" ? { forceConvert: force.checked } : {}),
           });
           // Re-Sync replaces this card in place with a new attempt ID.
@@ -566,6 +653,7 @@ async function renderJob(job) {
           if (attempt) {
             openCards.add(attempt.id);
             drafts.delete(item.id);
+            selectedChoices.delete(item.id);
             reconvertIds.delete(item.id);
           }
           await choose(next);
@@ -574,11 +662,11 @@ async function renderJob(job) {
           ? "sync-button"
           : "sync-button sync-button-primary",
       );
-      b.disabled = busy;
+      updateSubmit();
       if (job.kind === "sync") actions.append(forceLabel);
       actions.append(b);
       feedback.append(label, input, actions);
-      content.append(feedback);
+      (decisionAnchor || content).append(feedback);
     }
     card.append(content);
     holder.append(card);
