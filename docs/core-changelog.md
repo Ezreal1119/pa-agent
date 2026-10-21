@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- 修复 Library imports PDF 校验 worker 的 TS2353：移除锁定 PDF.js 6.1.200 已不支持的 `isEvalSupported` 初始化参数，保留字体与严格解析配置，不升级依赖或绕过类型检查。依据管理员 VPS 编译报错及本机依赖类型/源码检查修正；本轮未运行构建或测试。见 2026-10-21 PDF 校验编译兼容修正。
+
 - 补齐 `deploy/product-expert-sftp.service` / `.timer`，原样保存管理员提供的 VPS 配置：root 运行既有 dist CLI，每天北京时间 03:00，Persistent 补跑，128 MiB JS 堆、256M 服务内存、50% CPU、2h 超时。README/SFTP 说明补充安装与仓库/VPS 配置的区别；未改动 VPS、未安装启用或执行验证。见 2026-10-21 SFTP 模板同步记录。
 
 - 独立 Library imports：Synchronize → Source imports 网页入口及 `/api/library-import/*` 管理员接口，最新完整资料库报告 added/updated 合并当前元信息、五类 AI 分类缓存、100 MiB 四格式串行下载/结构校验、来源哈希去重与版本保留、跨进程锁/停止/恢复。`npm run library:import` 直接运行已有构建；新增每周一北京时间 06:00 的独立 service/timer 模板（未安装/启用），状态报告放 `.data/logs/library_sync/`。本轮按要求未运行构建、测试或真实请求，见下方 2026-10-21 资料库导入记录。
@@ -746,3 +748,9 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - 修改：新增 `deploy/product-expert-sftp.service` 与 `deploy/product-expert-sftp.timer`，保留 root、工作目录、直接运行 dist CLI、128 MiB JS 堆、256M 内存、50% CPU、2h/30s 超时及每天 Asia/Shanghai 03:00/Persistent 的配置；README 和 SFTP 使用说明追加模板安装步骤、与 Library 每周任务的独立关系、Git 不自动更新 `/etc/systemd/system/` 的边界。
 - 兼容性：仅新增部署模板与文档，不更改导入实现、凭证、路径列表或已有工作区改动。与贴出内容一致的 VPS 无需重新安装或重启；仅凭 unit 内容不推断 timer 已启用。
 - 验证：沿用管理员要求，未运行构建、测试、systemd 校验或真实 SFTP 请求；未访问/修改 VPS，未安装/启用任务，未提交或推送代码。配置来源为管理员提供的文本，非独立远端核验。
+
+## 2026-10-21 — PDF 校验编译兼容修正
+
+- 原因：管理员在 VPS 执行构建时遇到 `verify-worker.ts` 的 TS2353；新增 worker 使用了当前锁定 PDF.js 版本 `DocumentInitParameters` 中已不存在的 `isEvalSupported`。
+- 修正：移除该无效参数，保留 `useSystemFonts=false`、`disableFontFace=true`、`stopAtErrors=true` 和原有隔离结构检查。未升级/新增依赖，未通过 any 或断言绕过类型检查，不改变聊天或 SYNC 的 PDF 工具。
+- 验证：只读取本机已安装 PDF.js 6.1.200 的类型声明/构建源码及项目现有调用方式；沿用用户要求，未执行构建、测试或真实 PDF/模型/下载验证。VPS 报错为用户提供证据，本地修正尚未执行编译确认；未提交、推送或部署。

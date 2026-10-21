@@ -11,7 +11,7 @@ try {
     const bytes=await fs.readFile(file);
     if(!bytes.subarray(0,1024).includes(Buffer.from('%PDF-')) || !bytes.subarray(Math.max(0,bytes.length-1024)).includes(Buffer.from('%%EOF')))throw Error('Not a complete PDF document (header/EOF missing).');
     const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const task=getDocument({data:new Uint8Array(bytes),isEvalSupported:false,useSystemFonts:false,disableFontFace:true,stopAtErrors:true});
+    const task=getDocument({data:new Uint8Array(bytes),useSystemFonts:false,disableFontFace:true,stopAtErrors:true});
     try{const pdf=await task.promise;if(!pdf.numPages)throw Error('Empty PDF.');for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);await page.getOperatorList();page.cleanup();}}finally{await task.destroy();}
   } else {
     const config=fileToolConfig(process.cwd(),{maxSheets:200,maxPages:500,maxCells:500000,maxExpandedBytes:256*1048576},{});
