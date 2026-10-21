@@ -1,3 +1,8 @@
+export const AGENT_UNAVAILABLE_MESSAGE = '服务正在升级中，请稍后尝试。';
+export class AgentUnavailableError extends Error {
+  constructor(cause) { super(AGENT_UNAVAILABLE_MESSAGE, { cause }); this.name = 'AgentUnavailableError'; }
+}
+
 export class ApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
 /** Keep requests on loopback; a credential cannot be redirected to another host. */
@@ -9,7 +14,17 @@ export class AgentApi {
     this.base = url.origin; this.token = token; this.timeoutMs = timeoutMs;
   }
   async request(route, init = {}, signal) {
-    const response = await fetch(`${this.base}/api/wecom${route}`, { ...init, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(this.timeoutMs), ...(signal ? [signal] : [])]), headers: { Authorization: `Bearer ${this.token}`, ...init.headers } });
+    let response;
+    try {
+      response = await fetch(`${this.base}/api/wecom${route}`, { ...init, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(this.timeoutMs), ...(signal ? [signal] : [])]), headers: { Authorization: `Bearer ${this.token}`, ...init.headers } });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new AgentUnavailableError(error);
+    }
+    if ([502, 503, 504].includes(response.status)) {
+      await response.body?.cancel().catch(() => {});
+      throw new AgentUnavailableError(new Error(`Agent HTTP ${response.status}`));
+    }
     if (!response.ok) {
       let message; try { message = (await response.json()).error; } catch {}
       throw new ApiError(response.status, message || `Agent HTTP ${response.status}`);

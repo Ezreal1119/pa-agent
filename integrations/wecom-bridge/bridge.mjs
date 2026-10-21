@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { identity, inbound, splitUtf8, resultFromDone, DAY } from './protocol.mjs';
+import { AgentUnavailableError, AGENT_UNAVAILABLE_MESSAGE } from './api.mjs';
 import { downloadMedia } from './media.mjs';
 import { MessageObserver, notificationInput } from './notifications.mjs';
 
@@ -55,7 +56,7 @@ export class WecomBridge {
     this.store.data.jobs.push(job); await this.store.save();
     const client = this.client(botId);
     // This acknowledgement is best-effort; durable result delivery below is retried.
-    void client.replyStream(job.frame, job.streamId, this.active.has(job.key) || this.active.size >= this.config.concurrency ? '已收到，正在排队，请稍候。' : '已收到，正在处理…', false).catch(() => {});
+    void client.replyStream(job.frame, job.streamId, 'AI Thinking...', false).catch(() => {});
     try {
       if (input.media.length) {
         const stage = async () => {
@@ -160,7 +161,7 @@ export class WecomBridge {
           if (event === 'text') partial += value.delta;
           if (event === 'text' && Date.now() - lastProgress > 2500) {
             lastProgress = Date.now();
-            const preview = splitUtf8(partial)[0] || '正在处理…';
+            const preview = splitUtf8(partial)[0] || 'AI Thinking...';
             // Non-blocking SDK path avoids a slow WeCom connection holding Agent SSE open.
             void this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {});
           }
@@ -174,6 +175,13 @@ export class WecomBridge {
       if (job.state === 'delivering') { job.retryAt = Date.now() + 15000; await this.store.save(); this.log.warn('WeCom delivery deferred:', this.safeError(error)); }
       else if (job.state === 'running' && !job.runId && [409, 429, 503].includes(error.status)) { job.state = 'queued'; job.retryAt = Date.now() + 3000; await this.store.save(); }
       else if (job.state === 'running' || job.state === 'recovering') {
+        // Preserve unknown run outcomes; never replay a possibly accepted run.
+        // Notify once while the backend is down, then retain normal recovery.
+        if (error instanceof AgentUnavailableError && !job.upgradeNotified) {
+          try { await this.client(job.botId).replyStream(job.frame, job.streamId, AGENT_UNAVAILABLE_MESSAGE, false); }
+          catch { await this.send(job, AGENT_UNAVAILABLE_MESSAGE); }
+          job.upgradeNotified = true;
+        }
         job.state = 'recovering'; job.retryAt = Date.now() + 5000; await this.store.save();
       } else if ([409, 429, 503].includes(error.status)) { job.retryAt = Date.now() + 3000; await this.store.save(); }
       else { job.result = { text: this.safeError(error), files: [] }; job.state = 'delivering'; await this.store.save(); }
@@ -215,7 +223,7 @@ export class WecomBridge {
       job.sentFiles.push(file.id); await this.store.save();
     }
     job.state = 'done'; job.finished = Date.now();
-    for (const key of ['text', 'staged', 'attachmentIds', 'result', 'outputs', 'runError']) delete job[key];
+    for (const key of ['text', 'staged', 'attachmentIds', 'result', 'outputs', 'runError', 'upgradeNotified']) delete job[key];
     await this.store.save(); await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true });
   }
   safeError(error) {

@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- WeCom Bridge 进入聊天静默；收到消息的排队/等待提示统一为 `AI Thinking...`。本机 Agent API 无法连接或返回 502/503/504 时回复“服务正在升级中，请稍后尝试。”；后端离线不阻止 Bridge 启动，运行中未知结果继续恢复且只通知一次。见 2026-10-21 企微提示调整。
+
 - Synchronize：超大幅面 PDF 页（如 4032×2896 pt 宣传页）不再因 2× 渲染超 2000 万像素失败，改为自动降到不低于 1×（72 dpi）的倍率并记录在覆盖说明；1× 仍超限才拒绝。Incoming files 每行新增 Delete，任务运行时禁用；删除后该文件的 Re-Sync 提示需重新上传。转换 worker 渲染后立即释放 pdf.js 页面、复用切块画布并逐页 GC（`--expose-gc`），i9600 宣传页峰值 RSS 由约 1.09 GB 降到约 0.68 GB，避免触发 systemd 1100M 上限被 SIGKILL。VPS 升级到 2 vCPU/4 GiB，`deploy/product-expert.service` 改为 MemoryHigh=2200M、MemoryMax=2600M、MemorySwapMax=512M。前端遇到代理返回的 HTML（502/504）显示可读提示，轮询恢复后自动消失。
 
 - Synchronize 新增 Library Tab：递归浏览知识库（跳过点路径与符号链接），Markdown 预览/源码查看；`.md`/`.txt`（≤2 MiB，含 MEMORY.md）可编辑，保存前显示 diff，按打开时哈希防覆盖，写锁内原子写入，旧版备份到 `maintenance-backups/library-edits/` 并追加 `edits.jsonl`。Sync 运行时、`newly_added/`、SKILL/SYNC/SYNC_PROMPT.md 只读。手工编辑不重新校验索引。
@@ -690,3 +692,11 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - 实际资料隔离转换：`SQ29M修改记录.xlsx` 83 张表 → 153184 UTF-8 字节；`SQ29MB修改记录.xlsx` 6 张表 → 54650 字节，明确跳过 `xl/embeddings/Workbook1.xlsx`；`K388Pro海外版本修改记录.xlsx` 2 张表 → 13241 字节。当前版本从原件重新转换，三份原文件哈希均未改变；未发布到业务库。
 - 浏览器实际检查隔离管理员页面：删除报告没有 Reconvert，显示 Regenerate deletion preview；Hub 报告显示路径和 Confirm publication。截图、转换日志及全量测试结果在忽略目录 `.data/debug/sync-fixes/`。
 - 上述模型测试为模拟文本/视觉接口，真实文件转换使用原生依赖；本轮没有真实模型判断/发布验证，也没有新的 Ubuntu 2G 资源实测。此前的生产限制调查与本机成功转换不能作为真实模型发布成功的证据。
+
+
+## 2026-10-21：企微提示调整
+
+- 原因：管理员要求后端升级时给出可读提示、关闭进入聊天的欢迎语，并统一等待提示；本轮明确要求不做验证。
+- 行为：AgentApi 将连接故障与 HTTP 502/503/504 包装为独立不可用错误，用户看到“服务正在升级中，请稍后尝试。”，认证与其他业务错误保留原有处理。Bridge 启动探测最多等待 3 秒；除 401/403 外，Agent 尚未启动不会阻止机器人上线。移除 enter_chat 欢迎回复，消息初始及空白流式等待提示均为 `AI Thinking...`。已有可能执行的 run 不自动重放，保留恢复流程，不可用期间只提示一次。
+- 兼容性：无新环境变量、依赖或 systemd 修改；发布代码后需重启 `wecom-bridge.service`。不改真实机器人配置，不直接连接企微或部署 VPS。
+- 验证：按管理员要求，未运行构建、测试、浏览器/服务启动验证或真实机器人验证。此记录只说明代码修改，不宣称验证通过。

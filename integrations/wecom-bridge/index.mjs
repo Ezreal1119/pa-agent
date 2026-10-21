@@ -15,13 +15,13 @@ try {
   if (!config.enabled) console.log('WeCom Bridge disabled (WECOM_ENABLED=false).');
   else {
     const api = new AgentApi(config.apiUrl, config.token, config.timeoutMs);
-    // systemd starts both units together; wait for the local HTTP listener without logging secrets.
-    let ready = false;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      try { await api.json('/status'); ready = true; break; }
-      catch (error) { if (error.status === 401 || error.status === 403) throw error; await new Promise(resolve => setTimeout(resolve, 1000)); }
+    // Stay connected to WeCom during independent Product Expert upgrades.
+    // Authentication errors still require repairing the configured API token.
+    try { await api.json('/status', 'GET', undefined, AbortSignal.timeout(3000)); }
+    catch (error) {
+      if (error.status === 401 || error.status === 403) throw error;
+      console.warn('Product Agent API is unavailable; Bridge remains online during the upgrade.');
     }
-    if (!ready) throw new Error('Product Agent API 未就绪，请检查 product-expert.service。');
     const store = await new BridgeStore(config.directory).open();
     const clients = new Map();
     const redact = value => {
@@ -45,7 +45,7 @@ try {
         // Invalid credentials have a bounded SDK retry budget; let systemd recover after repair.
         if (error.code === 'WS_AUTH_FAILURE_EXHAUSTED') { void bridge.close().finally(() => { process.exitCode = 1; }); }
       });
-      client.on('event.enter_chat', frame => { void client.replyWelcome(frame, { msgtype: 'text', text: { content: '已接通产品专家。可直接提问，或上传文件后说明处理要求。' } }).catch(() => {}); });
+      // Entering a chat is silent; respond only to user messages.
       for (const type of ['text', 'image', 'file', 'mixed', 'voice', 'video']) client.on(`message.${type}`, frame => {
         void bridge.receive(botId, frame).catch(error => console.error('WeCom receive:', bridge.safeError(error)));
       });
