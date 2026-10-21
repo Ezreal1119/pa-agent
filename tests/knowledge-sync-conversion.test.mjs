@@ -241,6 +241,38 @@ test(
     assert.deepEqual(sentImages.slice(beforeBoundary), [
       { width: 1191, height: 1684 },
     ]);
+    const posterPdf = await PDFDocument.create();
+    posterPdf.addPage([4032, 2896]);
+    posterPdf.addPage([6000, 4000]);
+    const poster = await PDFDocument.create();
+    poster.addPage([4032, 2896]);
+    await fs.writeFile(path.join(root, "poster.pdf"), await poster.save());
+    const beforePoster = sentImages.length;
+    const posterResult = await convert(
+      path.join(root, "poster.pdf"),
+      path.join(root, "out-poster"),
+      new AbortController().signal,
+      emptyUsage(),
+      async () => {},
+    );
+    assert.ok(
+      posterResult.coverage.some((c) => /rendered at 1\.31×/.test(c)),
+      posterResult.coverage.join("\n"),
+    );
+    const posterTiles = sentImages.slice(beforePoster);
+    assert.equal(posterTiles.length, 12);
+    assert.ok(posterTiles.every((s) => s.width <= 1800 && s.height <= 1800));
+    await fs.writeFile(path.join(root, "huge.pdf"), await posterPdf.save());
+    await assert.rejects(
+      convert(
+        path.join(root, "huge.pdf"),
+        path.join(root, "out-huge"),
+        new AbortController().signal,
+        emptyUsage(),
+        async () => {},
+      ),
+      /Page 2: 6000×4000 pt exceeds render pixel limit 20000000 even at 72 dpi/,
+    );
     const scan = await PDFDocument.create();
     const image = await scan.embedPng(
       await fs.readFile(path.join(root, "image.png")),

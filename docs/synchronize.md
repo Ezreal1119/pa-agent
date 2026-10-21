@@ -99,6 +99,7 @@ systemctl status product-expert.service --no-pager
 | 方法 | 路由 | 内容 |
 |---|---|---|
 | GET / POST | `/api/sync/incoming` | 列表 / 原始字节上传，`?name=...` |
+| DELETE | `/api/sync/incoming?id=...` | 删除一个待同步文件；有任务运行时 409 |
 | GET / POST | `/api/sync/jobs` | 历史 / `{ids: [...]}`，创建返回 202 |
 | GET | `/api/sync/jobs/:id` | 状态和报告，页面每 2 秒查询 |
 | POST | `/api/sync/jobs/:id/stop` | `{}`，协作取消 |

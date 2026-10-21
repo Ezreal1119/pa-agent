@@ -316,6 +316,25 @@ export class SyncService {
     }
     return { name: target, bytes, id: hash(target) };
   }
+  /** Delete one inbox file; refused while a task may be reading the inbox. */
+  async removeIncoming(id: unknown) {
+    if (typeof id !== "string") throw new SyncError("Invalid file id.");
+    this.reserve();
+    try {
+      const file = (await this.incoming()).find((f) => f.id === id);
+      if (!file) throw new SyncError("Incoming file no longer exists.", 404);
+      const target = path.join(this.inbox, file.name);
+      await safePath(path.dirname(target));
+      const stat = await fs.lstat(target);
+      if (!stat.isFile() && !stat.isSymbolicLink())
+        throw new SyncError("Only files can be removed.");
+      await fs.unlink(target);
+      this.inputHashes.delete(file.name);
+      return { name: file.name, removed: true };
+    } finally {
+      this.reserved = false;
+    }
+  }
   list() {
     return [...this.jobs.values()]
       .sort((a, b) => b.created.localeCompare(a.created))

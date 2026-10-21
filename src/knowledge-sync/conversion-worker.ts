@@ -194,10 +194,20 @@ try {
           );
         for (let pageNo = 1; pageNo <= doc.numPages; pageNo++) {
           const page = await doc.getPage(pageNo);
-          const viewport = page.getViewport({ scale: 2 });
-          if (viewport.width * viewport.height > config.maxPixels)
+          const base = page.getViewport({ scale: 1 });
+          // Large-format pages carry physically large text, so 1× (72 dpi) stays legible.
+          const scale = Math.min(
+            2,
+            Math.sqrt(config.maxPixels / (base.width * base.height)),
+          );
+          if (scale < 1)
             throw new Error(
-              `Page ${pageNo}: ${Math.ceil(viewport.width)}×${Math.ceil(viewport.height)} exceeds render pixel limit ${config.maxPixels}.`,
+              `Page ${pageNo}: ${Math.ceil(base.width)}×${Math.ceil(base.height)} pt exceeds render pixel limit ${config.maxPixels} even at 72 dpi.`,
+            );
+          const viewport = page.getViewport({ scale });
+          if (scale < 2)
+            coverage.push(
+              `Page ${pageNo}: large page rendered at ${scale.toFixed(2)}× to stay within ${config.maxPixels} pixels`,
             );
           const canvas = createCanvas(
             Math.ceil(viewport.width),

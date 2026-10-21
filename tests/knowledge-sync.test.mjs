@@ -948,3 +948,36 @@ test("validation failures are Failed, not Needs review, and Re-Sync retries in t
     /already committed/,
   );
 });
+
+test("incoming files can be deleted only while no task is running", async (t) => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const f = await setup(t, {
+    planner: () => async (input) => {
+      await gate;
+      return {
+        decision: { ...proposal(input).decision, action: "review", reason: "?" },
+        staged: new Map(),
+      };
+    },
+  });
+  const keep = await upload(f.service, "keep.txt", "keep");
+  const drop = await upload(f.service, "drop.txt", "drop");
+  const job = await f.service.start([keep.id]);
+  await assert.rejects(f.service.removeIncoming(drop.id), /already active/);
+  release();
+  const report = await done(f.service, job.id);
+  assert.equal(report.items[0].status, "needs_review");
+  assert.deepEqual(await f.service.removeIncoming(drop.id), {
+    name: "drop.txt",
+    removed: true,
+  });
+  await assert.rejects(f.service.removeIncoming(drop.id), /no longer exists/);
+  await f.service.removeIncoming(keep.id);
+  assert.equal((await f.service.incoming()).length, 0);
+  await assert.rejects(
+    f.service.resync(job.id, report.items[0].id, ""),
+    /Original input is missing/,
+  );
+  assert.equal(f.service.busy, false);
+});

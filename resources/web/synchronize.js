@@ -98,6 +98,8 @@ function updateControls() {
     count = selectedIds().length;
   $("start").disabled = busy || uploading || !count;
   $("preview").disabled = busy;
+  for (const b of $("incoming").querySelectorAll(".sync-file-remove"))
+    b.disabled = busy;
   $("select-all").disabled = !checks.length;
   $("select-all").checked = !!checks.length && count === checks.length;
   $("select-all").indeterminate = count > 0 && count < checks.length;
@@ -194,11 +196,29 @@ async function incoming() {
         file.error ? "sync-file-error" : undefined,
       ),
     );
+    const remove = el("button", "Delete", "sync-file-remove");
+    remove.type = "button";
+    remove.disabled = busy;
+    remove.title = `Delete ${file.name} from incoming files`;
+    remove.onclick = (event) => {
+      event.preventDefault();
+      if (
+        !confirm(
+          `Delete "${file.name}" from incoming files? The uploaded file is removed and cannot be synced or Re-Synced until uploaded again.`,
+        )
+      )
+        return;
+      action(async () => {
+        await api(`incoming?id=${encodeURIComponent(file.id)}`, "DELETE");
+        incomingCache = "";
+      });
+    };
     row.append(
       check,
       icon,
       detail,
       el("span", fileSize(file.bytes), "sync-file-size"),
+      remove,
     );
     $("incoming").append(row);
   }

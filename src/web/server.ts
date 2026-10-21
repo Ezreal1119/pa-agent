@@ -500,6 +500,7 @@ export async function createWebServer(options: WebOptions = {}) {
           return json(res, 200, await library.save(body.path, body.text, body.expectedHash));
         }
         if (route === "incoming" && method === "GET") return json(res, 200, { files: await synchronize.incoming(), maxFileBytes: SYNC_MAX_FILE_BYTES });
+        if (route === "incoming" && method === "DELETE") return json(res, 200, await synchronize.removeIncoming(url.searchParams.get("id")));
         if (route === "incoming" && method === "POST") { const file=await synchronize.upload(url.searchParams.get("name") ?? "", req);return json(res,"ignored" in file?200:201,file); }
         if (route === "jobs" && method === "GET") return json(res, 200, { jobs: synchronize.list() });
         if (route === "jobs" && method === "POST") return json(res, 202, await synchronize.start((await readBody(req)).ids));

@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Synchronize：超大幅面 PDF 页（如 4032×2896 pt 宣传页）不再因 2× 渲染超 2000 万像素失败，改为自动降到不低于 1×（72 dpi）的倍率并记录在覆盖说明；1× 仍超限才拒绝。Incoming files 每行新增 Delete，任务运行时禁用；删除后该文件的 Re-Sync 提示需重新上传。
+
 - Synchronize 新增 Library Tab：递归浏览知识库（跳过点路径与符号链接），Markdown 预览/源码查看；`.md`/`.txt`（≤2 MiB，含 MEMORY.md）可编辑，保存前显示 diff，按打开时哈希防覆盖，写锁内原子写入，旧版备份到 `maintenance-backups/library-edits/` 并追加 `edits.jsonl`。Sync 运行时、`newly_added/`、SKILL/SYNC/SYNC_PROMPT.md 只读。手工编辑不重新校验索引。
 
 - Synchronize 减少无效人工确认：`finish_sync` 当场校验并一次返回全部问题供 Agent 自修（最多 3 轮）；Hub 按目录名自动对应（空格/标点差异）；`oldPaths` 原件路径映射到 Markdown；`index.md` 仅新建 Hub/shared 时强制。Needs your decision 只表示业务问题，校验/过期失败改为 Failed。Re-Sync 原地重跑同一报告并保留尝试历史，删除预览同样原地重生成。
