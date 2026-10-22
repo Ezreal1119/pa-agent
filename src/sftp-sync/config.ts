@@ -37,8 +37,8 @@ export function validateRemotePath(value: unknown): string {
     throw new SyncError('Unsupported or reserved incoming filename. Use PDF, DOCX, XLSX, PPTX, images, TXT or Markdown.');
   return value;
 }
-export function parsePaths(text: string) {
-  const entries: { path: string; line: number; error?: string }[] = [], seen = new Set<string>();
+export function parsePaths(text: string, rejectDuplicates = false) {
+  const entries: { path: string; line: number; error?: string }[] = [], seen = new Map<string,number>();
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
   if (lines.length > 10000) throw new SyncError('The JSONL list exceeds 10000 lines.');
   for (const [index, line] of lines.entries()) {
@@ -47,8 +47,11 @@ export function parsePaths(text: string) {
       const item = JSON.parse(line);
       if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length !== 1 || !Object.hasOwn(item, 'path')) throw new Error('Each line accepts only {"path":"/remote/file"}.');
       const p = validateRemotePath(item.path);
-      if (seen.has(p)) continue;
-      seen.add(p); entries.push({path:p, line:index+1});
+      if (seen.has(p)) {
+        if (rejectDuplicates) throw new Error(`Duplicate path; first listed on line ${seen.get(p)}.`);
+        continue;
+      }
+      seen.set(p,index+1); entries.push({path:p, line:index+1});
     } catch (e) {
       // Never echo invalid JSON: a misplaced credential must not enter reports.
       entries.push({path:'',line:index+1,error:e instanceof SyntaxError ? 'Invalid JSON.' : (e as Error).message});

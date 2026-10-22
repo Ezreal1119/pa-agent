@@ -4,6 +4,10 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Library imports 新增仅定时管理的 Settings，与 SFTP 共用既有 socket/helper，通过固定双 timer 白名单独立读取/保存每日或每周北京时间、启用/暂停。沿用版本冲突、原子 drop-in、状态核对/失败回滚；VPS 需更新 root-owned helper 副本及模板，并创建两处固定 drop-in 目录。Node 22.23.2 构建与 36 项定向检查通过；真实 VPS systemd 未验证，见 2026-10-22 Library 定时设置记录。
+
+- SFTP imports 的 Run now 左侧新增 Settings：可编辑配置中的 JSONL，显式 Check 校验格式/path/重复项，未通过或改文后未重检禁止保存；后端重检、版本冲突、原子保存、备份及既有跨进程导入锁。另可查看/调整现有 timer 的每日/每周北京时间及启停，使用固定单元的 root-owned Unix socket helper，不新增调度器或开放任意命令。需在 VPS 一次性安装两份 helper unit 和独立编译脚本，无 npm/env/主服务权限变更。Node 22.23.2 构建、31 项定向检查及隔离浏览器交互通过；真实 VPS systemd 未验证，见 2026-10-22 SFTP 设置记录。
+
 - SYNC 视觉请求单次等待至少 180 秒（聊天不变），仅单次请求超时最多重试一次，仍受原整体截止和请求预算约束；错误注明页码/区域及超时类型，保留已有区域缓存和转换版本。运行逻辑仅改 converter 与 Web 的 SYNC 配置，无新依赖/env/systemd 修改。Node 22.23.2 构建、46 项定向检查及原 18 页 PDF 的本地渲染/模拟超时恢复通过，未调用真实模型、发布或部署；见 2026-10-22 视觉超时记录。
 
 - 修复 SYNC 相同哈希提前 Duplicate 导致跨型号来源遗漏及反馈被忽略：重复报告可复核产品覆盖，核验发布来源后复用正文；新增受限 associate 方案，由后台只追加共享节点/产品 Hub/index/log，预览确认后生效。保留原正文与已关联型号，旧报告/已清理原件兼容；无 env、依赖或 systemd 变更。Node 22.23.2 构建及 35 项隔离/模拟回归通过，未运行真实模型或修复 VPS 数据；见 2026-10-22 产品来源关联记录。
@@ -796,3 +800,23 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - 报告与兼容性：错误区分 `Vision request timed out`、`SYNC file deadline exceeded` 和取消，附具体 page/region；单次超时附等待毫秒数/尝试次数/请求预算耗尽说明，自动重试记录到 coverage。成功区域缓存、SHA256 校验和转换版本 4 保留，不要求重新识别已成功内容。不改入库/索引/去重/发布流程，不新增依赖、env 或 systemd 项。部署后普通 Re-Sync 续跑，保持 Reconvert original 未勾选，反馈留空。
 - 验证：Node **22.23.2** TypeScript 构建通过；timeout、vision、conversion、service、web 五个测试文件的 **46 项检查全部通过，无跳过**（含嵌套用例）。覆盖单次超时成功、两次超时停止、响应体中途超时、预算耗尽、总体截止、主动停止、排队截止、HTTP/网络/识别错误不重试、计数/并发释放与 Re-Sync 缓存复用；既有转换测试处理隔离生成的 PDF/Office/图片。
 - 原文件验证：在系统临时目录用管理员提供的 18 页 PDF 进行真实本地渲染，接本机模拟视觉接口，并故意令第 11 页第一次请求超时；最终 18 页 rendered、18 区域 inspected、19 次请求、18 次模拟用量、第 11 页仅请求两次。原文件哈希未变，临时结果已删除，模拟转录没有进入正式知识库。**未调用真实模型、未执行全量测试、未修改正式知识/Memory 或 VPS，未提交/推送/部署。** 保留此前工作区所有改动，不能把本地模拟通过表述为 VPS 真实识别已成功。
+
+## 2026-10-22 — SFTP 路径编辑与 systemd 定时设置
+
+- 原因：管理员希望在 SFTP Run now 旁直接编辑已配置的 `sftp_sync_paths.jsonl` 和调整既有 systemd timer，并追加明确 Check，不允许错误列表保存。沿用既有账号/下载/去重状态，不新增自动知识 Sync 或企微推送。
+- 路径编辑：Settings dialog 的 Paths 与 Schedule 分别保存。路径编辑器先点击 Check：仅 path 的逐行 JSONL、绝对安全路径/后缀、重复路径、非空及 4 MiB/10000 行限制，有错误列出行号，修改文字使先前检查失效，迟到的旧检查也不能启用新草稿的 Save。保存后台重新校验固定配置路径，按打开时 SHA256 防覆盖，原子写入，旧版本备份于 `logs/sftp_sync/path-backups/`；与 CLI/手动导入共用现有跨进程锁，导入过程中返回 409。原 CLI 的旧重复项去重/坏行报告规则保持；修改列表下次运行生效，无需重启。错误或冲突保留草稿，关闭未保存弹窗需确认，读取/检查中的过期响应不会覆盖重开的编辑器。
+- 定时管理：真实 systemd timer 是唯一来源，显示启用/运行、北京时间 calendar 和下一触发。仅支持既有单一每日/每周 Asia/Shanghai 定时、有效 weekday/HH:MM 和启停。后台按版本保存，拒绝外部配置冲突；不支持/被 mask/带其他触发器的 timer 只读，不静默覆盖。写入专用 `90-web-schedule.conf` 并重置 OnCalendar，保留 Persistent 补跑，重载并核对实际启停/时间；不直接启动/停止 SFTP import service，也不取消当前导入。失败尝试恢复旧 drop-in/启用/运行状态并复核；恢复失败明确要求 VPS 排查，不假报成功。
+- 权限与部署：新增 root-owned、仅 Node built-ins 的独立 schedule helper，通过固定 Unix socket 接受 status/save，固定目标 `product-expert-sftp.timer`、固定 drop-in，校验所有参数，不接受任意路径/单元/命令，无 shell。socket-activated 短任务由 flock 串行化，root-owned 代码安装到 `/usr/local/libexec`，不得改为 app-writable dist。新增 `.socket` / `@.service` 模板，默认 root:root 0600，匹配管理员当前 root Web；说明提供非 root 的受限 group 配置。需用户一次性在 VPS 安装/启用 helper socket，不替换现有 SFTP service/timer；无需 npm 新依赖、env 字段、通用 sudo 或放宽主服务 ProtectSystem。此后 helper 代码更新需重装其 root-owned 编译副本，文档已注明。
+- API/UI：新增管理员 `GET/PUT /api/sftp-sync/settings/paths`、`POST .../paths/check`、`GET/PUT .../schedule`，严格字段白名单；沿用 Cookie/Origin/CSRF，WeCom/MCP 凭证无管理权限，不返回连接凭证。helper 不可用时只禁用定时编辑并提示安装/权限，路径/手动导入/聊天继续可用。Source imports 不再显示错误的“未启用任何定时”固定文案；定时摘要显示实际状态。README、SFTP 配置说明包括完整安装、更新、权限和排错命令。
+- 验证：**Node 22.23.2** 构建与五个相关测试文件 **31 项检查全部通过、无跳过**（包含嵌套测试），覆盖 JSONL 校验/重复/限制/UTF-8/链接/存储失败、冲突和备份、导入锁、timer 日/周/暂停/只读情况、命令参数注入、回滚与回滚失败、Unix socket 协议及缺失 helper、管理员鉴权/CSRF/Origin、独立保存/旧检查竞态/关闭草稿，保留 SFTP 既有传输与恢复回归。timer 使用隔离文件和模拟 systemctl，不访问宿主 systemd。
+- 浏览器：使用临时资料和模拟 timer 启动隔离 Web，真实浏览器完成登录、Settings 打开、错误 JSONL 行号/Save 禁用、修改后重检、有效保存、每周时间与暂停的独立保存，截图保存于 `/tmp/product-expert-sftp-settings-preview.png`；未使用真实 SFTP 凭证/连接或修改正式路径列表。临时 Web 与资料随后清理。移动端 CSS 已实现，未进行实际移动设备验收。
+- 验证边界：宿主为 macOS；尝试在既有 Ubuntu 文件 worker 镜像做 systemd 静态检查，该镜像无 systemd-analyze，未宣称验证通过。依据官方 systemd 文档/255 源码核对 Unix socket、只读挂载下 IPC、timer 属性和 systemctl 管理调用；**未完成真实 Ubuntu socket activation、权限或 timer 应用验证，需 VPS 安装后确认。** 未运行全量测试、未调用真实模型/SFTP、未修改正式知识/Memory/env/VPS，未提交或推送。代码保留原 SYNC、Library imports 和 SFTP 行为。
+
+
+## 2026-10-22 — Library imports 定时 Settings
+
+- 原因：管理员希望 Library imports 的 Run now 旁也能调整定时时间，已确认 VPS 安装名为 `product-expert-library-import.timer` 与 `product-expert-sftp.timer`。沿用现有 systemd 管控，不改变导入判断/下载/去重或自动启动知识 SYNC。
+- 实现：Library 独立 Settings dialog，只编辑每日/每周、weekday、北京时间和启用/暂停，显示实际 calendar/下一触发；支持 Reload、未保存提示，保存失败/版本冲突保留草稿，过期读取不覆盖重开的弹窗。使用现有 SFTP Settings 样式；定时摘要从真实 helper 状态读取，移除页面使用固定计划文案的逻辑。
+- Helper：复用原 Unix socket、flock 和独立 root-owned 编译副本，通过固定 `sftp`/`library` 枚举选择两份明确 timer/service/drop-in；旧 SFTP 无 source 请求继续有效。未知 source、任意 unit/path/命令拒绝。两边复用既有校验、原子写入、daemon-reload、实际状态核对与失败回滚，各自只操作其 timer，不直接启动/停止 import service。Persistent 补跑保持，启用/重启时仍可能由 systemd 触发正常补跑。
+- API 与权限：新增 `GET/PUT /api/library-import/settings/schedule`，后台绑定 Library 来源，HTTP 不接受目标来源参数；仅管理员 Cookie/Origin/CSRF，WeCom/MCP 凭证无管理权限，不暴露密钥。helper 模板只新增另一处固定 timer drop-in 写权限，主 Web 权限不变，无新依赖/env/socket/调度器。需用户构建并重新安装 root-owned helper 与更新模板，先创建两份固定 drop-in 目录，再 daemon-reload/重启 Web；不覆盖现有 import timer/service，不提交或部署。
+- 验证：**Node 22.23.2** TypeScript 构建通过，七个定向测试文件 **36 项检查全部通过、无跳过**（含嵌套用例）。包含实际临时 Unix socket 的双来源路由、SFTP/Library 相互隔离、Library 日/周/暂停及失败回滚、未知来源/越权 unit 拒绝、管理员鉴权/CSRF/Origin/冲突、UI 草稿/失败/迟到读取，以及原 SFTP 路径、传输恢复和 SYNC HTTP 回归。systemctl 为隔离模拟；Library UI 执行真实脚本于最小 DOM，**不是本次真实浏览器视觉验证或 Ubuntu systemd 激活验证**。未运行全量测试、真实模型/资料库/SFTP 下载，未修改正式知识/Memory/env 或 VPS。保留此前所有工作区改动，README、Library/SFTP 说明同步提供更新步骤。

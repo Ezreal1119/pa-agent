@@ -1,0 +1,30 @@
+[Unit]
+Description=Apply fixed Product Expert import timer settings
+
+[Service]
+User=root
+Group=root
+# Install this standalone file root-owned; never point at app-writable dist/.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+RuntimeDirectory=product-expert-sftp-settings
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/flock -w 20 /run/product-expert-sftp-settings/lock /usr/bin/env node /usr/local/libexec/product-expert-sftp-settings.mjs
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutStartSec=60
+RuntimeMaxSec=60
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/etc/systemd/system/product-expert-sftp.timer.d /etc/systemd/system/product-expert-library-import.timer.d
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX

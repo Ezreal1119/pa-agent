@@ -10,6 +10,8 @@
     <script src="/vendor/purify.js" defer></script>
     <script src="/synchronize.js" defer></script>
     <script src="/synchronize-library.js" defer></script>
+    <script src="/synchronize-sftp-settings.js" defer></script>
+    <script src="/synchronize-library-settings.js" defer></script>
   </head>
   <body class="sync-body">
     <main class="sync-page">
@@ -204,17 +206,17 @@
         <div class="sync-panel">
           <div class="sync-panel-heading">
             <div><h2>SFTP imports</h2><p>Pull changed files from your configured SFTP paths. Review them in Incoming files before starting Sync.</p></div>
-            <button id="import-run" class="sync-button sync-button-primary" disabled>Run now →</button>
+            <div class="sftp-heading-actions"><button id="sftp-settings-open" class="sync-button" type="button">Settings</button><button id="import-run" class="sync-button sync-button-primary" disabled>Run now →</button></div>
           </div>
-          <div class="sftp-status"><p id="import-config" role="status">Checking configuration…</p><small id="import-paths"></small><p class="sync-subtle">Manual only · up to 100 MB per file · scheduling and WeCom notifications are not enabled.</p></div>
+          <div class="sftp-status"><p id="import-config" role="status">Checking configuration…</p><small id="import-paths"></small><p id="sftp-schedule-summary" class="sync-subtle">Checking systemd schedule…</p><p class="sync-subtle">Up to 100 MiB per file. Downloads only; start knowledge Sync separately. WeCom notifications are not enabled.</p></div>
           <div class="sync-reports-layout"><aside id="import-history" class="sync-history" aria-label="Import history"></aside><div id="import-report" class="sync-report"><div class="sync-empty-report"><h3>No imports yet</h3><p>Run an import to see each file's result here.</p></div></div></div>
         </div>
         <div class="sync-panel library-import-panel">
           <div class="sync-panel-heading">
             <div><h2>Library imports</h2><p>Download eligible additions and updates from the latest completed library report. Start Sync separately when ready.</p></div>
-            <button id="library-import-run" class="sync-button sync-button-primary" disabled>Run now →</button>
+            <div class="sftp-heading-actions"><button id="library-settings-open" class="sync-button" type="button">Settings</button><button id="library-import-run" class="sync-button sync-button-primary" disabled>Run now →</button></div>
           </div>
-          <div class="sftp-status"><p id="library-import-config" role="status">Checking configuration…</p><p class="sync-subtle">PDF · PPTX · XLSX · DOCX · up to 100 MiB per file. Latest report only; no history catch-up or automatic Sync.</p><small id="library-import-schedule"></small></div>
+          <div class="sftp-status"><p id="library-import-config" role="status">Checking configuration…</p><p class="sync-subtle">PDF · PPTX · XLSX · DOCX · up to 100 MiB per file. Latest report only; no history catch-up or automatic Sync.</p><p id="library-import-schedule" class="sync-subtle">Checking systemd schedule…</p></div>
           <div class="sync-reports-layout"><aside id="library-import-history" class="sync-history" aria-label="Library import history"></aside><div id="library-import-report" class="sync-report"><div class="sync-empty-report"><h3>No library imports yet</h3><p>Run an import to see classification and delivery results here.</p></div></div></div>
         </div>
       </section>
@@ -239,5 +241,48 @@
         </div>
       </section>
     </main>
+    <dialog id="sftp-settings-dialog" class="sftp-settings-dialog" aria-labelledby="sftp-settings-title">
+      <div class="sftp-settings-title"><div><p class="sftp-settings-eyebrow">SOURCE IMPORT SETTINGS</p><h2 id="sftp-settings-title">SFTP settings</h2><p>Save paths and the systemd schedule independently. Account credentials stay in .env.</p></div><button id="sftp-settings-x" type="button" class="sync-button sync-button-quiet" aria-label="Close SFTP settings">✕</button></div>
+      <section class="sftp-settings-section" aria-labelledby="sftp-paths-title">
+        <div class="sftp-settings-section-heading"><h3 id="sftp-paths-title">Paths</h3><button id="sftp-paths-reload" class="sync-button sync-button-quiet" type="button">Reload paths</button></div>
+        <p id="sftp-editor-file" class="sync-subtle"></p>
+        <label for="sftp-paths-text">Path list · JSONL</label>
+        <textarea id="sftp-paths-text" class="sftp-paths-editor" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder='{"path":"/os/project/release-notes.xlsx"}' disabled></textarea>
+        <p class="sync-subtle">One {"path":"/absolute/file"} per line. Check validates the list locally on the server; it does not connect to SFTP.</p>
+        <div id="sftp-paths-result" class="sftp-settings-result" role="status" aria-live="polite"></div>
+        <div class="sftp-settings-actions"><small id="sftp-paths-unsaved" class="sync-subtle"></small><button id="sftp-paths-check" type="button" class="sync-button" disabled>Check</button><button id="sftp-paths-save" type="button" class="sync-button sync-button-primary" disabled>Save paths</button></div>
+      </section>
+      <section class="sftp-settings-section" aria-labelledby="sftp-schedule-title">
+        <div class="sftp-settings-section-heading"><h3 id="sftp-schedule-title">Schedule</h3><button id="sftp-schedule-reload" class="sync-button sync-button-quiet" type="button">Reload schedule</button></div>
+        <p class="sync-subtle">Uses the existing product-expert-sftp.timer. All times are Beijing time (UTC+08:00). Missed-run catch-up remains enabled.</p>
+        <p id="sftp-timer-current" class="sync-subtle"></p>
+        <div class="sftp-schedule-fields">
+          <label class="sftp-schedule-enabled"><input id="sftp-schedule-enabled" type="checkbox" disabled> Enable scheduled imports</label>
+          <label>Frequency<select id="sftp-schedule-frequency" disabled><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+          <label id="sftp-schedule-day-label" hidden>Day<select id="sftp-schedule-day" disabled><option value="Mon">Monday</option><option value="Tue">Tuesday</option><option value="Wed">Wednesday</option><option value="Thu">Thursday</option><option value="Fri">Friday</option><option value="Sat">Saturday</option><option value="Sun">Sunday</option></select></label>
+          <label>Time<input id="sftp-schedule-time" type="time" step="60" value="03:00" required disabled></label>
+        </div>
+        <p id="sftp-schedule-result" class="sftp-settings-result" role="status" aria-live="polite"></p>
+        <div class="sftp-settings-actions"><small id="sftp-schedule-unsaved" class="sync-subtle"></small><button id="sftp-schedule-save" type="button" class="sync-button sync-button-primary" disabled>Save schedule</button></div>
+      </section>
+      <div class="sftp-settings-footer"><button id="sftp-settings-close" type="button" class="sync-button">Close</button></div>
+    </dialog>
+    <dialog id="library-settings-dialog" class="sftp-settings-dialog" aria-labelledby="library-settings-title">
+      <div class="sftp-settings-title"><div><p class="sftp-settings-eyebrow">SOURCE IMPORT SETTINGS</p><h2 id="library-settings-title">Library import settings</h2><p>Adjust the Library systemd timer. Downloads only; start knowledge Sync separately.</p></div><button id="library-settings-x" type="button" class="sync-button sync-button-quiet" aria-label="Close Library settings">✕</button></div>
+      <section class="sftp-settings-section" aria-labelledby="library-schedule-title">
+        <div class="sftp-settings-section-heading"><h3 id="library-schedule-title">Schedule</h3><button id="library-schedule-reload" class="sync-button sync-button-quiet" type="button">Reload schedule</button></div>
+        <p class="sync-subtle">Uses the existing product-expert-library-import.timer. All times are Beijing time (UTC+08:00). Missed-run catch-up remains enabled.</p>
+        <p id="library-timer-current" class="sync-subtle"></p>
+        <div class="sftp-schedule-fields">
+          <label class="sftp-schedule-enabled"><input id="library-schedule-enabled" type="checkbox" disabled> Enable scheduled imports</label>
+          <label>Frequency<select id="library-schedule-frequency" disabled><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+          <label id="library-schedule-day-label" hidden>Day<select id="library-schedule-day" disabled><option value="Mon">Monday</option><option value="Tue">Tuesday</option><option value="Wed">Wednesday</option><option value="Thu">Thursday</option><option value="Fri">Friday</option><option value="Sat">Saturday</option><option value="Sun">Sunday</option></select></label>
+          <label>Time<input id="library-schedule-time" type="time" step="60" value="06:00" required disabled></label>
+        </div>
+        <p id="library-schedule-result" class="sftp-settings-result" role="status" aria-live="polite"></p>
+        <div class="sftp-settings-actions"><small id="library-schedule-unsaved" class="sync-subtle"></small><button id="library-schedule-save" type="button" class="sync-button sync-button-primary" disabled>Save schedule</button></div>
+      </section>
+      <div class="sftp-settings-footer"><button id="library-settings-close" type="button" class="sync-button">Close</button></div>
+    </dialog>
   </body>
 </html>

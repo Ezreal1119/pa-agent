@@ -132,3 +132,27 @@ The administrator reported a download-stage HTTP 403 for `i9100(EN)-PB-20261014.
 The VPS log showed successful download/validation followed by `EXDEV` linking `logs/library_sync/work/*.part` to `newly_added/<file>`. Separate `ReadWritePaths` bind mounts can reject hardlinks even when the directories share an underlying disk. New downloads stage in the ignored inbox child `.library-import-work/`, making staging and final target part of the same writable mount; disk checks cover both log storage and inbox storage. The service template retains its two narrow writable paths (only a comment changes).
 
 Keep the existing `state.json`, report and old `work/` files. After updating code and building, restart Web and start the standalone service again; proven old EXDEV records are migrated/recovered before the next run. No `.env`, npm dependency, installed unit or timer change is needed. Unknown crash points, modified hashes, existing conflicting targets and interrupted migrated attempts still fail closed for review. Fix-stage build, tests and actual VPS/download validation were not run, per the standing administrator instruction; written fixtures are not a validation result.
+
+
+## Library timer Settings (2026-10-22)
+
+**Settings** beside Library **Run now** reads the actual `product-expert-library-import.timer`. Change daily/weekly frequency, weekday, Beijing HH:MM and enable/pause, then click **Save schedule**. **Reload schedule** reads external VPS changes; unsaved edits require discard confirmation. Saving uses the opened version, rejects external conflicts, verifies the actual resulting state and attempts rollback on failure. SFTP timing remains independent. Unsupported/masked/custom multi-trigger schedules stay read-only. Helper absence disables schedule editing without blocking manual imports.
+
+This reuses the existing SFTP-named settings socket/helper, extended to a fixed two-timer whitelist. There is **no new socket, scheduler, npm dependency or env setting**. The helper service now permits writing both fixed drop-in directories; the main Web service permissions stay unchanged. The Library service/timer listed above must already be installed for Library schedule editing. **Do not overwrite the existing import `.service`/`.timer` during this update.** The updated helper reads their current values, including existing overrides.
+
+After updating code, run the following as root on the existing VPS. This also works if the helper was not installed previously:
+
+```bash
+cd /opt/ProductExpertCloud
+npm run build
+install -d -o root -g root -m 0755 /usr/local/libexec /etc/systemd/system/product-expert-sftp.timer.d /etc/systemd/system/product-expert-library-import.timer.d
+install -o root -g root -m 0644 dist/sftp-sync/schedule.js /usr/local/libexec/product-expert-sftp-settings.mjs
+install -o root -g root -m 0644 deploy/product-expert-sftp-settings.socket deploy/product-expert-sftp-settings@.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now product-expert-sftp-settings.socket
+systemctl restart product-expert.service
+```
+
+Refresh the page, open Library **Settings**, and compare with `systemctl list-timers product-expert-library-import.timer`. The default template is Monday 06:00 Beijing, but the dialog uses the installed timer, not that default. `Persistent=true` retains a possible missed-run catch-up on enabling/restarting a timer; saving does not directly start/stop the importer and does not cancel an active download. To edit on the VPS manually, change its timer/drop-in, run daemon-reload and restart that timer; then use Reload schedule in the dialog. Non-root Web socket access uses the existing restricted-group override in [SFTP helper instructions](sftp-sync.md#one-time-timer-settings-helper-installation-existing-root-deployment).
+
+Local validation for this addition uses Node 22.23.2, isolated HTTP/Unix socket requests, simulated systemctl and actual UI-handler execution in a minimal DOM. It covers Library/SFTP isolation, daily/weekly/pause, conflict/CSRF/Origin/auth rejection, rollback, unavailable helper, unsaved drafts and stale UI reads. It is not a real model/download, real browser visual inspection or Ubuntu systemd activation test. No production files, credentials or installed timers were modified.

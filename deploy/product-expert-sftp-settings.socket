@@ -1,0 +1,14 @@
+[Unit]
+Description=Product Expert import timer settings socket
+
+[Socket]
+ListenStream=/run/product-expert-sftp-settings.sock
+Accept=yes
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+RemoveOnStop=yes
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

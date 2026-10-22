@@ -1339,3 +1339,28 @@
 /* Source import providers retain independent controls and report histories. */
 .library-import-panel { margin-top: 24px; }
 .library-import-panel .sync-card-body { overflow-wrap: anywhere; }
+
+.sftp-heading-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.sftp-settings-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; border: 1px solid #dbe4d5; border-radius: 20px; background: #fcfdf9; color: #26382d; box-shadow: 0 24px 80px #23352433; overflow-y: auto; }
+.sftp-settings-dialog::backdrop { background: #26382d70; backdrop-filter: blur(4px); }
+.sftp-settings-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 26px 28px 18px; }
+.sftp-settings-title h2 { margin: 4px 0 8px; font-size: 26px; }
+.sftp-settings-title p { margin: 0; line-height: 1.6; }
+.sftp-settings-eyebrow { font-size: 11px; letter-spacing: .15em; color: #82917b; }
+.sftp-settings-section { margin: 0 28px; padding: 18px 0 22px; border-top: 1px solid #dfe7d9; }
+.sftp-settings-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.sftp-settings-section h3 { margin: 0; }
+.sftp-settings-section label { display: block; font-size: 13px; font-weight: 600; }
+.sftp-settings-section p { overflow-wrap: anywhere; }
+.sftp-paths-editor { display: block; box-sizing: border-box; width: 100%; min-height: 210px; margin-top: 8px; padding: 14px; border: 1px solid #cddbc6; border-radius: 10px; background: white; font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; color: #26382d; resize: vertical; white-space: pre; overflow: auto; }
+.sftp-settings-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.sftp-settings-actions small { margin-right: auto; }
+.sftp-settings-result { margin-top: 10px; font-size: 13px; overflow-wrap: anywhere; }
+.sftp-settings-result[data-state="error"] { color: #a75133; }
+.sftp-settings-result[data-state="success"] { color: #496b40; }
+.sftp-settings-result ul { padding-left: 22px; margin: 8px 0; max-height: 130px; overflow-y: auto; }
+.sftp-schedule-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.sftp-schedule-fields select, .sftp-schedule-fields input[type="time"] { display: block; box-sizing: border-box; margin-top: 6px; padding: 9px 12px; border: 1px solid #cddbc6; border-radius: 8px; background: white; color: inherit; font: inherit; }
+.sftp-schedule-fields .sftp-schedule-enabled { display: flex; align-items: center; gap: 8px; align-self: center; margin-right: auto; }
+.sftp-settings-footer { display: flex; justify-content: flex-end; padding: 16px 28px 24px; border-top: 1px solid #dfe7d9; }
+@media (max-width: 600px) { .sftp-heading-actions { flex-wrap: wrap; } .sftp-settings-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); } .sftp-settings-title { padding: 20px; } .sftp-settings-section { margin: 0 20px; } .sftp-settings-footer { padding: 16px 20px; } .sftp-schedule-fields { align-items: stretch; } .sftp-schedule-fields .sftp-schedule-enabled { width: 100%; } .sftp-settings-actions { flex-wrap: wrap; } .sftp-settings-actions small { width: 100%; } }

@@ -53,6 +53,61 @@ npm run sftp:sync
 
 It returns nonzero for failures/partial failures/stops. The web service and CLI share a cross-process lock; concurrent imports are rejected. The JSONL list is read afresh at each start, so editing paths does not require a restart. Changing credentials/configuration requires restarting product-expert. No WeCom service restart is needed. Existing `ReadWritePaths=.../.data` covers both inbox and reports; no systemd template change is required. If rsync preserved Mac ownership, ensure these writable directories belong to the service user; do not make files world-writable.
 
+## Web settings: paths and schedule
+
+**Settings** to the left of **Run now** opens a dialog with two independently saved sections:
+
+- **Paths** edits the configured `SFTP_PATHS_FILE` (normally `/opt/ProductExpertCloud/.data/sftp_sync_paths.jsonl`). Click **Check** after editing: malformed JSON, extra fields, unsafe/unsupported paths, duplicate paths, empty lists and limits are reported by line where possible. Check does not contact SFTP or test remote existence. Save stays disabled until the exact edited text passes; another edit invalidates the result. The save endpoint repeats validation, rejects stale revisions and cannot address an arbitrary file. The existing importer/CLI still deduplicates repeated paths in old lists as before.
+- **Save paths** atomically replaces the list, keeping the previous text under `.data/logs/sftp_sync/path-backups/`. It uses the existing cross-process SFTP import lock: an active Web/CLI import rejects the save with 409. The next import reads the new list; no restart is needed. Invalid input, conflicts or storage errors preserve the draft so it can be copied/reconciled. **Reload paths** explicitly discards edits after confirmation.
+- **Schedule** shows actual systemd enable/active state, calendar and next trigger in Beijing time. Choose daily or weekly, weekday, time and enable/pause, then **Save schedule**. The timer remains the source of truth; there is no second Web scheduler or desired-schedule database. Saving one section never saves the other. Closing with unsaved edits asks before discarding them.
+
+Path editing works after the normal code update/build/restart, without new dependencies or environment variables. Timer editing additionally requires the one-time helper installation below. Without it, paths remain editable and schedule controls show an unavailable/setup message; normal chat, manual imports and the existing timer keep working.
+
+### One-time timer settings helper installation (existing root deployment)
+
+Run these commands **on the VPS**, after updating code. They do not replace your existing SFTP `.service`/`.timer`, alter `.env`, enable SFTP imports, or broaden the main service's filesystem permissions:
+
+```bash
+cd /opt/ProductExpertCloud
+npm run build
+install -d -o root -g root -m 0755 /usr/local/libexec /etc/systemd/system/product-expert-sftp.timer.d /etc/systemd/system/product-expert-library-import.timer.d
+install -o root -g root -m 0644 dist/sftp-sync/schedule.js /usr/local/libexec/product-expert-sftp-settings.mjs
+install -o root -g root -m 0644 deploy/product-expert-sftp-settings.socket /etc/systemd/system/
+install -o root -g root -m 0644 deploy/product-expert-sftp-settings@.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now product-expert-sftp-settings.socket
+systemctl restart product-expert.service
+systemctl status product-expert-sftp-settings.socket --no-pager
+```
+
+Both fixed drop-in directories must exist before using the updated helper service, including on an SFTP-only deployment. This does not install or enable either import timer. Then refresh **Synchronize → Source imports → Settings**. Inspect the loaded daily 03:00 schedule before editing. After saving, the dialog must show **Saved and applied to systemd** and the new actual calendar/next trigger. `Persistent=true` remains enabled, so systemd may catch up a missed scheduled run when the timer is enabled/restarted; saving never directly starts/stops the import service, and does not cancel a running import.
+
+The root-owned standalone helper has only Node built-in imports; install that compiled file rather than running app-writable code under root. A systemd Unix socket (`/run/product-expert-sftp-settings.sock`) activates a short-lived helper, and `flock` serializes connections. It accepts only `status` and validated daily/weekly `save` for **product-expert-sftp.timer** or **product-expert-library-import.timer**, selected by the fixed `sftp`/`library` source enum (older SFTP requests keep their default). Both use the same socket/lock and are managed independently. No client-supplied unit, path, command or shell is accepted. It writes only the selected timer's fixed `/etc/systemd/system/<timer>.d/90-web-schedule.conf`, clears old `OnCalendar` entries in that drop-in, reloads systemd, applies enable/pause, then checks actual state. An apply error attempts to restore the previous override and enable/active state; a rollback failure tells the administrator to inspect the VPS before retrying. External timer changes reject a stale save. Unsupported/masked, multiple-calendar or monotonic timers stay read-only instead of being silently simplified.
+
+The supplied socket defaults to **root:root 0600**, matching the existing VPS main service running as root. For a main service running as `productexpert`, explicitly set socket group access first:
+
+```bash
+mkdir -p /etc/systemd/system/product-expert-sftp-settings.socket.d
+cat > /etc/systemd/system/product-expert-sftp-settings.socket.d/access.conf <<'EOF'
+[Socket]
+SocketGroup=productexpert
+SocketMode=0660
+EOF
+systemctl daemon-reload
+systemctl restart product-expert-sftp-settings.socket
+```
+
+Keep the helper code and timer override directory root-owned and not writable by the Web account. Do not disable `ProtectSystem`/`NoNewPrivileges`, grant general sudo, make the socket world-writable, or add `/etc` write access to the main service. Unix socket activation is a standard [systemd socket facility](https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html).
+
+When a future update changes `src/sftp-sync/schedule.ts`, rebuild and repeat the standalone helper `install` command; new connections execute the new copy. Updating Git/dist alone does not update `/usr/local/libexec`. If these helper unit templates change, reinstall them and daemon-reload/restart the socket. This is separate from the SFTP schedule itself.
+
+```bash
+systemctl list-timers --all product-expert-sftp.timer
+journalctl -u 'product-expert-sftp-settings@*' -n 80 --no-pager
+```
+
+To remove Web timer management, disable/stop only `product-expert-sftp-settings.socket`; the existing SFTP timer and its last saved schedule continue independently. Paths and timer management endpoints are admin-cookie-only under `/api/sftp-sync/settings/paths`, `paths/check`, and `schedule`, with the existing Origin/CSRF policy. WeCom/MCP credentials cannot manage settings. Timer permissions/activation require VPS verification; local simulated command tests are not evidence of a live Ubuntu deployment.
+
 ## Daily systemd timer
 
 `deploy/product-expert-sftp.service` and `deploy/product-expert-sftp.timer` reproduce the VPS configuration supplied by the administrator on 2026-10-21. The service runs as root, invokes the existing compiled CLI directly (128 MiB JS heap, 256M service memory limit, 50% CPU quota, two-hour job timeout), and reads `.env` from `/opt/ProductExpertCloud`. It does not rebuild or require the Web service to be running.

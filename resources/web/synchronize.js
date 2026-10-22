@@ -814,6 +814,7 @@ async function importApi(route, method = "GET", body) {
   return data;
 }
 async function refreshImports() {
+  void globalThis.refreshSftpSchedule?.();
   const state = await importApi("status");
   $("import-config").textContent = !state.configured
     ? `Set ${state.missing.join(", ")} in .env, then restart.`
@@ -928,11 +929,11 @@ async function libraryImportApi(route, method = "GET", body) {
   return data;
 }
 async function refreshLibraryImports() {
+  void globalThis.refreshLibrarySchedule?.();
   const state = await libraryImportApi("status");
   $("library-import-config").textContent = state.configurationError || (!state.configured
     ? `Set ${state.missing.join(", ")} in .env, then restart.`
     : state.recoveryError || "Configured · latest completed library report only");
-  $("library-import-schedule").textContent = state.schedule;
   $("library-import-run").disabled = libraryImportStarting || !!state.running || !state.configured || !!state.recoveryError;
   $("library-import-run").textContent = state.running ? "Import running…" : "Run now →";
   if (!selectedLibraryImport && state.reports.length) selectedLibraryImport = state.running || state.reports[0].id;

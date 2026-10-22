@@ -9,6 +9,7 @@ import lockfile from 'proper-lockfile';
 import { atomic, readJson, safePath, hash, SyncError } from '../knowledge-sync/core.js';
 import { connect, type RemoteClient } from './client.js';
 import { missingConfig, parsePaths, type SftpConfig } from './config.js';
+import { SftpPathsEditor, checkPaths } from './paths-editor.js';
 
 type EntryState = { hash?: string; target?: string; updated?: string; pending?: { hash: string; target: string; stage: string } };
 type State = { version: 1; files: Record<string, EntryState> };
@@ -23,6 +24,7 @@ export class SftpSyncService {
   readonly inbox: string;
   private config: SftpConfig;
   private stateFile: string;
+  private editor: SftpPathsEditor;
   private running?: {id:string; controller:AbortController; task:Promise<void>};
   private starting = false;
   private closing = false;
@@ -32,6 +34,14 @@ export class SftpSyncService {
     this.root = path.join(options.dataDir,'logs','sftp_sync');
     this.inbox = path.join(options.dataDir,'urovo-product-expert','newly_added');
     this.stateFile = path.join(this.root,'state.json');
+    this.editor = new SftpPathsEditor(this.config.pathsFile, this.root);
+  }
+  readPaths() { return this.editor.read(); }
+  checkPaths(text: unknown) { return checkPaths(text); }
+  async savePaths(text: unknown, revision: unknown) {
+    const release = await this.lock();
+    try { return await this.editor.save(text, revision); }
+    finally { await release(); }
   }
   redact(error: unknown) {
     let message = error instanceof Error ? error.message : String(error);

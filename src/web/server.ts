@@ -45,6 +45,8 @@ import { libraryConfig } from "../library-import/config.js";
 import { createClassifier } from "../library-import/classifier.js";
 import { SftpSyncService } from "../sftp-sync/service.js";
 import { sftpConfig } from "../sftp-sync/config.js";
+import { MAX_PATHS_BYTES } from "../sftp-sync/paths-editor.js";
+import { ScheduleError, SftpScheduleClient } from "../sftp-sync/schedule.js";
 import { SyncService } from "../knowledge-sync/service.js";
 import { KnowledgeLibrary, LIBRARY_MAX_EDIT_BYTES } from "../knowledge-sync/library.js";
 import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
@@ -60,7 +62,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -141,6 +143,8 @@ export async function createWebServer(options: WebOptions = {}) {
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
   const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});
   await sftpSync.init();
+  const sftpSchedule = options.sftpSchedule ?? new SftpScheduleClient();
+  const librarySchedule = options.librarySchedule ?? new SftpScheduleClient(undefined, "library");
   const libraryImports = new LibraryImportService({dataDir, config:libraryOptions, modelConfigured:configured, modelId:()=>settings.modelId, redact,
     classifier:() => createClassifier({...settings}, agentSettings.effort, signal => runGate.acquire(signal))});
   await libraryImports.init();
@@ -499,6 +503,12 @@ export async function createWebServer(options: WebOptions = {}) {
         if (machine) throw new HttpError(403, "Imports require administrator login.");
         const route = url.pathname.slice("/api/library-import/".length);
         if (route === "status" && method === "GET") return json(res, 200, await libraryImports.status());
+        if (route === "settings/schedule" && method === "GET") return json(res, 200, await librarySchedule.status());
+        if (route === "settings/schedule" && method === "PUT") {
+          const body = await readBody(req);
+          if (Object.keys(body).length !== 2 || !Object.hasOwn(body, "schedule") || !Object.hasOwn(body, "revision")) throw new HttpError(400, "Save accepts only schedule and its opened revision.");
+          return json(res, 200, await librarySchedule.save(body.schedule, body.revision));
+        }
         if (route === "runs" && method === "POST") {
           if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Library import uses the latest upstream report; request parameters are not accepted.");
           return json(res, 202, await libraryImports.start());
@@ -515,6 +525,23 @@ export async function createWebServer(options: WebOptions = {}) {
         if (machine) throw new HttpError(403, "Imports require administrator login.");
         const route = url.pathname.slice("/api/sftp-sync/".length);
         if (route === "status" && method === "GET") return json(res, 200, await sftpSync.status());
+        if (route === "settings/paths" && method === "GET") return json(res, 200, await sftpSync.readPaths());
+        if (route === "settings/paths/check" && method === "POST") {
+          const body = await readBody(req, MAX_PATHS_BYTES * 6 + 1024);
+          if (Object.keys(body).length !== 1 || !Object.hasOwn(body, "text")) throw new HttpError(400, "Check accepts only JSONL text.");
+          return json(res, 200, sftpSync.checkPaths(body.text));
+        }
+        if (route === "settings/paths" && method === "PUT") {
+          const body = await readBody(req, MAX_PATHS_BYTES * 6 + 1024);
+          if (Object.keys(body).length !== 2 || !Object.hasOwn(body, "text") || !Object.hasOwn(body, "revision")) throw new HttpError(400, "Save accepts only text and its opened revision.");
+          return json(res, 200, await sftpSync.savePaths(body.text, body.revision));
+        }
+        if (route === "settings/schedule" && method === "GET") return json(res, 200, await sftpSchedule.status());
+        if (route === "settings/schedule" && method === "PUT") {
+          const body = await readBody(req);
+          if (Object.keys(body).length !== 2 || !Object.hasOwn(body, "schedule") || !Object.hasOwn(body, "revision")) throw new HttpError(400, "Save accepts only schedule and its opened revision.");
+          return json(res, 200, await sftpSchedule.save(body.schedule, body.revision));
+        }
         if (route === "runs" && method === "POST") {
           if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Import uses the configured JSONL list; request parameters are not accepted.");
           return json(res, 202, await sftpSync.start());
@@ -873,6 +900,8 @@ export async function createWebServer(options: WebOptions = {}) {
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
         "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
         "/synchronize-library.js": [path.join(resourcesDir, "web/synchronize-library.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-library-settings.js": [path.join(resourcesDir, "web/synchronize-library-settings.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-sftp-settings.js": [path.join(resourcesDir, "web/synchronize-sftp-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize.css": [path.join(resourcesDir, "web/synchronize.css"), "text/css; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
         "/login": [path.join(resourcesDir, "web/login.html"), "text/html; charset=utf-8"],
@@ -893,7 +922,7 @@ export async function createWebServer(options: WebOptions = {}) {
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
-      json(res, error instanceof HttpError || error instanceof SyncError ? error.status : 500, { error: redact(error) });
+      json(res, error instanceof HttpError || error instanceof SyncError || error instanceof ScheduleError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;
