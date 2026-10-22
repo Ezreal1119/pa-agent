@@ -156,4 +156,22 @@ test("report suggestion is an explicit editable draft; only Re-Sync submits, old
     url: "/api/sync/jobs/job-a/confirm",
     body: { itemId: "file-a" },
   });
+  job.status = "completed";
+  item.id = "old-duplicate";
+  item.status = "duplicate";
+  item.plan = undefined;
+  item.matchedSources = [{ path: "i9600/others/release_202610220000/notes.md", coveredProducts: ["i9600"] }];
+  await sandbox.render(job);
+  assert.ok(find("Verified existing source"));
+  assert.ok(find("Current product coverage: i9600"));
+  assert.equal(find("Reconvert original"), undefined);
+  assert.ok(find("Review product coverage →").disabled);
+  textarea().value = "同时适用于 i9600 和 i9600 Mini，请补上遗漏的 Mini 关联。<script>plain text</script>";
+  textarea().oninput();
+  assert.equal(find("Review product coverage →").disabled, false);
+  await find("Review product coverage →").onclick();
+  assert.deepEqual(requests.at(-1), {
+    url: "/api/sync/jobs/job-a/resync",
+    body: { itemId: "old-duplicate", feedback: textarea().value, forceConvert: false },
+  });
 });

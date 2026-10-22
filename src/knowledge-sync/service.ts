@@ -21,9 +21,11 @@ import {
   type Job,
   type Item,
   type Plan,
+  type SourceMatch,
 } from "./core.js";
 import { Publisher } from "./publication.js";
-import { buildPlan, primeIndex } from "./validation.js";
+import { buildPlan, primeIndex, references, resolveHub } from "./validation.js";
+import { sourceCoverage } from "./associations.js";
 import type { Converter } from "./converter.js";
 import type { Planner } from "./agent.js";
 import { isIgnoredSyncFile } from "./config.js";
@@ -51,6 +53,8 @@ const attemptOf = (item: Item): Attempt => ({
   textUsage: item.textUsage,
   visualUsage: item.visualUsage,
   model: item.model,
+  matchedSources: item.matchedSources,
+  associationOnly: item.associationOnly,
 });
 export type Incoming = {
   id: string;
@@ -418,6 +422,29 @@ export class SyncService {
       visualUsage: emptyUsage(),
     };
   }
+  private matches(sourceHash:string,base:Map<string,string>):SourceMatch[]{
+    const matches=new Map<string,SourceMatch>();
+    for(const job of this.jobs.values())for(const old of job.items){
+      const decision=old.plan?.decision,source=decision?.newPath;
+      if(old.status!=="published" || old.sourceHash!==sourceHash || !source || !old.publishedHash || !base.has(source) || hash(base.get(source)!)!==old.publishedHash)continue;
+      const existing=matches.get(source);
+      if(existing){if(!existing.inputNames.includes(old.name))existing.inputNames.push(old.name);continue;}
+      matches.set(source,{path:source,markdownHash:old.publishedHash,inputNames:[old.name],slot:decision!.slot,
+        ...sourceCoverage(base,source,decision!.products,{references,resolveHub})});
+    }
+    return [...matches.values()].sort((a,b)=>a.path.localeCompare(b.path));
+  }
+  private selectMatch(item:Item,matches:SourceMatch[]):SourceMatch{
+    if(matches.length===1)return matches[0]!;
+    const selected=matches.filter(m=>item.feedback.includes(m.path));
+    if(selected.length===1)return selected[0]!;
+    throw new PlanError([matches.length
+      ? `相同原件匹配多份已发布资料，请在反馈中明确指定一条完整 Markdown 路径：\n${matches.map(m=>m.path).join("\n")}`
+      : "无法验证此前入库的正文，未修改关联。请重新上传原件，从 Incoming files 开始处理。"],true);
+  }
+  private fastDuplicate(item:Item,match:SourceMatch){
+    return !item.associationOnly && !item.reconvert && !item.previous && !item.feedback.trim() && match.inputNames.includes(item.name) && match.products.length>0 && match.products.every(p=>match.coveredProducts.includes(p));
+  }
   private newJob(kind: Job["kind"], items: Item[], prompt?: string): Job {
     const j: Job = {
       id: randomUUID(),
@@ -447,12 +474,16 @@ export class SyncService {
       );
       const old = job.items[index];
       if (!old) throw new SyncError("Item not found.", 404);
-      if (["published", "duplicate", "deleted"].includes(old.status))
+      if (["published", "deleted"].includes(old.status))
         throw new SyncError(
           "This item is already committed. Use cleanup retry, or upload a new revision.",
           409,
         );
       const instructions = `${old.feedback}${old.feedback ? "\n" : ""}${feedback}`;
+      const associationOnly=job.kind==="sync" && (old.status==="duplicate" || old.associationOnly===true);
+      if(associationOnly && force)
+        throw new SyncError("Product coverage review cannot reconvert or replace source contents. Upload the original and start a separate Sync.",409);
+      if(old.status==="duplicate" && !feedback.trim())throw new SyncError("Explain which product should also reference this source.");
       let item: Item;
       if (job.kind === "delete")
         item = this.item(
@@ -460,7 +491,10 @@ export class SyncService {
           instructions,
           old.id,
         );
-      else {
+      else if(associationOnly){
+        item=this.item({name:old.name,id:"",sourceHash:old.sourceHash,bytes:old.bytes},instructions,old.id);
+        item.associationOnly=true;item.sourceDeleted=old.sourceDeleted;
+      } else {
         const file = (await this.incoming()).find((f) => f.name === old.name);
         if (!file)
           throw new SyncError(
@@ -468,6 +502,7 @@ export class SyncService {
             409,
           );
         item = this.item(file, instructions, old.id);
+        item.reconvert=force || /重新.*(?:转换|识别|读取)|漏|识别.*错|reconvert|re.?read|missing|ocr/i.test(feedback);
         // Reuse conversions only for unchanged bytes and no request to re-read/reconvert.
         if (
           !force &&
@@ -741,34 +776,30 @@ export class SyncService {
         await this.event(job, item);
         try {
           const file = await safePath(this.inbox, item.name);
-          if (hash(await fs.readFile(file)) !== item.sourceHash)
+          if (!item.associationOnly && hash(await fs.readFile(file)) !== item.sourceHash)
             throw new Error("Incoming file changed; start again.");
           const release = await knowledgeLock(this.root).read();
-          let duplicate = false;
+          let matches:SourceMatch[]=[];
+          let reusable:string|undefined;
           try {
             const current = await catalog(this.root);
-            duplicate = [...this.jobs.values()].some((j) =>
-              j.items.some(
-                (old) =>
-                  old.id !== item.id &&
-                  old.status === "published" &&
-                  old.sourceHash === item.sourceHash &&
-                  old.plan?.decision.newPath &&
-                  old.publishedHash ===
-                    hash(current.get(old.plan.decision.newPath) ?? ""),
-              ),
-            );
+            matches=this.matches(item.sourceHash,current);item.matchedSources=matches;
+            if(item.associationOnly || matches.length && !item.reconvert){
+              const selected=this.selectMatch(item,matches);
+              const fast=this.fastDuplicate(item,selected);
+              if(fast){
+                item.status="duplicate";item.stage="Duplicate";
+                item.reason=`同名同内容输入已入库，已核对当前覆盖：${selected.coveredProducts.join(", ")}。如需增加型号，请使用下方 Review product coverage。\n匹配正文：${selected.path}`;
+              }else{item.associationOnly=true;reusable=current.get(selected.path)!;}
+            }
           } finally {
             release();
           }
-          if (duplicate) {
-            item.status = "duplicate";
-            item.reason = "完全相同的输入已成功入库，当前资料仍存在。";
-            item.stage = "Duplicate";
+          if (item.status==="duplicate") {
             await this.clean(job, item);
             continue;
           }
-          const result = await convert(
+          const result:Conversion = reusable!==undefined ? {markdown:reusable,sourceHash:item.sourceHash,coverage:["Reused verified published Markdown for product coverage review; source contents remain unchanged."],visual:emptyUsage(),version:0} : await convert(
             file,
             path.join(this.directory, "work", item.id),
             abort,
@@ -800,7 +831,8 @@ export class SyncService {
             path.join(this.directory, `work/${item.id}/coverage.json`),
             undefined,
           );
-          item.status = signal.aborted ? "stopped" : "failed";
+          item.status = signal.aborted ? "stopped" : e instanceof PlanError && e.review ? "needs_review" : "failed";
+          if(item.status==="needs_review")item.stage="Needs your decision";
           item.reason = this.options.redact(e);
           item.finished = new Date().toISOString();
           await this.event(job, item);
@@ -844,27 +876,20 @@ export class SyncService {
         } finally {
           release();
         }
-        if (
-          job.kind === "sync" &&
-          [...this.jobs.values()].some((j) =>
-            j.items.some(
-              (old) =>
-                old.id !== item.id &&
-                old.status === "published" &&
-                old.sourceHash === item.sourceHash &&
-                old.plan?.decision.newPath &&
-                old.publishedHash ===
-                  hash(base.get(old.plan.decision.newPath) ?? ""),
-            ),
-          )
-        ) {
-          item.status = "duplicate";
-          item.stage = "Duplicate";
-          item.reason = "完全相同的输入已在本批或先前成功入库。";
-          await this.clean(job, item);
-          continue;
+        let association:SourceMatch|undefined;
+        if(job.kind==="sync"){
+          const matches=this.matches(item.sourceHash,base);item.matchedSources=matches;
+          if(item.associationOnly || matches.length && !item.reconvert){
+            association=this.selectMatch(item,matches);
+            const fast=this.fastDuplicate(item,association);
+            if(fast){
+              item.status="duplicate";item.stage="Duplicate";item.reason=`同名同内容输入已入库，已核对当前覆盖：${association.coveredProducts.join(", ")}。\n匹配正文：${association.path}`;
+              await this.clean(job,item);continue;
+            }
+            item.associationOnly=true;
+          }
         }
-        const markdown = converted.get(item.id)?.markdown ?? "";
+        const markdown = association ? base.get(association.path)! : converted.get(item.id)?.markdown ?? "";
         const result = await planner({
           base,
           markdown,
@@ -886,6 +911,7 @@ export class SyncService {
           signal: abort,
           usage: item.textUsage,
           update: () => this.save(job),
+          association,
         });
         if (
           job.kind === "sync" &&
@@ -908,11 +934,17 @@ export class SyncService {
           markdown,
           item.feedback,
           job.kind === "delete",
+          association,
         );
         if (result.decision.action === "review") {
           item.status = "needs_review";
           item.stage = "Needs your decision";
-        } else if (job.kind === "delete" || item.plan.confirmationReason) {
+        } else if (result.decision.action==="associate" && !item.plan.changes.length && !item.feedback.trim()){
+          item.status="duplicate";item.stage="Duplicate";
+          item.reason=`已核对，要求覆盖的型号均已关联：${result.decision.products.join(", ")}。\n匹配正文：${association!.path}`;
+          await this.clean(job,item);
+        } else if (job.kind === "delete" || item.plan.confirmationReason || result.decision.action==="associate") {
+          if(result.decision.action==="associate" && !item.plan.confirmationReason)item.plan.confirmationReason=`Confirm existing coverage: ${result.decision.products.join(", ")} → ${association!.path}. No source or index changes are proposed.`;
           item.status = "awaiting_confirmation";
           item.stage = "Preview ready";
           if (item.plan.confirmationReason)

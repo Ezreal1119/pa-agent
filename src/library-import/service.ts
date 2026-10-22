@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { constants, createReadStream, createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { Transform } from 'node:stream';
@@ -17,7 +17,7 @@ export type LibraryItem = {
   stage?:string; category?:string; classificationCached?:boolean; model?:string; usage:Usage; hash?:string; bytes?:number; target?:string;
 };
 export type LibraryRun = {id:string;created:string;finished?:string;status:string;sourceReport?:string;sourceCompletedAt?:string;sourceBase:string;model?:string;items:LibraryItem[];counts:Record<string,number>;usage:Usage;error?:string};
-type Pending = {hash:string;target:string;stage:string;completion:string;run:string};
+type Pending = {hash:string;target:string;stage:string;completion:string;run:string;location?:'inbox'};
 type SourceState = {delivered:Record<string,{target:string;time:string}>;pending?:Pending};
 type State = {version:1;sources:Record<string,SourceState>;completed:Record<string,{status:string;hash?:string;target?:string}>;classifications:Record<string,Classification>};
 type Options = {dataDir:string;config:LibraryConfig;classifier:()=>Classifier;modelConfigured:()=>boolean;modelId?:()=>string;redact?:(error:unknown)=>string;transport?:{json:typeof jsonRequest;request:typeof request};verify?:typeof verify;disk?:(bytes:number)=>Promise<void>};
@@ -29,12 +29,12 @@ const pendingStatuses=['pending','classifying','downloading','validating','publi
 function addUsage(to:Usage,delta:Usage){to.input+=delta.input;to.output+=delta.output;to.requests+=delta.requests;to.recorded+=delta.recorded;}
 
 export class LibraryImportService {
-  readonly root:string;readonly inbox:string;
+  readonly root:string;readonly inbox:string;readonly work:string;
   private running?:{id:string;controller:AbortController;task:Promise<void>};
   private starting?:Promise<LibraryRun>;
   private closing=false;
   private recoveryError?:string;
-  constructor(private options:Options){this.root=path.join(options.dataDir,'logs','library_sync');this.inbox=path.join(options.dataDir,'urovo-product-expert','newly_added');}
+  constructor(private options:Options){this.root=path.join(options.dataDir,'logs','library_sync');this.inbox=path.join(options.dataDir,'urovo-product-expert','newly_added');this.work=path.join(this.inbox,'.library-import-work');}
   redact(error:unknown){let text=this.options.redact?.(error) ?? (error instanceof Error?error.message:String(error));if(this.options.config.password)text=text.split(this.options.config.password).join('[REDACTED]');return text.slice(0,2000);}
   private async lock(){
     await safePath(this.root);await fs.mkdir(this.root,{recursive:true,mode:0o700});await safePath(this.root,'runner.lock');
@@ -48,7 +48,7 @@ export class LibraryImportService {
     for(const [key,e] of Object.entries(s.sources)){
       if(!hashPattern.test(key) || !record(e) || !record(e.delivered))throw new Error('Invalid library source state.');
       for(const [digest,d] of Object.entries(e.delivered))if(!hashPattern.test(digest) || !record(d) || !this.validName(d.target) || typeof d.time!=='string')throw new Error('Invalid library delivery state.');
-      const p=e.pending;if(p && (!record(p) || !hashPattern.test(p.hash) || !hashPattern.test(p.completion) || !runPattern.test(p.run) || !/^[a-f0-9-]{36}\.part$/.test(p.stage) || !this.validName(p.target)))throw new Error('Invalid pending library publication.');
+      const p=e.pending;if(p && (!record(p) || !hashPattern.test(p.hash) || !hashPattern.test(p.completion) || !runPattern.test(p.run) || !/^[a-f0-9-]{36}\.part$/.test(p.stage) || !this.validName(p.target) || p.location!==undefined && p.location!=='inbox'))throw new Error('Invalid pending library publication.');
     }
     for(const [key,e] of Object.entries(s.completed))if(!hashPattern.test(key) || !record(e) || typeof e.status!=='string' || e.hash && !hashPattern.test(e.hash) || e.target && !this.validName(e.target))throw new Error('Invalid library completion state.');
     for(const [key,c] of Object.entries(s.classifications))if(!hashPattern.test(key) || !record(c) || !CATEGORIES.includes(c.category) || typeof c.reason!=='string' || c.reason.length>2000 || typeof c.model!=='string')throw new Error('Invalid library classification cache.');
@@ -82,11 +82,49 @@ export class LibraryImportService {
   }
   private async digest(file:string){await safePath(path.dirname(file),path.basename(file));const h=createHash('sha256');for await(const chunk of createReadStream(file))h.update(chunk);return h.digest('hex');}
   private async syncDir(dir:string){const h=await fs.open(dir,'r');try{await h.sync();}finally{await h.close();}}
-  private async disk(bytes:number){if(this.options.disk)return this.options.disk(bytes);const s=await fs.statfs(this.root);if(s.bavail*s.bsize < RESERVE_BYTES+bytes)throw Object.assign(new ImportError('Insufficient disk space. Keep at least 256 MiB free in addition to the download.',true),{code:'ENOSPC'});}
+  private async disk(bytes:number){
+    if(this.options.disk)return this.options.disk(bytes);
+    for(const [dir,needed] of [[this.root,RESERVE_BYTES],[this.work,RESERVE_BYTES+bytes]] as const){const s=await fs.statfs(dir);if(s.bavail*s.bsize < needed)throw Object.assign(new ImportError('Insufficient disk space. Keep at least 256 MiB free in addition to the download.',true),{code:'ENOSPC'});}
+  }
+  private stagePath(pending:Pending){return path.join(pending.location==='inbox'?this.work:path.join(this.root,'work'),pending.stage);}
+  /** Only a recorded failed legacy link proves publication never happened. */
+  private async recoverLegacyExdev(key:string,state:State,source:SourceState){
+    const p=source.pending!;
+    // Once migration is journaled, an interrupted new attempt must use ordinary,
+    // conservative recovery rather than reusing the old failure as permission.
+    if(p.location!==undefined)return false;
+    const original=this.stagePath(p),target=path.join(this.inbox,p.target);
+    const targetStat=await fs.lstat(target).catch(e=>{if(e.code==='ENOENT')return;throw e;});
+    if(targetStat)return false;
+    const run=await this.get(p.run).catch(e=>{if(e instanceof SyncError && e.status===404)return;throw e;});
+    if(!run)return false;
+    const item=run.items.find(item=>item.status==='failed' && item.stage==='publishing' && item.hash===p.hash && run.sourceReport &&
+      this.completion(run.sourceBase,run.sourceReport,item)===p.completion && hash(JSON.stringify([run.sourceBase,item.key]))===key &&
+      item.error?.startsWith('EXDEV: cross-device link not permitted, link ') && item.error.includes(original) && item.error.includes(target));
+    if(!item)return false;
+    if(await this.digest(original)!==p.hash)throw new Error('Legacy EXDEV staging hash changed; manual recovery required.');
+    const stat=await fs.stat(original);if(stat.size>MAX_BYTES)throw new Error('Legacy staging exceeds import size limit.');
+    await this.disk(stat.size);
+    const destination=await safePath(this.work,p.stage);
+    // A crash during a previous copy can leave an incomplete, still-private file.
+    // The legacy journal remains authoritative until location='inbox' is saved.
+    const copied=await fs.lstat(destination).catch(e=>{if(e.code==='ENOENT')return;throw e;});
+    if(copied && (!copied.isFile() || copied.nlink!==1))throw new Error('Unsafe legacy staging migration destination.');
+    if(copied && await this.digest(destination)!==p.hash)await fs.unlink(destination);
+    try{await fs.copyFile(original,destination,constants.COPYFILE_EXCL);}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;}
+    if(await this.digest(destination)!==p.hash)throw new Error('Legacy staging migration hash mismatch; manual recovery required.');
+    const handle=await fs.open(destination,'r+');try{await handle.sync();}finally{await handle.close();}
+    await this.syncDir(this.work);
+    // Persist the location before touching either original data or the public path.
+    p.location='inbox';await this.saveState(state);
+    await fs.unlink(original);await this.syncDir(path.dirname(original));
+    await this.publish(state,source);
+    return true;
+  }
   /** Exclusive linking publishes complete bytes; immediately remove our private link before normal consumers read. */
   private async publish(state:State,source:SourceState,recovering=false){
-    const p=source.pending!;await safePath(this.root,'work');await safePath(this.inbox);
-    const stage=path.join(this.root,'work',p.stage);let target=path.join(this.inbox,p.target);
+    const p=source.pending!;const stage=this.stagePath(p);await safePath(path.dirname(stage));await safePath(this.inbox);
+    let target=path.join(this.inbox,p.target);
     const s=await fs.lstat(stage).catch(e=>{if(e.code==='ENOENT')return;throw e;});
     let t=await fs.lstat(target).catch(e=>{if(e.code==='ENOENT')return;throw e;});
     if(s && (!s.isFile() || s.isSymbolicLink()) || t && (!t.isFile() || t.isSymbolicLink()))throw new Error('Unsafe pending publication path.');
@@ -95,7 +133,7 @@ export class LibraryImportService {
       await fs.unlink(stage);
       if(await this.digest(target)!==p.hash)throw new Error('Pending published file changed. Manual recovery required.');
     } else if(t && await this.digest(target)===p.hash){
-      if(s)await fs.unlink(await safePath(this.root,`work/${p.stage}`));
+      if(s)await fs.unlink(await safePath(path.dirname(stage),p.stage));
     } else {
       if(recovering)throw new Error('Pending delivery cannot be proven complete. Preserve state/work files for manual recovery; no redelivery was attempted.');
       if(!s || await this.digest(stage)!==p.hash)throw new Error('Staged delivery hash mismatch.');
@@ -112,20 +150,21 @@ export class LibraryImportService {
     source.delivered[p.hash]={target:p.target,time:now()};state.completed[p.completion]={status:'downloaded',hash:p.hash,target:p.target};
     const saved={...p};delete source.pending;
     try{await this.saveState(state);}catch(e){source.pending=saved;throw e;}
-    await fs.rm(stage,{force:true});await this.syncDir(path.join(this.root,'work'));
+    await fs.rm(stage,{force:true});await this.syncDir(path.dirname(stage));
     return p.target;
   }
   private async recover(){
     const state=await this.state();await safePath(this.inbox);await fs.mkdir(this.inbox,{recursive:true,mode:0o700});
     await fs.mkdir(await safePath(this.root,'work'),{recursive:true,mode:0o700});
+    await fs.mkdir(await safePath(this.work),{recursive:true,mode:0o700});
     const recovered:Pending[]=[];
-    for(const source of Object.values(state.sources))if(source.pending){const pending={...source.pending};await this.publish(state,source,true);recovered.push(pending);}
+    for(const [key,source] of Object.entries(state.sources))if(source.pending){const pending={...source.pending};if(!await this.recoverLegacyExdev(key,state,source))await this.publish(state,source,true);recovered.push(pending);}
     // A prior process may already have written a failed/finished report after an
     // interrupted commit. Reflect a now-proven delivery in that original report too.
     for(const pending of recovered){
       const run=await this.get(pending.run);
       const item=run.items.find(item=>run.sourceReport && this.completion(run.sourceBase,run.sourceReport,item)===pending.completion);
-      if(item){Object.assign(item,state.completed[pending.completion]);item.reason='Recovered committed delivery.';delete item.error;await this.save(run);await this.event(run,'publication_recovered',item);}
+      if(item){Object.assign(item,state.completed[pending.completion]);item.reason='Recovered committed delivery.';delete item.error;delete item.stage;await this.save(run);await this.event(run,'publication_recovered',item);}
     }
     for(const name of await fs.readdir(this.root))if(/^[a-f0-9-]{36}\.json$/.test(name)){
       const run=await this.get(name.slice(0,-5));if(active(run.status)){
@@ -135,8 +174,8 @@ export class LibraryImportService {
       }
     }
     // Only recognized orphan staging files; never clean a pending publication.
-    for(const name of await fs.readdir(path.join(this.root,'work')))if(/^[a-f0-9-]{36}\.part$/.test(name)){
-      const file=path.join(this.root,'work',name);const staged=await fs.lstat(file);
+    for(const directory of [path.join(this.root,'work'),this.work])for(const name of await fs.readdir(directory))if(/^[a-f0-9-]{36}\.part$/.test(name)){
+      const file=path.join(directory,name);const staged=await fs.lstat(file);
       if(staged.isFile() && staged.nlink===2){
         let proven=false;
         for(const source of Object.values(state.sources))for(const [digest,delivery] of Object.entries(source.delivered)){
@@ -144,7 +183,7 @@ export class LibraryImportService {
           if(t?.isFile() && !t.isSymbolicLink() && t.dev===staged.dev && t.ino===staged.ino){await fs.unlink(file);if(await this.digest(target)!==digest)throw new Error('Recovered delivery changed before cleanup.');proven=true;break;}
         }
         if(!proven)throw new Error('Unrecognized staging hardlink; manual recovery required.');
-      }else{await safePath(this.root,`work/${name}`);await fs.rm(file,{force:true});}
+      }else{await safePath(directory,name);await fs.rm(file,{force:true});}
     }
   }
   async init(){const release=await this.lock().catch(e=>{if(e instanceof SyncError && e.status===409)return;throw e;});if(!release)return;try{await this.recover();this.recoveryError=undefined;}catch(e){this.recoveryError=this.redact(e);}finally{await release();}}
@@ -215,7 +254,7 @@ export class LibraryImportService {
       const identity=hash(JSON.stringify([run.sourceBase,item.key]));const source=state.sources[identity] ?? {delivered:{}};const completion=this.completion(run.sourceBase,run.sourceReport!,item);
       const done=state.completed[completion];if(done){item.status='already_completed';item.target=done.target;item.hash=done.hash;item.reason='This entry in the latest report was already completed; no new download.';await this.save(run);await this.event(run,'file_finished',item);continue;}
       const metadata:Metadata={name:item.name,documentType:item.documentType,displayPath:item.displayPath};const cacheKey=hash(JSON.stringify(metadata));
-      const stageName=`${randomUUID()}.part`;const stage=await safePath(this.root,`work/${stageName}`);
+      const stageName=`${randomUUID()}.part`;const stage=await safePath(this.work,stageName);
       try{
         item.status='classifying';item.model=run.model;await this.save(run);
         let classification=state.classifications[cacheKey];
@@ -233,7 +272,7 @@ export class LibraryImportService {
           if(source.delivered[item.hash!]){item.status='unchanged';item.target=source.delivered[item.hash!]!.target;state.completed[completion]={status:item.status,hash:item.hash,target:item.target};await this.saveState(state);}
           else{
             item.status='publishing';await this.save(run);await this.disk(0);
-            source.pending={hash:item.hash!,target:item.name,stage:stageName,completion,run:run.id};state.sources[identity]=source;await this.saveState(state);
+            source.pending={hash:item.hash!,target:item.name,stage:stageName,completion,run:run.id,location:'inbox'};state.sources[identity]=source;await this.saveState(state);
             item.target=await this.publish(state,source);item.status='downloaded';
           }
         }

@@ -36,4 +36,6 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/opt/ProductExpertCloud/.data/logs/library_sync
+# Complete-file staging stays in newly_added/.library-import-work so publication
+# links never cross these separate writable bind mounts.
 ReadWritePaths=/opt/ProductExpertCloud/.data/urovo-product-expert/newly_added

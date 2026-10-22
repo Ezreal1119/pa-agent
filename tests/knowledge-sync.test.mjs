@@ -23,6 +23,16 @@ const hub = "product-knowledge-vault/products/DT610.md";
 const idx = "product-knowledge-vault/index.md",
   log = "product-knowledge-vault/log.md";
 function proposal(input, action = "update") {
+  if (input.association) return {
+    decision: {
+      action: "associate", existingSource: input.association.path,
+      products: input.association.products, slot: input.association.slot,
+      oldPaths: [], reason: "已核对所有型号的现有来源关联", summary: "保留现有覆盖",
+      versionEvidence: "Verified unchanged source", authorizedException: false,
+      reviewedPaths: [],
+    },
+    staged: new Map(),
+  };
   const deletion = action === "delete";
   const staged = new Map([
     [
@@ -477,7 +487,7 @@ test("real native UTF-8 and XLSX conversions preserve data without vision or cha
   assert.equal(out.visual.requests, 0);
 });
 
-test("same-batch identical inputs publish once, classify the second duplicate, and clean both originals", async (t) => {
+test("same-batch identical inputs publish once; the second is duplicate only after product coverage review", async (t) => {
   const f = await setup(t);
   const first = await upload(f.service, "one.md");
   const second = await upload(f.service, "two.md");
@@ -490,6 +500,8 @@ test("same-batch identical inputs publish once, classify the second duplicate, a
     ["published", "duplicate"],
   );
   assert.ok(job.items.every((i) => i.sourceDeleted));
+  assert.equal(job.items[1].associationOnly, true);
+  assert.equal(job.items[1].plan.decision.action, "associate");
 });
 
 test("source changes during conversion fail closed and queued readers can be cancelled", async (t) => {

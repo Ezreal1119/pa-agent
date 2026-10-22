@@ -133,7 +133,10 @@ export async function createWebServer(options: WebOptions = {}) {
   const syncVision = boundedSetting(syncEnv.SYNC_MAX_VISION_REQUESTS, 128, 1, 1024, "SYNC_MAX_VISION_REQUESTS");
   const synchronize = new SyncService({ dataDir, maxBytes: SYNC_MAX_FILE_BYTES, maxBatchMarkdownBytes: boundedSetting(syncEnv.SYNC_MAX_BATCH_MARKDOWN_BYTES, 16777216, 1048576, 134217728, "SYNC_MAX_BATCH_MARKDOWN_BYTES"), timeoutMs: syncTimeout, modelId: () => settings.modelId, redact,
     planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
-    converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
+    converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES,
+      // Dense maintenance pages need more time than interactive chat images.
+      vision: { ...fileConfig.vision, timeoutMs: Math.max(fileConfig.vision.timeoutMs, 180_000) },
+    }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
   await synchronize.init();
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
   const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});

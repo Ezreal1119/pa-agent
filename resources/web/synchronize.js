@@ -422,6 +422,18 @@ async function renderJob(job) {
       metric("Model", item.model || "—"),
     );
     content.append(metrics);
+    if (item.matchedSources?.length) {
+      const matches = el("div", undefined, "sync-request");
+      matches.append(el("strong", "Verified existing source"));
+      for (const source of item.matchedSources)
+        matches.append(
+          el("p", source.path),
+          el("p", `Current product coverage: ${source.coveredProducts.join(", ") || "No verified Hub entry"}`),
+        );
+      if (item.associationOnly)
+        matches.append(el("p", "Product coverage review uses the existing published Markdown. Source contents and versions stay unchanged."));
+      content.append(matches);
+    }
     const hint = statusHint(item.status, job.kind);
     if (hint) content.append(el("p", hint, "sync-hint"));
     const choices = reviewChoices(item);
@@ -537,18 +549,21 @@ async function renderJob(job) {
         "stopped",
         "interrupted",
         "awaiting_confirmation",
+        "duplicate",
       ].includes(item.status)
     ) {
       const feedback = el("div", undefined, "sync-feedback"),
         label = el(
           "label",
-          item.status === "awaiting_confirmation"
-            ? "Or request changes (optional)"
-            : item.status === "needs_review"
-              ? "Additional instructions"
+          item.status === "duplicate"
+            ? "Which products should also reference this source?"
+            : item.status === "awaiting_confirmation"
+              ? "Or request changes (optional)"
               : job.kind === "delete"
                 ? "Instructions for deletion preview"
-                : "Instructions for Re-Sync (optional)",
+                : item.status === "needs_review"
+                  ? "Additional instructions"
+                  : "Instructions for Re-Sync (optional)",
         ),
         input = el("textarea");
       input.id = `feedback-${item.id}`;
@@ -570,7 +585,7 @@ async function renderJob(job) {
       choicePreview.append(el("summary", "View selected instructions"), choiceText);
       const updateSubmit = () => {
         const chosen = choices.find(o => o.id === selectedChoices.get(item.id));
-        b.disabled = busy || (choices.length > 0 && !chosen && !input.value.trim());
+        b.disabled = busy || ((choices.length > 0 || item.status === "duplicate") && !chosen && !input.value.trim());
         if (clearChoice) clearChoice.disabled = busy || !chosen;
         choicePreview.hidden = !chosen;
         choiceText.textContent = chosen?.instructions || "";
@@ -627,14 +642,17 @@ async function renderJob(job) {
         forceLabel = el("label"),
         force = el("input");
       force.type = "checkbox";
-      force.checked = reconvertIds.has(item.id);
+      const associationReview = item.associationOnly || item.status === "duplicate";
+      force.checked = !associationReview && reconvertIds.has(item.id);
       force.onchange = () =>
         force.checked
           ? reconvertIds.add(item.id)
           : reconvertIds.delete(item.id);
       forceLabel.append(force, document.createTextNode("Reconvert original"));
       const b = button(
-        job.kind === "delete" ? "Regenerate deletion preview →" : "Re-Sync →",
+        job.kind === "delete"
+          ? "Regenerate deletion preview →"
+          : associationReview ? "Review product coverage →" : "Re-Sync →",
         async () => {
           const chosen = choices.find(o => o.id === selectedChoices.get(item.id));
           const instruction = chosen
@@ -663,7 +681,7 @@ async function renderJob(job) {
           : "sync-button sync-button-primary",
       );
       updateSubmit();
-      if (job.kind === "sync") actions.append(forceLabel);
+      if (job.kind === "sync" && !associationReview) actions.append(forceLabel);
       actions.append(b);
       feedback.append(label, input, actions);
       (decisionAnchor || content).append(feedback);

@@ -21,6 +21,7 @@ import { buildPlan, dependents, resolveHub } from "./validation.js";
 import {
   type Decision,
   type Usage,
+  type SourceMatch,
   excluded,
   hash,
   relative,
@@ -49,6 +50,7 @@ export type AgentInput = {
   signal: AbortSignal;
   usage: Usage;
   update: () => Promise<void>;
+  association?: SourceMatch;
 };
 export type AgentResult = { decision: Decision; staged: Map<string, string> };
 export type Planner = (input: AgentInput) => Promise<AgentResult>;
@@ -157,6 +159,7 @@ export function createPlanner(options: {
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
       });
       function stage(name: string, text: string) {
+        if(input.association)throw new Error("Association review is read-only. Submit associate without staged pages; the backend generates additive index changes.");
         relative(name);
         if (
           excluded(name) ||
@@ -363,7 +366,7 @@ export function createPlanner(options: {
           "Submit the candidate decision. No further tools after this call. Publication is performed by backend checks.",
           Type.Object({
             action: Type.Union(
-              ["add", "update", "review", "delete"].map((v) => Type.Literal(v)),
+              ["add", "update", "review", "delete", "associate"].map((v) => Type.Literal(v)),
             ),
             reason: Type.String(),
             summary: Type.String(),
@@ -371,6 +374,7 @@ export function createPlanner(options: {
             slot: Type.String(),
             oldPaths: Type.Array(Type.String()),
             newPath: Type.Optional(Type.String()),
+            existingSource: Type.Optional(Type.String()),
             versionEvidence: Type.String(),
             authorizedException: Type.Boolean(),
             reviewedPaths: Type.Array(Type.String()),
@@ -401,6 +405,7 @@ export function createPlanner(options: {
                 ...a.oldPaths,
                 ...a.reviewedPaths,
                 ...staged.keys(),
+                ...(input.association ? [input.association.path,...a.products.map((p:string)=>resolveHub(input.base,p))] : []),
               ])) {
                 if (p === "product-knowledge-vault/log.md") continue;
                 const original = input.base.get(p);
@@ -415,6 +420,7 @@ export function createPlanner(options: {
                 input.markdown,
                 input.feedback,
                 deletion,
+                input.association,
               );
             } catch (error) {
               if (!(error instanceof SyncError)) throw error;
@@ -494,7 +500,7 @@ export function createPlanner(options: {
       input.signal.addEventListener("abort", abort, { once: true });
       try {
         await session.prompt(
-          `Operation: ${input.prompt}\nShanghai publication timestamp: ${input.timestamp}\nAdministrator feedback (trusted only for this task): ${input.feedback || "(none)"}\nCandidate characters: ${input.markdown.length}. Read it completely using read_candidate_source before deciding. Inspect the knowledge catalog and batch candidates. Submit using finish_sync.`,
+          `Operation: ${input.prompt}\nShanghai publication timestamp: ${input.timestamp}\nAdministrator feedback (trusted only for this task): ${input.feedback || "(none)"}\n${input.association ? `ASSOCIATION-ONLY MODE: ${JSON.stringify(input.association)}\nThis source's bytes and existing published Markdown have been verified by the backend. Read the full candidate and existing product Hubs. Decide applicable canonical products from evidence and administrator feedback; identical bytes alone never authorize a new product. Preserve all existing products. Use action=associate, existingSource=${JSON.stringify(input.association.path)}, slot=${JSON.stringify(input.association.slot)}, products=the union of existing and approved products, oldPaths=[], and omit newPath and productHubs. Do not stage/write/patch any pages; the backend generates additive coverage links and requires administrator confirmation for changes. No source contents or versions can change in this mode. If the request could mean moving rather than sharing, or applicability is unclear, use review and ask explicitly.\n` : ""}Candidate characters: ${input.markdown.length}. Read it completely using read_candidate_source before deciding. Inspect the knowledge catalog and batch candidates. Submit using finish_sync.`,
         );
         input.signal.throwIfAborted();
       } finally {

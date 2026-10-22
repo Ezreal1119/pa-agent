@@ -208,7 +208,7 @@ test("maintenance HTTP is administrator-only, enforces Origin/CSRF, persists rep
       await fs.readdir(
         path.join(root, ".data/urovo-product-expert/newly_added"),
       )
-    ).length,
+    ).filter(name => !name.startsWith(".")).length,
     4,
   );
 });

@@ -259,7 +259,8 @@ export type Decision = {
   suggestedFeedback?: string;
   productHubs?: { product: string; path: string }[];
   logEntry?: string;
-  action: "add" | "update" | "review" | "delete";
+  action: "add" | "update" | "review" | "delete" | "associate";
+  existingSource?: string;
   reason: string;
   summary: string;
   products: string[];
@@ -269,6 +270,15 @@ export type Decision = {
   versionEvidence: string;
   authorizedException: boolean;
   reviewedPaths: string[];
+};
+/** Derived, verified against current Markdown; not a second product fact store. */
+export type SourceMatch = {
+  path: string;
+  markdownHash: string;
+  products: string[];
+  coveredProducts: string[];
+  inputNames: string[];
+  slot: string;
 };
 export type Plan = {
   decision: Decision;
@@ -288,6 +298,8 @@ export type Attempt = {
   textUsage: Usage;
   visualUsage: Usage;
   model?: string;
+  matchedSources?: SourceMatch[];
+  associationOnly?: boolean;
 };
 export type Item = {
   id: string;
@@ -299,6 +311,9 @@ export type Item = {
   stage: string;
   feedback: string;
   previous?: string;
+  matchedSources?: SourceMatch[];
+  associationOnly?: boolean;
+  reconvert?: boolean;
   started?: string;
   finished?: string;
   elapsedMs?: number;

@@ -11,6 +11,7 @@ import { createClassifier, CATEGORIES } from '../dist/library-import/classifier.
 import { ImportError, publicUrl } from '../dist/library-import/http.js';
 import { emptyUsage } from '../dist/knowledge-sync/core.js';
 const sha=value=>createHash('sha256').update(value).digest('hex');
+const visibleInbox=async service=>(await fs.readdir(service.inbox)).filter(name=>!name.startsWith('.'));
 const file=(key,name=`${key}.pdf`,documentType='specs')=>({key,name,documentType,displayPath:`DT50 / ${documentType} / ${name}`,url:`https://downloads.example/${key}`,size:3});
 async function fixture(t,files=[file('a')]) {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'library-import-'));let report='new',bytes=Buffer.from('abc'),calls=0,classCalls=0;
@@ -41,11 +42,11 @@ test('library uses latest complete report, merges current key metadata, deduplic
 test('library retries only incomplete current-report entries; hash ledger survives Sync consumption and new latest reports replace old work',async t=>{
   const f=await fixture(t);let r=await f.run();assert.equal(r.items[0].status,'downloaded');assert.equal(r.usage.input,10);
   await fs.unlink(path.join(f.service.inbox,r.items[0].target));r=await f.run();assert.equal(r.items[0].status,'already_completed');assert.equal(f.calls,1);
-  f.setReport('newer');r=await f.run();assert.equal(r.sourceReport,'newer');assert.equal(r.items[0].status,'unchanged');assert.equal(f.classifications,1);assert.equal(r.usage.requests,0);assert.deepEqual(await fs.readdir(f.service.inbox),[]);
+  f.setReport('newer');r=await f.run();assert.equal(r.sourceReport,'newer');assert.equal(r.items[0].status,'unchanged');assert.equal(f.classifications,1);assert.equal(r.usage.requests,0);assert.deepEqual(await visibleInbox(f.service),[]);
 });
 test('library reuses identical inbox file, preserves different same-name versions and keeps source hashes',async t=>{
   const f=await fixture(t);await fs.writeFile(path.join(f.service.inbox,'a.pdf'),'abc');let r=await f.run();assert.equal(r.items[0].target,'a.pdf');
-  f.setReport('next');f.setBytes('xyz');r=await f.run();assert.match(r.items[0].target,/__library_/);assert.equal(await fs.readFile(path.join(f.service.inbox,'a.pdf'),'utf8'),'abc');assert.equal((await fs.readdir(f.service.inbox)).length,2);
+  f.setReport('next');f.setBytes('xyz');r=await f.run();assert.match(r.items[0].target,/__library_/);assert.equal(await fs.readFile(path.join(f.service.inbox,'a.pdf'),'utf8'),'abc');assert.equal((await visibleInbox(f.service)).length,2);
 });
 test('library five categories are accepted, outside/uncertain are reported and cached',async t=>{
   const files=CATEGORIES.map((c,i)=>file(String(i),`${i}.pdf`,c));const f=await fixture(t,files);files.forEach((v,i)=>f.categories[v.name]=CATEGORIES[i]);
@@ -66,7 +67,7 @@ test('library shared lock/stop cancels an incomplete stream, removes staging, an
   f.service.options.transport.request=async()=>{notify();return Object.assign(new Readable({read(){}}),{headers:{}});};
   const r=await f.service.start();await started;
   const other=new LibraryImportService({...f.service.options});await other.init();await assert.rejects(()=>other.start(),/already running/);
-  await other.stop(r.id);await f.service.wait();const stopped=await f.service.get(r.id);assert.equal(stopped.status,'stopped');assert.deepEqual(await fs.readdir(f.service.inbox),[]);assert.deepEqual(await fs.readdir(path.join(f.service.root,'work')),[]);
+  await other.stop(r.id);await f.service.wait();const stopped=await f.service.get(r.id);assert.equal(stopped.status,'stopped');assert.deepEqual(await visibleInbox(f.service),[]);assert.deepEqual(await fs.readdir(path.join(f.service.root,'work')),[]);assert.deepEqual(await fs.readdir(f.service.work),[]);
   f.service.options.transport.request=download;assert.equal((await f.run()).items[0].status,'downloaded');await other.close();
 });
 test('library recovers proven pending publication and marks unfinished report interrupted',async t=>{
@@ -99,4 +100,46 @@ test('library changed pending target is preserved for manual recovery and is nev
   await fs.writeFile(path.join(f.service.root,'state.json'),JSON.stringify({version:1,sources:{[sha('source')]:{delivered:{},pending:{hash:sha('abc'),target:'a.pdf',stage,completion:sha('completion'),run:id}}},completed:{},classifications:{}}));
   await f.service.init();assert.match((await f.service.status()).recoveryError,/cannot be proven/);await assert.rejects(()=>f.service.start(),/cannot be proven/);
   assert.equal(await fs.readFile(path.join(f.service.inbox,'a.pdf'),'utf8'),'changed');assert.equal(await fs.readFile(path.join(f.service.root,'work',stage),'utf8'),'abc');
+});
+
+
+test('library downloads and validates in hidden inbox staging on the destination mount',async t=>{
+  const f=await fixture(t);let verified;
+  f.service.options.verify=async file=>{verified=file;assert.equal(path.dirname(file),f.service.work);assert.equal(path.dirname(f.service.work),f.service.inbox);};
+  const r=await f.run();assert.equal(r.items[0].status,'downloaded');assert(verified);assert.equal(path.basename(f.service.work),'.library-import-work');
+  assert.deepEqual(await fs.readdir(f.service.work),[]);assert.deepEqual(await visibleInbox(f.service),['a.pdf']);
+});
+
+async function legacyExdev(f, {changed=false, proof=true, migrated=false}={}){
+  const id=randomUUID(),stage=`${randomUUID()}.part`,original=path.join(f.service.root,'work',stage),target=path.join(f.service.inbox,'a.pdf');
+  const item={...file('a'),change:'added',status:'failed',attempts:1,usage:emptyUsage(),hash:sha('abc'),stage:'publishing'};
+  item.error=proof?`EXDEV: cross-device link not permitted, link '${original}' -> '${target}'`:'Process crashed at an unknown publication point.';
+  const run={id,created:new Date().toISOString(),finished:new Date().toISOString(),status:'completed_with_errors',sourceBase:f.config.baseUrl,sourceReport:'new',items:[item],counts:{failed:1},usage:emptyUsage(),error:item.error};
+  const completion=f.service.completion(run.sourceBase,run.sourceReport,item),identity=sha(JSON.stringify([run.sourceBase,item.key]));
+  const pending={hash:item.hash,target:'a.pdf',stage,completion,run:id,...(migrated?{location:'inbox'}:{})};
+  await fs.writeFile(migrated?path.join(f.service.work,stage):original,changed?'changed':'abc');
+  await fs.writeFile(path.join(f.service.root,`${id}.json`),JSON.stringify(run));
+  await fs.writeFile(path.join(f.service.root,'state.json'),JSON.stringify({version:1,sources:{[identity]:{delivered:{},pending}},completed:{},classifications:{}}));
+  return {id,stage,original,target,identity,completion};
+}
+
+test('library migrates a proven failed legacy EXDEV link, reuses verified bytes and updates the original report',async t=>{
+  const f=await fixture(t),p=await legacyExdev(f);
+  // Interrupted private copying is safe to replace while the old journal is authoritative.
+  await fs.writeFile(path.join(f.service.work,p.stage),'partial');
+  await f.service.init();assert.equal((await f.service.status()).recoveryError,undefined);
+  assert.equal(await fs.readFile(p.target,'utf8'),'abc');assert.equal(f.calls,0);assert.equal(f.classifications,0);
+  const state=JSON.parse(await fs.readFile(path.join(f.service.root,'state.json')));
+  assert.equal(state.sources[p.identity].pending,undefined);assert.equal(state.completed[p.completion].hash,sha('abc'));
+  assert.deepEqual(await fs.readdir(f.service.work),[]);assert.deepEqual(await fs.readdir(path.join(f.service.root,'work')),[]);
+  const recovered=await f.service.get(p.id);assert.equal(recovered.items[0].status,'downloaded');assert.equal(recovered.items[0].error,undefined);assert.equal(recovered.items[0].stage,undefined);
+  assert.equal((await f.run()).items[0].status,'already_completed');assert.equal(f.calls,0);
+});
+
+test('library EXDEV recovery refuses changed staged bytes and an ambiguous or already-migrated attempt',async t=>{
+  for(const options of [{changed:true},{proof:false},{migrated:true}]){
+    const f=await fixture(t),p=await legacyExdev(f,options);await f.service.init();assert((await f.service.status()).recoveryError);
+    assert.deepEqual(await visibleInbox(f.service),[]);assert.equal(f.calls,0);
+    const state=JSON.parse(await fs.readFile(path.join(f.service.root,'state.json')));assert(state.sources[p.identity].pending);assert.equal(state.completed[p.completion],undefined);
+  }
 });

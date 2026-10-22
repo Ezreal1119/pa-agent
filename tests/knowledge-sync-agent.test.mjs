@@ -224,4 +224,40 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
     JSON.stringify(payloads),
     /NEVER administrator feedback or permission/,
   );
+  const source = "i9600/others/release_202610220001/changes.md",
+    hub = "product-knowledge-vault/products/i9600.md",
+    miniHub = "product-knowledge-vault/products/i9600-Mini.md",
+    markdown = "# Firmware release notes\nRevision 3";
+  const base = new Map([
+    [source, markdown], [hub, `# i9600\n${source}`],
+    ["i9600 Mini/specs/current_202601010000/spec.md", "Independent Mini specs"],
+    [miniHub, "# Mini\ni9600 Mini/specs/current_202601010000/spec.md"],
+  ]);
+  const associate = {
+    ...decision, action: "associate", products: ["i9600", "i9600 Mini"],
+    newPath: undefined, existingSource: source, oldPaths: [],
+  };
+  calls.splice(0, calls.length,
+    { name: "finish_sync", args: associate },
+    { name: "read_candidate_source", args: {} },
+    { name: "read_knowledge", args: { path: source } },
+    { name: "read_knowledge", args: { path: hub } },
+    { name: "finish_sync", args: associate }, // Missing Mini Hub exhaustive read.
+    { name: "read_knowledge", args: { path: miniHub } },
+    { name: "write_candidate", args: { path: hub, text: "Remove i9600 facts" } },
+    { name: "finish_sync", args: associate },
+  );
+  index = 0; payloads.length = 0;
+  const linked = await createPlanner(options)({
+    ...input, base, markdown, candidates: new Map(), usage: emptyUsage(),
+    feedback: "同时适用于 i9600 和 i9600 Mini，保留 i9600 并补 Mini。",
+    association: { path: source, markdownHash: hash(markdown), products: ["i9600"], coveredProducts: ["i9600"], inputNames: ["changes.xlsx"], slot: "others" },
+  });
+  assert.equal(linked.decision.action, "associate");
+  assert.equal(linked.staged.size, 0, "association planner cannot write candidates");
+  const wire = JSON.stringify(payloads);
+  assert.match(wire, /ASSOCIATION-ONLY MODE/);
+  assert.match(wire, /Association review is read-only/);
+  assert.match(wire, /Read all segments before submitting: product-knowledge-vault\/products\/i9600-Mini.md/);
+  assert.equal(base.get(hub), `# i9600\n${source}`);
 });

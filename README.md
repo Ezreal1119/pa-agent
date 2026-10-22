@@ -305,6 +305,8 @@ Changed files are downloaded into `urovo-product-expert/newly_added/`, then proc
 
 Synchronize 的 **Needs your decision** 报告支持根据问题生成单选卡片，并保留 **Additional instructions** 自由输入；选择后点击 **Re-Sync** 才提交，判断依据默认折叠。旧报告中的明确选项行也可显示为卡片。本轮未执行验证。
 
+相同输入内容不再代表所有产品已覆盖。旧 **Duplicate** 报告可通过 **Review product coverage** 复核并预览补关联，原件已清理时复用经发布报告与当前正文哈希核验的来源。后台只追加产品 Hub/shared 节点与索引，保留原来源和版本，点击 **Confirm publication** 才生效。i9600 / i9600 Mini 共用修改记录的具体步骤见 [相同正文与产品覆盖](docs/synchronize.md#相同正文与产品覆盖)。本次无需新依赖、env 或 systemd 修改；构建及 35 项隔离/模拟回归通过，未使用真实模型、修改正式知识或部署 VPS。
+
 ### Weekly library imports
 
 Synchronize → **Source imports → Library imports** adds independent manual Run now / Stop and persistent per-file reports. Only the latest completed upstream report's added/updated entries are considered; the shared text model classifies five supported document categories from metadata, and the program validates PDF/PPTX/XLSX/DOCX (100 MiB), downloads and deduplicates into `newly_added/`. It does not run knowledge Sync or backfill old reports.

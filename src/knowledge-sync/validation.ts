@@ -8,7 +8,9 @@ import {
   SyncError,
   type Decision,
   type Plan,
+  type SourceMatch,
 } from "./core.js";
+import { buildAssociationPlan, managedSourceProducts } from "./associations.js";
 const slots = new Set([
   "brochure",
   "specs",
@@ -152,6 +154,7 @@ export function buildPlan(
   markdown: string,
   feedback: string,
   deletion = false,
+  association?: SourceMatch,
 ): Plan {
   if (
     d.suggestedFeedback !== undefined &&
@@ -183,6 +186,11 @@ export function buildPlan(
   }
   if (d.action === "review")
     return { decision: d, changes: [], baseline: fingerprint(base) };
+  if (d.action === "associate") {
+    if (deletion) throw new PlanError(["A deletion preview cannot add associations."]);
+    return buildAssociationPlan(base,staged,d,association,{references,resolveHub});
+  }
+  if (association) throw new PlanError(["This is verified existing content. Use associate or review; source replacement is not permitted."]);
   const problems: string[] = [];
   const fail = (message: string) => {
     if (!problems.includes(message)) problems.push(message);
@@ -293,6 +301,8 @@ export function buildPlan(
       fail(
         `Deleted source product is missing from the decision: ${old.split("/")[0]}`,
       );
+    const members=managedSourceProducts(base,old,{references,resolveHub});
+    if(members.some(p=>!d.products.includes(p)))fail(`Shared source impacts all associated products: ${members.join(", ")}. Include and review each product.`);
   }
   if (d.action === "add" && d.oldPaths.length)
     fail("Invalid add/update/delete source list: add must not list oldPaths.");
@@ -466,6 +476,8 @@ export function buildPlan(
       if (newSource?.startsWith(`${product}/${slot}/`) && dirs.size > 1)
         fail(`Slot already occupied: ${product}/${slot}.`);
     }
+  const sharedImpacts=[...new Set(d.oldPaths.flatMap(old=>managedSourceProducts(base,old,{references,resolveHub})))];
+  const effectiveConfirmation=confirmationReason || (sharedImpacts.length>1 ? `Confirm shared source impact on all products: ${sharedImpacts.join(", ")}. Verify that each product's version remains correct.` : undefined);
   const changes = [...new Set([...base.keys(), ...next.keys()])]
     .filter((p) => base.get(p) !== next.get(p))
     .map((p) => ({
@@ -484,6 +496,6 @@ export function buildPlan(
     decision: d,
     changes,
     baseline: fingerprint(base),
-    ...(confirmationReason ? { confirmationReason } : {}),
+    ...(effectiveConfirmation ? { confirmationReason:effectiveConfirmation } : {}),
   };
 }

@@ -23,6 +23,11 @@ export type Converter = (
   update: () => Promise<void>,
 ) => Promise<Conversion>;
 export const CONVERSION_VERSION = 4;
+function visionAbort(signal: AbortSignal, label: string) {
+  return new Error(
+    `${signal.reason?.name === "TimeoutError" ? "SYNC file deadline exceeded" : "Vision conversion cancelled"} at ${label}. Completed regions are retained.`,
+  );
+}
 export function createConverter(
   config: FileToolConfig,
   soffice: string,
@@ -141,7 +146,7 @@ export function createConverter(
         "Vision model is required for full visual coverage. Configure VISION_LLM_* in .env.",
       );
     for (const image of manifest.images) {
-      signal.throwIfAborted();
+      if (signal.aborted) throw visionAbort(signal, image.label);
       const file = await safePath(dir, image.file);
       const bytes = await fs.readFile(file);
       const key = hash(bytes);
@@ -152,16 +157,22 @@ export function createConverter(
       } | null>(path.join(dir, `${image.file}.json`), null);
       let text =
         previous?.hash === key && previous.complete ? previous.text : undefined;
-      if (text === undefined) {
+      // One retry only for a local request timeout, within the original file
+      // deadline and request budget. Complete region caches remain unchanged.
+      for (let attempt = 1; text === undefined && attempt <= 2; attempt++) {
+        if (signal.aborted) throw visionAbort(signal, image.label);
         if (usage.requests >= maxVision)
           throw new Error(
-            "Vision call budget exceeded; Re-Sync to continue remaining regions.",
+            `Vision call budget exceeded at ${image.label}; Re-Sync to continue remaining regions.`,
           );
-        const release = await acquire(signal);
+        let release: (() => void) | undefined;
+        let timeout: AbortSignal | undefined;
         try {
+          release = await acquire(signal);
+          if (signal.aborted) throw visionAbort(signal, image.label);
           usage.requests++;
           await update();
-          const timeout = AbortSignal.timeout(config.vision.timeoutMs);
+          timeout = AbortSignal.timeout(config.vision.timeoutMs);
           const response = await fetch(
             `${config.vision.baseUrl.replace(/\/$/, "")}/chat/completions`,
             {
@@ -251,8 +262,24 @@ export function createConverter(
             path.join(dir, `${image.file}.json`),
             JSON.stringify({ hash: key, text, complete: true }),
           );
+        } catch (error) {
+          if (signal.aborted) throw visionAbort(signal, image.label);
+          const requestTimeout = timeout?.aborted &&
+            (error === timeout.reason || error instanceof Error &&
+              ["AbortError", "TimeoutError"].includes(error.name));
+          if (!requestTimeout) throw error;
+          if (attempt === 1 && usage.requests < maxVision) {
+            manifest.coverage.push(
+              `Vision request timed out at ${image.label} after ${config.vision.timeoutMs} ms; retrying once.`,
+            );
+            await atomic(path.join(dir, "coverage.json"), JSON.stringify(manifest.coverage));
+          } else {
+            throw new Error(
+              `Vision request timed out at ${image.label} after ${config.vision.timeoutMs} ms (attempt ${attempt}/2${usage.requests >= maxVision ? "; request budget exhausted" : ""}). Completed regions are retained; Re-Sync to continue.`,
+            );
+          }
         } finally {
-          release();
+          release?.();
         }
       }
       if (text)
