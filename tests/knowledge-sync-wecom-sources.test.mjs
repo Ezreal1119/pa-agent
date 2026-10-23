@@ -757,3 +757,49 @@ test("real planner can batch-read a legacy retirement, correct a review into a v
   assert(!after.has(old)); assert(after.has(dock));
   for (const member of indexes(after)[0].members) assert(after.has(member.path));
 });
+
+test('unrelated Chinese and mixed-language family titles do not collide or require manual adoption',()=>{
+  const cases=[
+    ['（对外）项目对应各部门关系表','打印机知识点（耗材）'],
+    ['POS项目清单','POS认证清单'],
+    ['PDA项目清单','PDA配件清单'],
+  ];
+  for(const [title,heading] of cases){
+    const unrelated='product-knowledge-vault/shared/printer-consumables-knowledge.md';
+    const text=`# ${heading}\nExisting independent knowledge`;
+    const base=new Map([[unrelated,text]]);
+    const input={docid:'e3_chinese_fixture',id:'pos',title};
+    const context=contextFor(input,base);
+    assert.equal(context.indexPath,`product-knowledge-vault/shared/wecom-${hash(input.docid).slice(0,24)}.md`);
+    assert.equal(context.previous,undefined);
+    assert.equal(context.route,undefined);
+    assert.equal(base.size,1);
+    assert.equal(base.get(unrelated),text);
+    assert.equal(contextFor({...input,id:'pda'},base).indexPath,context.indexPath);
+  }
+});
+
+test('real Chinese and English title matches still require explicit adoption of an existing family page',()=>{
+  const existingPage='product-knowledge-vault/shared/existing.md';
+  for(const [title,heading] of [
+    ['项目对应各部门关系表','项目对应各部门关系表'],
+    ['项目对应各部门关系表','项目 对应各部门关系表！'],
+    ['POS项目清单','pos 项目清单'],
+    ['Device and Accessories Guide','DEVICE-and_accessories GUIDE'],
+    ['版本１２','版本 １２'],
+  ]) {
+    assert.throws(()=>contextFor({docid:'e3_match_fixture',id:'sheet',title},new Map([[existingPage,`# ${heading}\nKeep current source`]])),e=>e.review===true && e.message.includes(existingPage) && /Configure wecom-routing/.test(e.message));
+  }
+});
+
+test('empty or punctuation-only title keys never match blank or heading-less pages',()=>{
+  const base=new Map([
+    ['product-knowledge-vault/shared/no-heading.md','Unrelated text without a heading'],
+    ['product-knowledge-vault/shared/symbols.md','# ★ — !!!\n'],
+    ['product-knowledge-vault/shared/blank.md',''],
+  ]);
+  for(const title of ['','★ — !!!','（）','项目负责人']){
+    const input={docid:'e3_empty_fixture',id:'sheet',title};
+    assert.equal(contextFor(input,base).indexPath,`product-knowledge-vault/shared/wecom-${hash(input.docid).slice(0,24)}.md`);
+  }
+});

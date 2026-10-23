@@ -391,12 +391,14 @@ export function contextFor(
       "Configured legacy source is missing. Verify the exact VPS Markdown paths before adopting the shared index.",
     );
   if (!existing && !input.route) {
-    const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normalize = (v: string) => v.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    const titleKey = normalize(input.title);
     const candidates = [...base].filter(
       ([p, t]) =>
         p.startsWith("product-knowledge-vault/shared/") &&
         !t.includes(marker) &&
-        normalize(t.match(/^#\s+(.+)$/m)?.[1] ?? "") === normalize(input.title),
+        titleKey !== "" &&
+        normalize(t.match(/^#\s+(.+)$/m)?.[1] ?? "") === titleKey,
     );
     if (candidates.length)
       throw new PlanError(
