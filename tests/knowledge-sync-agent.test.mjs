@@ -60,7 +60,6 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
     reviewedPaths: [],
   };
   const calls = [
-    { name: "finish_sync", args: decision },
     { name: "read_candidate_source", args: {} },
     { name: "read_candidate_source", args: { offset: 20000 } },
     { name: "read_knowledge", args: { path: "MEMORY.md" } },
@@ -80,9 +79,10 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
       args: { path: "product-knowledge-vault/index.md" },
     },
     { name: "finish_sync", args: decision },
+    { name: "finish_sync", args: { ...decision, action: "review" } },
   ];
   calls.splice(
-    calls.length - 1,
+    calls.length - 2,
     0,
     {
       name: "patch_candidate",
@@ -153,7 +153,7 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
     update: async () => {},
   };
   const result = await createPlanner(options)(input);
-  assert.equal(result.decision.action, "add");
+  assert.equal(result.decision.action, "review");
   assert.equal(
     result.staged.get("product-knowledge-vault/index.md"),
     "patched",

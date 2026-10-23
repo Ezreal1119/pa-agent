@@ -122,11 +122,29 @@ export function createPlanner(options: {
       function readFully(key: string, text: string) {
         for (let offset = 0; offset < text.length; offset += 20000)
           if (!readRanges.get(key)?.has(offset))
-            throw new Error(`Read all segments before submitting: ${key}`);
+            throw new SyncError(`Read all segments before submitting: ${key}`);
       }
       let decision: Decision | undefined;
-      let rejected: Decision | undefined;
-      let rejections = 0;
+      let failure: Error | undefined;
+      let rejections = 0, repeatedRejections = 0, lastRejection = "";
+      // Never return a rejected plan, even if a later model request fails or runs out of budget.
+      function rejectPlan(error: SyncError) {
+        const problems = error instanceof PlanError ? error.problems : [error.message];
+        const signature = JSON.stringify([...new Set(problems)].sort());
+        repeatedRejections = signature === lastRejection ? repeatedRejections + 1 : 1;
+        lastRejection = signature;
+        rejections++;
+        if (repeatedRejections >= 2 || rejections >= MAX_PLAN_REPAIRS) failure = error;
+        return {
+          submitted: false,
+          problems,
+          repairsLeft: failure ? 0 : MAX_PLAN_REPAIRS - rejections,
+          stopped: Boolean(failure),
+          instruction: failure
+            ? "Validation failed repeatedly. This attempt is stopped; nothing was published."
+            : "The backend rejected this plan. Fix every listed problem with the candidate tools and call finish_sync again. Choose action=review only when a real business decision (product identity, version order, new product, conflicting facts) is required.",
+        };
+      }
       const deletion =
         input.deletion ?? input.prompt.startsWith("DELETE PREVIEW");
       const tool = (
@@ -142,11 +160,16 @@ export function createPlanner(options: {
           parameters,
           execute: async (_id, args) => {
             input.signal.throwIfAborted();
-            if (decision) throw new Error("Plan already submitted.");
+            if (decision || failure) return {
+              content: [{ type: "text", text: "This maintenance attempt is finished." }],
+              details: {},
+              terminate: true,
+            };
             const value = await run(args);
             return {
               content: [{ type: "text", text: JSON.stringify(value) }],
               details: {},
+              terminate: Boolean(decision || failure),
             };
           },
         });
@@ -401,21 +424,21 @@ export function createPlanner(options: {
             ),
           }),
           async (a) => {
-            if (a.suggestedFeedback || a.reviewOptions?.length) readFully("@candidate", input.markdown);
-            if (a.action !== "review") {
-              readFully("@candidate", input.markdown);
-              for (const p of new Set([
-                ...a.oldPaths,
-                ...a.reviewedPaths,
-                ...staged.keys(),
-                ...(input.association ? [input.association.path,...a.products.map((p:string)=>resolveHub(input.base,p))] : []),
-              ])) {
-                if (p === "product-knowledge-vault/log.md") continue;
-                const original = input.base.get(p);
-                if (original !== undefined) readFully(p, original);
-              }
-            }
             try {
+              if (a.suggestedFeedback || a.reviewOptions?.length) readFully("@candidate", input.markdown);
+              if (a.action !== "review") {
+                readFully("@candidate", input.markdown);
+                for (const p of new Set([
+                  ...a.oldPaths,
+                  ...a.reviewedPaths,
+                  ...staged.keys(),
+                  ...(input.association ? [input.association.path,...a.products.map((p:string)=>resolveHub(input.base,p))] : []),
+                ])) {
+                  if (p === "product-knowledge-vault/log.md") continue;
+                  const original = input.base.get(p);
+                  if (original !== undefined) readFully(p, original);
+                }
+              }
               await input.validate?.(a as Decision);
               buildPlan(
                 input.base,
@@ -428,20 +451,11 @@ export function createPlanner(options: {
                 input.wecom,
               );
             } catch (error) {
-              if (!(error instanceof SyncError)) throw error;
-              const problems =
-                error instanceof PlanError ? error.problems : [error.message];
-              rejected = a as Decision;
-              if (++rejections < MAX_PLAN_REPAIRS)
-                return {
-                  submitted: false,
-                  problems,
-                  repairsLeft: MAX_PLAN_REPAIRS - rejections,
-                  instruction:
-                    "The backend rejected this plan. Fix every listed problem with the candidate tools and call finish_sync again. Choose action=review only when a real business decision (product identity, version order, new product, conflicting facts) is required.",
-                };
-              decision = a as Decision;
-              return { submitted: true, problems };
+              if (!(error instanceof SyncError)) {
+                failure = error instanceof Error ? error : new Error(String(error));
+                return { submitted: false, stopped: true };
+              }
+              return rejectPlan(error);
             }
             decision = a as Decision;
             return { submitted: true };
@@ -450,7 +464,7 @@ export function createPlanner(options: {
       ];
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false },
-        retry: { enabled: true, maxRetries: 2, baseDelayMs: 2000 },
+        retry: { enabled: false, maxRetries: 0, baseDelayMs: 2000 },
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: options.workDir,
@@ -479,13 +493,32 @@ export function createPlanner(options: {
         customTools: tools,
         thinkingLevel: "medium",
       }));
+      // A submitted decision ends the turn before another inference. Keep tool batches ordered
+      // so calls after finish_sync cannot mutate the accepted staged pages.
+      session.agent.toolExecution = "sequential";
+      session.agent.shouldStopAfterTurn = () => Boolean(decision || failure);
       session.agent.onPayload = (payload) => {
         input.signal.throwIfAborted();
-        if (++input.usage.requests > options.maxCalls)
-          throw new Error("Sync text model request budget exceeded.");
+        if (failure) throw failure;
+        if (input.usage.requests >= options.maxCalls) {
+          failure = new Error(`Sync text model request budget exceeded (${input.usage.requests}/${options.maxCalls} request attempts). Nothing was published.`);
+          throw failure;
+        }
+        input.usage.requests++;
         return deep ? applyDeepSeekReasoning(payload, options.effort) : payload;
       };
+      let lastToolError = "", repeatedToolErrors = 0;
       const unsub = session.subscribe((event) => {
+        if (event.type === "tool_execution_end" && !decision && !failure) {
+          if (event.isError) {
+            const message = event.result.content.filter((c: {type: string; text?: string}) => c.type === "text").map((c: {text?: string}) => c.text ?? "").join("\n");
+            const signature = event.toolName + "\0" + message;
+            repeatedToolErrors = signature === lastToolError ? repeatedToolErrors + 1 : 1;
+            lastToolError = signature;
+            if (event.toolName === "finish_sync") rejectPlan(new SyncError(message));
+            else if (repeatedToolErrors >= 2) failure = new SyncError(message);
+          } else { lastToolError = ""; repeatedToolErrors = 0; }
+        }
         if (
           event.type === "message_end" &&
           event.message.role === "assistant"
@@ -496,6 +529,10 @@ export function createPlanner(options: {
             input.usage.output += u.output;
             input.usage.recorded++;
           }
+          if (!failure && (event.message.stopReason === "error" || event.message.stopReason === "aborted"))
+            failure = new Error(event.message.errorMessage || `Sync model request ${event.message.stopReason}.`);
+          if (!failure && event.message.stopReason === "length")
+            failure = new Error("Sync model output reached its token limit before completing a decision. Nothing was published.");
           void input.update().catch(() => {});
         }
       });
@@ -512,7 +549,7 @@ export function createPlanner(options: {
         input.signal.removeEventListener("abort", abort);
         unsub();
       }
-      decision ??= rejected;
+      if (failure) throw failure;
       if (!decision)
         throw new Error(
           "Agent ended without a structured decision. Inspect configuration or Re-Sync.",

@@ -70,7 +70,7 @@ test("main-memory batch preview is read-only; confirmation preserves metadata/un
   const committed = await wait(f.service, job.id, "committed");
   const after = await fs.readFile(f.main, "utf8");
   assert.ok(after.includes(entry('mem_c', 'Unrelated raw text')));
-  assert.ok(!after.includes("mem_b"));
+  assert.ok(!parseMemoryEntries(after).some(entry => entry.id === "mem_b"));
   assert.equal(parseMemoryEntries(after).length, 3);
   assert.equal(await fs.readFile(committed.backup, "utf8"), f.before);
   assert.equal(await fs.readFile(f.extra, "utf8"), "EXTRA FILE MUST STAY UNCHANGED");

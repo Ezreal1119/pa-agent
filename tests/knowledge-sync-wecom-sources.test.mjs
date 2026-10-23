@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { createPlanner } from "../dist/knowledge-sync/agent.js";
 import { WecomImportService } from "../dist/wecom-import/service.js";
 import { wecomConfig } from "../dist/wecom-import/config.js";
 import {
@@ -694,4 +697,58 @@ test("an incorrect legacy route cannot silently drop the migration fallback", as
     () => contextFor(v.input, v.base),
     /Configured legacy source is missing/,
   );
+});
+
+
+test("real planner can correct a legacy review into a verified delete and stop without a final model request", async (t) => {
+  const f = await fixture(t);
+  for (const output of f.outputs) {
+    const v = await verified(f, output);
+    await publish(f, makePlan(v, contextFor(v.input, v.base)));
+  }
+  const base = await catalog(f.root);
+  const deletion = {
+    action: "delete", products: ["UPad"], slot: "accessories", oldPaths: [old],
+    reason: "Verified migration", summary: "Retire only the old complete workbook",
+    versionEvidence: "Administrator deletion", authorizedException: false,
+    reviewedPaths: [hub, node, ...dependents(base, [old])],
+  };
+  const calls = [
+    { name: "finish_sync", args: { ...deletion, action: "review" } },
+    ...[...new Set([old, ...deletion.reviewedPaths])].map(p => ({name: "read_knowledge", args: {path: p}})),
+    { name: "write_candidate", args: {path: hub, text: base.get(hub)} },
+    { name: "finish_sync", args: deletion },
+  ];
+  let requests = 0;
+  const server = createServer(async (req, res) => {
+    for await (const chunk of req) {}
+    const call = calls[requests++];
+    res.writeHead(200, {"content-type": "text/event-stream"});
+    const delta = call
+      ? {role: "assistant", tool_calls: [{index: 0, id: `call-${requests}`, type: "function", function: {name: call.name, arguments: JSON.stringify(call.args)}}]}
+      : {role: "assistant", content: "Unnecessary final response"};
+    for (const [part, finish] of [[delta, null], [{}, call ? "tool_calls" : "stop"]])
+      res.write(`data: ${JSON.stringify({id: "fixture", object: "chat.completion.chunk", created: 1, choices: [{index: 0, delta: part, finish_reason: finish}], ...(finish ? {usage: {prompt_tokens: 100, completion_tokens: 10}} : {})})}\n\n`);
+    res.end("data: [DONE]\n\n");
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => {server.closeAllConnections(); await new Promise(r => server.close(r));});
+  const usage = emptyUsage();
+  const result = await createPlanner({
+    model: {apiKey: "fixture", modelId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, contextWindow: 128000, maxTokens: 16384},
+    effort: "low", resourcesDir: path.resolve("resources"), workDir: path.join(f.dataDir, "planner"), maxCalls: 64, acquire: async () => () => {},
+  })({
+    base, markdown: "", prompt: "DELETE PREVIEW: retire only the migrated workbook", deletion: true,
+    feedback: "", batch: [], deletions: [], timestamp: "202610230004", signal: AbortSignal.timeout(10000), usage, update: async () => {},
+    validate: d => verifyRetirement(f.dataDir, base, d),
+  });
+  assert.equal(result.decision.action, "delete");
+  assert.equal(requests, calls.length, "no inference after the accepted decision");
+  assert.equal(usage.requests, requests);
+  const plan = buildPlan(base, result.staged, result.decision, "", "", true);
+  assert((await catalog(f.root)).has(old), "preview keeps the original until explicit publication");
+  await publish(f, plan);
+  const after = await catalog(f.root);
+  assert(!after.has(old)); assert(after.has(dock));
+  for (const member of indexes(after)[0].members) assert(after.has(member.path));
 });
