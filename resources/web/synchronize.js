@@ -111,6 +111,9 @@ function updateControls() {
       : "Select files to start a sync.";
 }
 async function api(route, method = "GET", body) {
+  if ((method === "GET" && /^jobs\/[^/]+$/.test(route)) ||
+      (method !== "GET" && (route === "jobs" || route === "delete-preview" || /^jobs\/[^/]+\/(stop|resync|cleanup|confirm)$/.test(route))))
+    route += "?view=summary";
   const response = await fetch(`/api/sync/${route}`, {
     method,
     headers: {
@@ -284,7 +287,43 @@ async function loadHistory() {
   }
   if (selected) await renderJob(await api(`jobs/${selected}`));
 }
-function diff(change) {
+const reportDetails = new Map();
+let detailJob;
+// Reuse expanded nodes across progress polls. Closing releases the downloaded body.
+function lazyDetail(key, label, load) {
+  if (reportDetails.has(key)) return reportDetails.get(key);
+  const node = el("details"), body = el("div");
+  node.append(el("summary", label), body);
+  let loading = false, loaded = false;
+  async function fetchBody() {
+    if (loading || loaded || !node.open) return;
+    loading = true;
+    body.replaceChildren(el("p", "Loading…", "sync-subtle"));
+    try {
+      const content = await load();
+      if (node.open) { body.replaceChildren(content); loaded = true; }
+    } catch (e) {
+      const retry = el("button", "Retry", "sync-button");
+      retry.type = "button"; retry.onclick = fetchBody;
+      if (node.open) body.replaceChildren(el("p", e.message || String(e)), retry);
+    } finally { loading = false; }
+  }
+  node.ontoggle = () => {
+    if (node.open) void fetchBody();
+    else { body.replaceChildren(); loaded = false; }
+  };
+  reportDetails.set(key, node);
+  return node;
+}
+function diff(change, jobId, itemId, index) {
+  if (change.lazy) return lazyDetail(
+    `${itemId}/change/${index}/${change.revision}`,
+    `${change.action} · ${change.path}`,
+    async () => {
+      const result = await api(`jobs/${jobId}/items/${itemId}/changes/${index}?revision=${change.revision}`);
+      return diff(result.change).children[1];
+    },
+  );
   const wrapper = el("details");
   wrapper.append(
     el(
@@ -359,6 +398,12 @@ async function renderJob(job) {
   )
     return;
   jobCache = key;
+  if (detailJob !== job.id) { reportDetails.clear(); detailJob = job.id; }
+  const liveDetails = new Set(job.items.flatMap(item => [
+    `${item.id}/coverage`,
+    ...(item.plan?.changes || []).map((change, index) => `${item.id}/change/${index}/${change.revision}`),
+  ]));
+  for (const key of reportDetails.keys()) if (!liveDetails.has(key)) reportDetails.delete(key);
   const holder = $("report");
   holder.replaceChildren();
   const head = el("div", undefined, "sync-report-heading"),
@@ -494,7 +539,7 @@ async function renderJob(job) {
         ),
       );
       if (d.versionEvidence) (decisionEvidence || content).append(el("p", d.versionEvidence));
-      for (const change of item.plan.changes) content.append(diff(change));
+      item.plan.changes.forEach((change, index) => content.append(diff(change, job.id, item.id, index)));
     }
     if (item.coverage) {
       const details = el("details");
@@ -504,6 +549,11 @@ async function renderJob(job) {
       );
       content.append(details);
     }
+    if (!item.coverage && item.coverageCount > 0)
+      content.append(lazyDetail(`${item.id}/coverage`, `Conversion coverage · ${item.coverageCount} checks`, async () => {
+        const result = await api(`jobs/${job.id}/items/${item.id}/coverage`);
+        return el("pre", result.coverage.join("\n"));
+      }));
     if (job.kind === "sync")
       content.append(
         el(

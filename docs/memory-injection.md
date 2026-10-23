@@ -2,7 +2,7 @@
 
 管理员登录后，侧栏Synchronize上方的Memory Injection打开单个对话框。输入自然语言新增、更正或删除主记忆，可通过 **Attach file** 附上一份图片、文档或 UTF-8 文本，再点击 Generate preview；AI判断ADD/UPDATE/DELETE并整理正文。意图或匹配条目不明确时显示问题，修改输入后重新预览，不能确认含疑问的修改。英文控件，模型说明按输入语言生成。对话框底部的Download Memory File直接下载当前已保存的主MEMORY.md，不包含未确认预览或MEMORY_EXTRA，不调用模型、不改变文件。下载保留原始字节（包括BOM和换行），格式异常时也可下载备份；仍拒绝链接文件和超过2MiB的文件。
 
-预览逐条展示操作、精确ID、理由及修改前后完整条目。只有点击Confirm injection才更新`.data/memory/urovo-product-expert/MEMORY.md`。修改预览后的输入，或替换/移除附件，都会隐藏确认按钮，必须重新生成预览。普通聊天memory工具继续只写同目录MEMORY_EXTRA.md，WeCom/MCP凭证不能使用管理员接口。主记忆和额外记忆仍每轮分别注入；UMS无新记忆逻辑。
+预览逐条展示操作、精确ID、理由及修改前后完整条目。AI 预览流程只有点击Confirm injection才更新`.data/memory/urovo-product-expert/MEMORY.md`。修改预览后的输入，或替换/移除附件，都会隐藏确认按钮，必须重新生成预览。普通聊天memory工具继续只写同目录MEMORY_EXTRA.md，WeCom/MCP凭证不能使用管理员接口。主记忆和额外记忆仍每轮分别注入；UMS无新记忆逻辑。
 
 ## 模型与保存
 
@@ -62,3 +62,30 @@ systemctl status product-expert.service --no-pager
 - 文件在隔离的 `.data/memory-injection/files/memory-<uuid>/` 管理；客户端和模型都不传文件路径。公开预览绑定单附件ID/名称/大小/SHA256，正文修改和原有主记忆版本确认规则不变。文本与视觉已记录 Token 分开显示。
 - 移除/替换已上传附件会删除对应临时存储；关闭对话框不取消后台预览，刷新后可恢复已生成预览及附件元信息。未使用的本地文件选择不跨刷新保存。临时附件目录在启动及下次上传时清理超过24小时的目录，最多64份、原件合计512MiB；报告不保存整份附件正文，既有主记忆预览/审计保留策略不变。
 - 无新依赖、环境变量或 systemd 调整；已有图片识别配置可复用。按本轮要求未运行构建、测试、浏览器、真实文件或模型验证，尚未部署。
+
+
+## 直接编辑与 Extra Memory 下载
+
+Memory Injection 底部另外提供三个入口：
+
+- **Edit Memory**：打开主记忆 `memory/urovo-product-expert/MEMORY.md` 的完整 Markdown。
+- **Edit Extra Memory**：打开 `memory/urovo-product-expert/MEMORY_EXTRA.md`；缺失时显示空内容，可首次保存创建。
+- **Download Extra Memory**：下载当前已保存的 `MEMORY_EXTRA.md`；不包含未保存草稿，也不包含主记忆。原 Download Memory File 保留。
+
+直接编辑不调用 AI，也不需要生成预览。编辑器显示 Unsaved changes，只有点击 **Save changes** 才保存；关闭/按 Escape/Reload 时，有草稿需确认放弃。保存期间禁用编辑和关闭，保存失败或版本冲突保留草稿，可手动复制后 Reload 获取新版本再合并。迟到的读取不会覆盖重新打开的另一种记忆。CRLF 文件在编辑时保留 CRLF 换行。
+
+保存内容上限 2 MiB，拒绝 NUL、无效 UTF-8、损坏或重复的记忆条目结构；必须沿用 `# Skill Memories` / `## Memory mem_…` / 元数据 / `### Content` 格式。正文标题层级仍只是格式偏好，不新增 `###` 强制验证。编辑已有事实时保留条目 ID 和元数据。主记忆不能清成空白，可保留头部表示空列表；Extra Memory 允许空白以清空全部条目。格式异常的有效 UTF-8 旧文件可先读取并修复；非法 UTF-8 无法进入编辑器，但下载保留原字节以便外部修复。链接文件拒绝读写。
+
+主记忆保存使用现有维护互斥和知识写锁，等待当前回答释放读锁，保存前再次检查打开版本；AI Memory Injection 正在运行时直接保存返回冲突，避免互相覆盖。主记忆旧文备份到 `.data/maintenance-backups/main-memory/manual-<UUID>.md`；Extra 编辑与普通 `memory` 工具共用单进程队列、Revision 检查、临时文件原子替换及 `.data/maintenance-backups/extra-memory/` 备份。同原有工具，不提供跨进程 writer 锁，请勿启动多个写同一 Extra Memory 的进程。备份、记忆都保持 Git 忽略。
+
+直接修改主记忆后，当前旧 AI 预览不能继续确认，需要重新 Generate preview；后端 Revision 校验也会拒绝其他页面持有的旧预览。Extra 修改不会让主记忆预览失效。保存后，已有会话的下一次 run 自动读取新内容，当前 run 仍用原快照，不需要重建 session。
+
+新增管理员接口：
+
+- `GET /api/memory-injection/files/main`、`GET /api/memory-injection/files/extra`：返回 `{text, revision}`。
+- 对同一路径 `PUT`，仅接受 `{text, revision}`，保存成功返回新内容、Revision 和 changed；版本冲突返回 409。
+- `GET /api/memory-injection/download-extra`：原始字节下载，文件名 `MEMORY_EXTRA.md`。
+
+沿用管理员 Cookie、Origin、CSRF；Bridge/MCP 凭证无编辑或下载管理权限。不接收文件路径/查询参数，不提供其他文件读写能力。原 AI 预览、确认、附件接口保持。
+
+部署只需原有代码更新、构建并重启主 Web 服务，再刷新页面；不新增 npm 依赖、环境变量或 systemd/helper 配置。前提与原 Memory Injection 相同：主记忆不能被旧单文件 ReadOnlyPaths 挂载保护。无需重启 Bridge 或重建聊天。

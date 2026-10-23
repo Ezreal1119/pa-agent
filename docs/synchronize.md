@@ -146,7 +146,7 @@ SYNC 单次视觉请求的等待时间为 `max(VISION_TIMEOUT_MS, 180000)` 毫�
 Library Tab 递归显示 `urovo-product-expert/`（跳过点路径与符号链接），Markdown 可预览或看源码。可编辑 `.md`/`.txt`（≤2 MiB，含 MEMORY.md）；`newly_added/`、`SKILL.md`、`SYNC.md`、`SYNC_PROMPT.md` 和其他格式只读。保存前显示 diff；服务端核对打开时哈希，在知识库写锁内原子写入，旧版备份到 `.data/maintenance-backups/library-edits/<时间>/`，并追加 `edits.jsonl`。手工编辑不会重新校验索引，改 Hub/index 时需自行保持链接一致。
 
 
-侧栏另有独立的 [Memory Injection](memory-injection.md) 对话框，仅在管理员确认预览后维护主MEMORY.md，不属于资料Synchronize任务，也不改MEMORY_EXTRA.md。
+侧栏另有独立的 [Memory Injection](memory-injection.md) 对话框，AI 预览确认维护主MEMORY.md；同时提供管理员直接编辑主/Extra Memory 及各自下载，不属于资料Synchronize任务。直接保存校验格式/Revision 并备份，不调用模型，普通聊天工具权限不变。
 
 
 ## Manual source imports
@@ -166,3 +166,9 @@ Library Tab 递归显示 `urovo-product-expert/`（跳过点路径与符号链�
 ## Library source imports (2026-10-21)
 
 Source imports now contains independent **SFTP imports** and **Library imports** sections. Library imports selects only the latest complete upstream report's added/updated keys, classifies eligible document metadata using the shared text model and delivers verified PDF/PPTX/XLSX/DOCX files into Incoming. Run now / Stop and histories are separate; neither source importer starts knowledge Sync. Configuration, weekly Monday 06:00 Beijing timer templates, persistence and failure handling are described in [Library imports](library-import.md). Templates were generated only; this implementation round ran no build, tests, model/download requests or VPS operations.
+
+## 报告读取与进度保存（2026-10-23）
+
+页面两秒轮询只获取 `GET /api/sync/jobs/:id?view=summary`：保留状态、用量、问题、选项和差异路径/摘要修订号，不发送完整前后正文、WeCom 抓取元数据或覆盖检查正文。展开差异时才读取 `GET /api/sync/jobs/:id/items/:itemId/changes/:index?revision=:revision`；展开覆盖检查时读取对应 `/coverage`。关闭释放浏览器差异正文，进度轮询保留已展开的节点；内容修订变化后重新加载。详情拒绝过期 revision；权限仍为管理员 Cookie，写操作继续要求 Origin/CSRF，机器凭证无维护权限。启动/停止/Re-Sync 等请求可同样用 `?view=summary` 获取轻量返回。
+
+不带查询参数的原报告 GET/POST 返回保持兼容，磁盘历史报告、计划和发布事务格式不迁移。摘要常驻内存只缓存路径/修订号；单个历史差异展开仍需解析原报告 JSON，详情读取在服务内串行进行。自动 Token 进度写入按一秒窗口合并，不为每条用量消息排队一份完整 JSON 字符串；序列化延迟到实际写入时。阶段、发布、错误、停止、退出的保存仍等待原子写入，并刷新最新计数。突然断电/强杀可能丢失最近一秒的用量显示，不影响已提交的发布事务恢复。

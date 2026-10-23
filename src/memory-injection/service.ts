@@ -59,6 +59,29 @@ export class MemoryInjectionService {
     } finally { await handle.close(); }
   }
   async download() { return this.readBytes(); }
+  async editorSnapshot() {
+    const text = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(await this.readBytes());
+    return {text, revision: hash(text)};
+  }
+  async edit(text: unknown, revision: unknown) {
+    if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text) > MAX_BYTES || text.includes("\0") || Buffer.from(text).toString("utf8") !== text)
+      throw new SyncError("Main memory must be nonempty UTF-8 text of at most 2 MiB without NUL.");
+    if (typeof revision !== "string" || !/^[a-f0-9]{64}$/.test(revision)) throw new SyncError("Provide the revision you opened.");
+    try { parseMemoryEntries(text, "Main memory"); } catch (error) { throw new SyncError((error as Error).message); }
+    this.reserve();
+    let release: (() => void) | undefined;
+    try {
+      release = await knowledgeLock(path.join(this.options.dataDir, "urovo-product-expert")).write(AbortSignal.timeout(60000));
+      const before = await this.editorSnapshot();
+      if (before.revision !== revision) throw new SyncError("Main memory changed. Reload and reapply your edits.", 409);
+      if (before.text === text) return {...before, changed: false};
+      const backup = await safePath(this.options.dataDir, `maintenance-backups/main-memory/manual-${randomUUID()}.md`);
+      await atomic(backup, before.text);
+      if ((await this.editorSnapshot()).revision !== revision) throw new SyncError("Main memory changed before publication. Reload and reapply your edits.", 409);
+      await atomic(mainMemoryFile(this.options.dataDir), text);
+      return {text, revision: hash(text), changed: true};
+    } finally { release?.(); this.busy = false; }
+  }
   private async snapshot() {
     const memory = new TextDecoder("utf-8", {fatal: true}).decode(await this.readBytes());
     if (!memory.trim()) throw new SyncError("Main memory is empty. Restore it before injecting changes.");

@@ -5,7 +5,7 @@
   <meta name="description" content="Product Expert workspace for product knowledge, UMS, and conversations.">
   <title>Product Expert · Workspace</title>
   <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/memory-injection.css"><link rel="stylesheet" href="/prompt.css">
-  <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script><script defer src="/memory-injection.js"></script><script defer src="/prompt.js"></script>
+  <script defer src="/vendor/marked.js"></script><script defer src="/vendor/purify.js"></script><script defer src="/app.js"></script><script defer src="/memory-injection.js"></script><script defer src="/memory-editor.js"></script><script defer src="/prompt.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -147,6 +147,15 @@
     <div id="prompt-discard" hidden><p>Discard unsaved changes?</p><button id="prompt-keep" type="button" class="secondary-button">Keep editing</button> <button id="prompt-discard-confirm" type="button" class="secondary-button">Discard changes</button></div>
     <div class="prompt-footer"><span id="prompt-status" role="status"></span><button id="prompt-reload" type="button" class="secondary-button">Reload</button><button id="prompt-cancel" type="button" class="secondary-button">Close</button><button id="prompt-save" type="button" class="primary-button">Save changes</button></div>
   </dialog>
+  <dialog id="memory-editor-dialog" aria-labelledby="memory-editor-title">
+    <div class="dialog-heading"><div><span class="eyebrow">DIRECT MEMORY EDITOR</span><h2 id="memory-editor-title">Edit Memory</h2></div><button id="memory-editor-close" type="button" class="icon-close" aria-label="Close memory editor">×</button></div>
+    <p id="memory-editor-description" class="settings-help"></p>
+    <label for="memory-editor-text">Markdown source</label>
+    <textarea id="memory-editor-text" rows="18" spellcheck="false" aria-describedby="memory-editor-help"></textarea>
+    <p id="memory-editor-help" class="settings-help">Edit the complete file. Keep # Skill Memories, entry IDs and metadata in their existing format. Saves are validated and backed up; no AI is involved. Maximum 2 MiB.</p>
+    <p id="memory-editor-error" class="form-error" role="alert" hidden></p>
+    <div class="dialog-actions memory-editor-actions"><span id="memory-editor-status" role="status"></span><button id="memory-editor-reload" type="button" class="secondary-button">Reload</button><button id="memory-editor-cancel" type="button" class="secondary-button">Close</button><button id="memory-editor-save" type="button" class="primary-button">Save changes</button></div>
+  </dialog>
   <dialog id="memory-injection-dialog" aria-labelledby="memory-injection-title">
     <form id="memory-injection-form">
       <div class="dialog-heading"><div><span class="eyebrow">MAIN BUSINESS MEMORY</span><h2 id="memory-injection-title">Memory Injection</h2></div><button id="memory-injection-close" type="button" class="icon-close" aria-label="Close memory injection">×</button></div>
@@ -171,7 +180,7 @@
         <div id="memory-injection-changes"></div>
         <p id="memory-injection-usage" class="settings-help"></p>
       </section>
-      <div class="dialog-actions memory-injection-actions"><button id="memory-injection-download" type="button" class="secondary-button">Download Memory File</button><button id="memory-injection-cancel" type="button" class="secondary-button">Close</button><button id="memory-injection-confirm" type="button" class="primary-button" hidden>Confirm injection <span>↗</span></button></div>
+      <div class="dialog-actions memory-injection-actions"><div class="memory-file-actions"><button id="memory-injection-edit-main" type="button" class="secondary-button">Edit Memory</button><button id="memory-injection-edit-extra" type="button" class="secondary-button">Edit Extra Memory</button><button id="memory-injection-download" type="button" class="secondary-button">Download Memory File</button><button id="memory-injection-download-extra" type="button" class="secondary-button">Download Extra Memory</button></div><button id="memory-injection-cancel" type="button" class="secondary-button">Close</button><button id="memory-injection-confirm" type="button" class="primary-button" hidden>Confirm injection <span>↗</span></button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="alert" hidden></div>

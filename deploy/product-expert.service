@@ -14,7 +14,7 @@ Environment=NODE_ENV=production
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/opt/ProductExpertCloud/.data/agent
 # .env is read by dotenv from WorkingDirectory, using the same syntax as local runs.
-ExecStart=/usr/bin/env node --max-old-space-size=256 /opt/ProductExpertCloud/dist/web/cli.js
+ExecStart=/usr/bin/env node --max-old-space-size=1024 /opt/ProductExpertCloud/dist/web/cli.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

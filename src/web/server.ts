@@ -103,6 +103,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
   const auth = new WebAuth(adminAccount, adminPassword);
+  await auth.initialize(dataDir);
   const wecomContacts = new WecomContacts(dataDir);
   const bridgeToken = options.bridgeToken ?? process.env.WECOM_API_TOKEN ?? diskEnv.WECOM_API_TOKEN ?? "";
   const bridge = new BridgeAccess(dataDir, bridgeToken);
@@ -443,7 +444,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (retryAfter) { res.setHeader("Retry-After", retryAfter); throw new HttpError(429, "Too many sign-in attempts. Try again in one minute."); }
         const body = await readBody(req);
         if (typeof body.account !== "string" || typeof body.password !== "string" || body.account.length > 256 || body.password.length > 4096) throw new HttpError(400, "Enter a valid account and password.");
-        if (!auth.login(req, res, body.account.trim(), body.password, secureCookies)) throw new HttpError(401, "Incorrect account or password.");
+        if (!await auth.signIn(req, res, body.account.trim(), body.password, secureCookies)) throw new HttpError(401, "Incorrect account or password.");
         return json(res, 200, { ok: true });
       }
       const publicAsset = ["/login", "/login.js", "/style.css"].includes(url.pathname) && (method === "GET" || method === "HEAD");
@@ -453,7 +454,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
-        auth.logout(req, res, secureCookies); return json(res, 200, { ok: true });
+        await auth.signOut(req, res, secureCookies); return json(res, 200, { ok: true });
       }
       if (url.pathname === "/api/prompt" || url.pathname === "/api/prompt/preview") {
         if (machine) throw new HttpError(403, "Prompt management requires administrator login.");
@@ -481,6 +482,25 @@ export async function createWebServer(options: WebOptions = {}) {
           const bytes = await memoryInjection.download();
           res.writeHead(200, {"Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": 'attachment; filename="MEMORY.md"', "Content-Length": bytes.length});
           res.end(bytes); return;
+        }
+        if (url.pathname === "/api/memory-injection/download-extra" && method === "GET") {
+          if (url.search) throw new HttpError(400, "Memory download does not accept query parameters.");
+          const bytes = await new ExtraMemoryStore(dataDir).download();
+          res.writeHead(200, {"Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": 'attachment; filename="MEMORY_EXTRA.md"', "Content-Length": bytes.length, "Cache-Control": "no-store"});
+          res.end(bytes); return;
+        }
+        const memoryFile = url.pathname.match(/^\/api\/memory-injection\/files\/(main|extra)$/);
+        if (memoryFile) {
+          if (url.search) throw new HttpError(400, "The memory editor does not accept query parameters or paths.");
+          res.setHeader("Cache-Control", "no-store");
+          const extra = new ExtraMemoryStore(dataDir);
+          if (method === "GET") return json(res, 200, await (memoryFile[1] === "main" ? memoryInjection.editorSnapshot() : extra.editorSnapshot()));
+          if (method !== "PUT") throw new HttpError(405, "Use GET or PUT for the memory editor.");
+          const body = await readBody(req, 16 * 1024 * 1024);
+          if (Object.keys(body).some(k => !["text", "revision"].includes(k))) throw new HttpError(400, "Only text and revision are accepted.");
+          if (memoryFile[1] === "main") return json(res, 200, await memoryInjection.edit(body.text, body.revision));
+          try { return json(res, 200, await extra.replace(body.text, body.revision)); }
+          catch (error) { throw new HttpError(String((error as Error).message).startsWith("MEMORY_CONFLICT:") ? 409 : 400, (error as Error).message); }
         }
         if (url.pathname === "/api/memory-injection/attachments" && method === "POST") {
           if ([...url.searchParams.keys()].some(key => key !== "name")) throw new HttpError(400, "Only a filename is accepted.");
@@ -606,16 +626,28 @@ export async function createWebServer(options: WebOptions = {}) {
         if (route === "incoming" && method === "DELETE") return json(res, 200, await synchronize.removeIncoming(url.searchParams.get("id")));
         if (route === "incoming" && method === "POST") { const file=await synchronize.upload(url.searchParams.get("name") ?? "", req);return json(res,"ignored" in file?200:201,file); }
         if (route === "jobs" && method === "GET") return json(res, 200, { jobs: synchronize.list() });
-        if (route === "jobs" && method === "POST") return json(res, 202, await synchronize.start((await readBody(req)).ids));
-        if (route === "delete-preview" && method === "POST") return json(res, 202, await synchronize.preview((await readBody(req)).prompt));
+        const wantsSummary = url.searchParams.get("view") === "summary";
+        const respondJob = (job: Awaited<ReturnType<typeof synchronize.get>>, status: number) =>
+          json(res, status, wantsSummary ? synchronize.summary(job.id) : job);
+        if (route === "jobs" && method === "POST") return respondJob(await synchronize.start((await readBody(req)).ids), 202);
+        if (route === "delete-preview" && method === "POST") return respondJob(await synchronize.preview((await readBody(req)).prompt), 202);
+        const detail = route.match(/^jobs\/([a-f0-9-]{36})\/items\/([a-f0-9-]{36})\/(coverage|changes\/(\d+))$/);
+        if (detail && method === "GET") {
+          const coverage = detail[3] === "coverage";
+          if ([...url.searchParams.keys()].some(k => coverage || k !== "revision")) throw new HttpError(400, "Invalid report detail query.");
+          return json(res, 200, await synchronize.detail(detail[1]!, detail[2]!, coverage ? "coverage" : "change", Number(detail[4] ?? 0), url.searchParams.get("revision") ?? undefined));
+        }
         const match = route.match(/^jobs\/([a-f0-9-]{36})(?:\/(stop|resync|cleanup|confirm))?$/);
-        if (match && method === "GET" && !match[2]) return json(res, 200, await synchronize.get(match[1]!));
+        if (match && method === "GET" && !match[2]) {
+          if ([...url.searchParams].some(([k,v]) => k !== "view" || v !== "summary")) throw new HttpError(400, "Invalid report view.");
+          return json(res, 200, wantsSummary ? synchronize.summary(match[1]!) : await synchronize.get(match[1]!));
+        }
         if (match && method === "POST") {
           const body = await readBody(req);
-          if (match[2] === "stop") return json(res, 200, await synchronize.stop(match[1]!));
-          if (match[2] === "confirm") return json(res, 202, await synchronize.confirm(match[1]!, body.itemId));
-          if (match[2] === "resync") return json(res, 202, await synchronize.resync(match[1]!, body.itemId, body.feedback ?? "", body.forceConvert === true));
-          if (match[2] === "cleanup") return json(res, 200, await synchronize.cleanup(match[1]!, body.itemId));
+          if (match[2] === "stop") return respondJob(await synchronize.stop(match[1]!), 200);
+          if (match[2] === "confirm") return respondJob(await synchronize.confirm(match[1]!, body.itemId), 202);
+          if (match[2] === "resync") return respondJob(await synchronize.resync(match[1]!, body.itemId, body.feedback ?? "", body.forceConvert === true), 202);
+          if (match[2] === "cleanup") return respondJob(await synchronize.cleanup(match[1]!, body.itemId), 200);
         }
         throw new HttpError(404, "Sync operation not found.");
       }
@@ -950,6 +982,7 @@ export async function createWebServer(options: WebOptions = {}) {
         "/login.js": [path.join(resourcesDir, "web/login.js"), "text/javascript; charset=utf-8"],
         "/prompt.js": [path.join(resourcesDir, "web/prompt.js"), "text/javascript; charset=utf-8"],
         "/prompt.css": [path.join(resourcesDir, "web/prompt.css"), "text/css; charset=utf-8"],
+        "/memory-editor.js": [path.join(resourcesDir, "web/memory-editor.js"), "text/javascript; charset=utf-8"],
         "/memory-injection.js": [path.join(resourcesDir, "web/memory-injection.js"), "text/javascript; charset=utf-8"],
         "/memory-injection.css": [path.join(resourcesDir, "web/memory-injection.css"), "text/css; charset=utf-8"],
         "/app.js": [path.join(resourcesDir, "web/app.js"), "text/javascript; charset=utf-8"],
@@ -983,7 +1016,7 @@ export async function createWebServer(options: WebOptions = {}) {
     await memoryClosing;
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
-    auth.dispose(); retention.dispose();
+    await auth.close(); retention.dispose();
     server.closeAllConnections();
     if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }

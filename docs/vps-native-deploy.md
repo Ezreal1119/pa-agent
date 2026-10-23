@@ -59,7 +59,32 @@ journalctl -u product-expert.service -n 80 --no-pager
 
 若 Node 检查失败，先提供系统范围内的 Node >=22.19，再启动。普通账号必须能读取项目代码及所有上级目录。unit 的 ProtectHome=yes 不支持把 Node/Python 或运行资源放在 /root、/home 下。不要为了让它启动改为 root。
 
-模板适配 2 vCPU / 4 GiB VPS：主进程 JS 堆256MiB、每 worker JS 堆384MiB；整个服务及全部子进程共 MemoryHigh=2200M、MemoryMax=2600M、MemorySwapMax=512M、CPUQuota=150%、TasksMax=192。大幅面 PDF 转换 worker 实测峰值约 0.7 GB（画布像素不受 JS 堆限制）；原 1.6GiB 配置的 1100M 上限会把它杀掉。这些不是最大文件一定可处理的承诺。OOM 时整组结束，systemd 按 on-failure 重启，正在进行的 run 会中断。文件队列仍只执行一个重任务。
+模板适配 2 vCPU / 4 GiB VPS：主进程 JS 堆1024MiB、每 worker JS 堆384MiB；整个服务及全部子进程共 MemoryHigh=2200M、MemoryMax=2600M、MemorySwapMax=512M、CPUQuota=150%、TasksMax=192。大幅面 PDF 转换 worker 实测峰值约 0.7 GB（画布像素不受 JS 堆限制）；原 1.6GiB 配置的 1100M 上限会把它杀掉。这些不是最大文件一定可处理的承诺。OOM 时整组结束，systemd 按 on-failure 重启，正在进行的 run 会中断。文件队列仍只执行一个重任务。
+
+### 主进程内存与登录升级
+
+2026-10-23 VPS 日志显示主进程在约 256 MiB JS 堆上限连续 OOM，虽然机器仍有可用物理内存。新模板将主进程堆上限调到 1024 MiB；不提高整个服务的 MemoryMax，不修改导入 timer、worker 上限或重任务串行队列。旧报告轮询反复读取、复制、发送整份差异的路径也已改为摘要，差异和覆盖检查按展开加载；Token 进度最多每秒合并一次落盘，阶段切换、发布、停止和退出仍等待保存。
+
+已有 VPS 推荐只装下面的 drop-in，保留当前 root/productexpert 运行账号、ProtectHome、ReadWritePaths 和其他本地配置。先由管理员提交/推送代码；在 VPS 执行：
+
+```bash
+cd /opt/ProductExpertCloud
+git pull --ff-only
+npm run build
+install -d -o root -g root -m 0755 /etc/systemd/system/product-expert.service.d
+install -o root -g root -m 0644 deploy/product-expert-memory.conf /etc/systemd/system/product-expert.service.d/20-memory.conf
+systemctl daemon-reload
+systemctl restart product-expert.service
+systemctl show product-expert.service -p ExecStart -p MemoryHigh -p MemoryMax
+```
+
+确认 ExecStart 含 `--max-old-space-size=1024`；若另有覆盖 ExecStart 的更后序本地 drop-in，以 `systemctl cat product-expert.service` 检查并由管理员合并。此次没有新依赖，已有 node_modules 正常时不必重新 `npm ci`。单纯拉代码或 build 不会改变 VPS 正在使用的 systemd 内存参数。安装模板不由应用自动执行。
+
+登录会话现在保存到 `.data/web-auth/sessions.json`：最多 128 条令牌 SHA256 摘要和原过期时间，使用由管理员凭据派生的密钥校验 HMAC；不保存原始 Cookie、账号密码或模型凭据。文件及原子临时文件为 0600，目录为 0700，符号链接/硬链接/过大或损坏格式拒绝加载。更换管理员凭据会使旧签名失效；退出登录持久撤销该 Cookie。七天从登录起算，不因重启或普通访问续期。首次升级以前的内存会话无法从 Cookie 反推恢复，因此需要重新登录一次；之后的服务重启保留有效登录。服务重启仍更换 CSRF Token，旧页面若遇 403，只需刷新页面，无需放宽校验或自动重放保存请求。不要将此文件加入 Git，也不要在多个 Web 进程间共用它。
+
+本机 Node 22.23.2 合成压测：12 项差异、约 26.9 MB 完整报告，4 路并发、64 次读取；旧完整视图每次 26,934,839 bytes、峰值 RSS 1369 MiB，新摘要每次 7,715 bytes、峰值 RSS 190 MiB。两个独立进程均使用 1024 MiB 堆，包含初始化开销；通过 `node scripts/profile-sync-reports.mjs` 可在隔离临时目录重现，结果保存 `.data/debug/report-profile.json`。这些是合成报告的读取/序列化结果，不是正式 VPS、真实模型或整机同时转换文件的内存承诺。单次显式展开旧报告仍需解析该报告 JSON，但串行执行且不复制返回其他正文；超大单份历史报告、模型上下文和原生 worker 仍会占用内存，部署后继续观察日志。
+
+### 服务权限
 
 ProtectSystem=strict，只开放 `.data/` 写入，再把产品SKILL/SYNC_PROMPT、可选UMS和转换器环境设为ReadOnlyPaths；产品资料由Synchronize维护，MEMORY_EXTRA、sessions、files、维护备份和设置仍可写。PrivateTmp、无额外 capabilities、NoNewPrivileges 一并启用。管理员在服务外仍能维护文件。这里是整个服务的权限边界，并非每个 worker 只能看见 job 目录；worker 仍能读取同账号可读文件，仍可联网，主进程也需要访问模型 API。参考 [systemd.exec](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) 和 [resource-control](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)。
 

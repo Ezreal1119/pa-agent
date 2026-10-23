@@ -1,3 +1,4 @@
+import {ReportViews} from "./report-view.js";
 import { incomingWecom, contextFor, verifyRetirement } from "./wecom-sources.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -84,6 +85,9 @@ export class SyncService {
   private archived = new Set<string>();
   private inputHashes = new Map<string, { signature: string; hash: string }>();
   private saveTail: Promise<unknown> = Promise.resolve();
+  private readonly reportViews = new ReportViews();
+  private detailTail: Promise<unknown> = Promise.resolve();
+  private progressSaves = new Map<string, {job: Job; timer: ReturnType<typeof setTimeout>}>();
   private active?: Promise<void>;
   private controller?: AbortController;
   private reserved = false;
@@ -149,6 +153,7 @@ export class SyncService {
     this.pruneTimer.unref();
   }
   private archive(job: Job) {
+    for(const item of job.items) this.reportViews.record(item);
     const small = {
       ...job,
       items: job.items.map((i) => ({
@@ -177,12 +182,25 @@ export class SyncService {
               preview: c.before!.slice(0, 4000),
             }));
       }
-    const text = JSON.stringify(job);
-    const task = this.saveTail.then(() =>
-      atomic(path.join(this.directory, "jobs", `${job.id}.json`), text),
-    );
+    const progress = this.progressSaves.get(job.id);
+    if(progress) { clearTimeout(progress.timer); this.progressSaves.delete(job.id); }
+    // Serialize only when the previous write finishes, never retain queued full-report strings.
+    const task = this.saveTail.then(async () => {
+      for(const item of job.items) this.reportViews.record(item);
+      await atomic(path.join(this.directory, "jobs", `${job.id}.json`), JSON.stringify(job));
+    });
     this.saveTail = task.catch(() => {});
     await task;
+  }
+  private progress(job: Job): Promise<void> {
+    if(!this.progressSaves.has(job.id)) {
+      // Usage is advisory; critical phase/publication/stop saves remain awaited and flush it.
+      const timer = setTimeout(() => {
+        void this.save(job).catch(e => console.error("Sync progress save:",this.options.redact(e)));
+      },1000);
+      this.progressSaves.set(job.id,{job,timer});
+    }
+    return Promise.resolve();
   }
   private async event(job: Job, item: Item) {
     await this.save(job);
@@ -370,6 +388,27 @@ export class SyncService {
         ? { ...job, status: "running" }
         : job,
     );
+  }
+  summary(id: string) {
+    const job = this.jobs.get(id);
+    if(!job) throw new SyncError("Sync report not found.",404);
+    return this.reportViews.job(job,this.reserved && this.activeId===id);
+  }
+  /** At most one archived full-report parse at a time; only the requested body leaves this method. */
+  async detail(id: string,itemId: string,kind: "change" | "coverage",index = 0,revision?: string) {
+    const task = this.detailTail.catch(() => {}).then(async () => {
+      let job = this.jobs.get(id);
+      if(!job) throw new SyncError("Sync report not found.",404);
+      if(this.archived.has(id)) job = await readJson<Job | undefined>(await safePath(this.directory,`jobs/${id}.json`),undefined);
+      const item = job?.items.find(i=>i.id===itemId);
+      if(!item) throw new SyncError("Report item not found. Refresh the report.",404);
+      if(kind === "coverage") return {coverage:item.coverage??[]};
+      if(!Number.isSafeInteger(index) || index<0 || !revision || !/^[a-f0-9]{64}$/.test(revision)) throw new SyncError("Invalid change request.");
+      const change = item.plan?.changes[index];
+      if(!change || this.reportViews.revision(item,index)!==revision) throw new SyncError("This report changed. Refresh before opening its changes.",409);
+      return {change};
+    });
+    this.detailTail = task.then(()=>{},()=>{}); return task;
   }
   get busy() {
     return this.reserved;
@@ -808,7 +847,7 @@ export class SyncService {
             path.join(this.directory, "work", item.id),
             abort,
             item.visualUsage,
-            () => this.save(job),
+            () => this.progress(job),
           );
           if (result.sourceHash !== item.sourceHash)
             throw new SyncError(
@@ -919,7 +958,7 @@ export class SyncService {
           timestamp: timestamp(),
           signal: abort,
           usage: item.textUsage,
-          update: () => this.save(job),
+          update: () => this.progress(job),
           association,
           wecom,
           validate: decision => verifyRetirement(this.options.dataDir,base,decision),
@@ -1021,6 +1060,8 @@ export class SyncService {
     await this.pruning;
     this.controller?.abort();
     await this.active;
+    await Promise.all([...this.progressSaves.values()].map(p=>this.save(p.job)));
     await this.saveTail;
+    await this.detailTail;
   }
 }

@@ -3,6 +3,7 @@
   const el = id => document.getElementById(`memory-injection-${id}`);
   const modal = el('dialog');
   let current = null;
+  let invalidatedPreview = null;
   let timer;
   let sending = false;
   let attachment = null;
@@ -23,14 +24,14 @@
   }
   function controls() {
     el('preview').disabled = active() || !el('prompt').value.trim();
-    const unchanged = current?.prompt === el('prompt').value && attachmentUnchanged();
+    const unchanged = current?.prompt === el('prompt').value && attachmentUnchanged() && current?.id !== invalidatedPreview;
     el('attach').disabled = active();
     el('file').disabled = active();
     el('attachment-remove').disabled = active();
     attachmentView();
     el('confirm').hidden = current?.status !== 'ready' || !unchanged;
     el('confirm').disabled = active();
-    el('status').textContent = current ? (!unchanged && !active() ? 'Instructions or attachment changed. Generate a new preview.' : labels[current.status] || current.status) : 'No changes until you confirm.';
+    el('status').textContent = current?.id === invalidatedPreview ? 'Main memory was edited directly. Generate a new preview.' : current ? (!unchanged && !active() ? 'Instructions or attachment changed. Generate a new preview.' : labels[current.status] || current.status) : 'No changes until you confirm.';
   }
   function render(job) {
     current = job;
@@ -136,8 +137,11 @@
     } catch (err) {error(err.message);}
     finally {sending = false; controls();}
   });
+  window.addEventListener('memory-file-saved', event => {
+    if (event.detail?.kind === 'main' && current) { invalidatedPreview = current.id; controls(); }
+  });
   el('confirm').addEventListener('click', async () => {
-    if (active() || current?.status !== 'ready' || current.prompt !== el('prompt').value || !attachmentUnchanged()) return;
+    if (active() || current?.id === invalidatedPreview || current?.status !== 'ready' || current.prompt !== el('prompt').value || !attachmentUnchanged()) return;
     sending = true; error(); controls();
     try {
       render(await api(`/api/memory-injection/previews/${savedId}/confirm`, {method: 'POST', body: '{}'}));

@@ -489,12 +489,12 @@ test('login validates credentials, uses a protected cookie, and logout invalidat
   assert.equal((await f.request('/api/status', 'GET', undefined, { Cookie: cookie })).status, 401);
 });
 
-test('login failures are rate limited and server restart invalidates previous cookies', async t => {
+test('login failures are rate limited and server restart preserves unexpired cookies', async t => {
   const f = await fixture(t);
   for (let n = 0; n < 10; n++) assert.equal((await f.request('/api/auth/login', 'POST', { account: 'wrong', password: 'wrong' }, { Cookie: '' })).status, 401);
   const limited = await f.request('/api/auth/login', 'POST', f.auth.admin, { Cookie: '' }); assert.equal(limited.status, 429); assert.ok(Number(limited.headers.get('retry-after')) > 0);
   const oldCookie = f.auth.cookie; await f.restart();
-  assert.equal((await f.request('/api/status', 'GET', undefined, { Cookie: oldCookie })).status, 401);
+  assert.equal((await f.request('/api/status', 'GET', undefined, { Cookie: oldCookie })).status, 200);
   assert.equal((await f.request('/api/status')).status, 200);
 });
 

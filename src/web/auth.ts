@@ -1,3 +1,4 @@
+import {AuthSessions} from "./auth-sessions.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -6,14 +7,47 @@ const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const FAILURE_WINDOW_MS = 60_000;
 const digest = (value: string) => createHash("sha256").update(value).digest();
 
-/** One configured administrator; opaque, bounded, in-memory browser login sessions. */
+/** One configured administrator; opaque, bounded browser login sessions. */
 export class WebAuth {
   private readonly sessions = new Map<string, number>();
   private readonly failures = new Map<string, { count: number; until: number }>();
+  private storage?: AuthSessions;
+  private mutations: Promise<unknown> = Promise.resolve();
+  private closed = false;
   readonly configured: boolean;
   constructor(private readonly account: string, private readonly password: string, private readonly now = Date.now) {
     this.configured = Boolean(account.trim() && password);
   }
+  async initialize(dataDir: string) {
+    this.storage = new AuthSessions(dataDir, this.account, this.password);
+    this.sessions.clear();
+    for (const [key, expiry] of await this.storage.load(this.now())) if(this.configured) this.sessions.set(key, expiry);
+  }
+  private mutate<T>(task: () => Promise<T>) {
+    const pending = this.mutations.catch(() => {}).then(async () => {
+      if(this.closed) throw new Error("Sign-in service is shutting down.");
+      const before = new Map(this.sessions);
+      try { return await task(); } catch(error) { this.sessions.clear(); for(const [key,expiry] of before) this.sessions.set(key,expiry); throw error; }
+    });
+    this.mutations = pending.catch(() => {}); return pending;
+  }
+  async signIn(req: IncomingMessage, res: ServerResponse, account: unknown, password: unknown, secure = false) {
+    return this.mutate(async () => {
+      let cookie = "";
+      const staged = {setHeader: (_name: string, value: string) => {cookie = value;}} as unknown as ServerResponse;
+      if(!this.login(req, staged, account, password, secure)) return false;
+      await this.storage?.save(this.sessions);
+      res.setHeader("Set-Cookie", cookie); return true;
+    });
+  }
+  async signOut(req: IncomingMessage, res: ServerResponse, secure = false) {
+    return this.mutate(async () => {
+      let cookie = "";
+      this.logout(req, {setHeader: (_name: string, value: string) => {cookie = value;}} as unknown as ServerResponse, secure);
+      await this.storage?.save(this.sessions); res.setHeader("Set-Cookie", cookie);
+    });
+  }
+  async close() { this.closed = true; await this.mutations; this.dispose(); }
   private cookie(req: IncomingMessage): string | undefined {
     return req.headers.cookie?.split(";").map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   }

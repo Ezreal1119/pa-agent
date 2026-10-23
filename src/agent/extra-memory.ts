@@ -52,23 +52,37 @@ export class ExtraMemoryStore {
     }
     return current;
   }
-  async snapshot() {
-    let text = "";
+  private async readBytes(limit = Infinity) {
+    let bytes = Buffer.alloc(0);
     if (await this.directory(MEMORY_DIRECTORY_PARTS, false)) {
       const file = await fs.open(this.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
       if (file) {
         try {
           const stat = await file.stat();
           if (!stat.isFile() || stat.nlink !== 1) throw new Error("Extra memory must be a regular, non-linked file.");
-          text = await file.readFile("utf8");
+          if (stat.size > limit) throw new Error("Extra memory exceeds the 2 MiB editor/download limit.");
+          bytes = await file.readFile();
+          if (bytes.length > limit) throw new Error("Extra memory exceeds the 2 MiB editor/download limit.");
         } finally { await file.close(); }
       }
     }
+    return bytes;
+  }
+  async snapshot() {
+    const text = (await this.readBytes()).toString("utf8");
     return { file: this.file, text, revision: hash(text) };
   }
+  async download() { return this.readBytes(2 * 1024 * 1024); }
+  async editorSnapshot() {
+    const text = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(await this.download());
+    return {text, revision: hash(text)};
+  }
   async change(input: MemoryChange, signal?: AbortSignal) {
+    return this.enqueue(() => this.commit(input, signal));
+  }
+  private async enqueue<T>(task: () => Promise<T>): Promise<T> {
     const previous = queues.get(this.file) ?? Promise.resolve();
-    const pending = previous.catch(() => {}).then(() => this.commit(input, signal));
+    const pending = previous.catch(() => {}).then(task);
     queues.set(this.file, pending);
     try { return await pending; }
     finally { if (queues.get(this.file) === pending) queues.delete(this.file); }
@@ -97,6 +111,25 @@ export class ExtraMemoryStore {
       ? `${before.text.trim() ? before.text.trimEnd() : "# Skill Memories"}\n\n${render(entry)}`
       : before.text.slice(0, existing!.start) + (input.action === "edit" ? render(entry) : "") + before.text.slice(existing!.end);
     parse(next);
+    const saved = await this.write(before, next, signal);
+    return { action: input.action, id: entry.id, ...saved, ...(input.action === "delete" ? {} : { entry }) };
+  }
+  /** Administrator raw editor. Uses the exact same queue and atomic writer as the memory tool. */
+  async replace(text: unknown, revision: unknown) {
+    if (typeof text !== "string" || Buffer.byteLength(text) > 2 * 1024 * 1024 || text.includes("\0") || Buffer.from(text).toString("utf8") !== text)
+      throw new Error("Memory must be valid UTF-8 text of at most 2 MiB without NUL.");
+    if (typeof revision !== "string" || !/^[a-f0-9]{64}$/.test(revision)) throw new Error("Provide the revision you opened.");
+    parse(text);
+    return this.enqueue(async () => {
+      const before = await this.editorSnapshot();
+      if (before.revision !== revision) throw new Error("MEMORY_CONFLICT: Extra memory changed. Reload and reapply your edits.");
+      if (before.text === text) return {...before, changed: false};
+      const saved = await this.write(before, text);
+      return {text, revision: saved.revision, changed: true};
+    });
+  }
+  private async write(before: {text: string; revision: string}, next: string, signal?: AbortSignal) {
+    const conflict = (current: {text: string; revision: string}) => new Error(`MEMORY_CONFLICT: extra memory changed. Re-evaluate the user's intended change against the current memory before retrying. ${JSON.stringify({revision: current.revision, memory: current.text})}`);
     const directory = (await this.directory(MEMORY_DIRECTORY_PARTS, true))!;
     const backupDir = (await this.directory(["maintenance-backups", "extra-memory"], true))!;
     const backup = path.join(backupDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(6).toString("hex")}.md`);
@@ -111,7 +144,7 @@ export class ExtraMemoryStore {
       await this.directory(MEMORY_DIRECTORY_PARTS, false);
       await fs.rename(temporary, this.file);
     } finally { await fs.rm(temporary, { force: true }); }
-    return { action: input.action, id: entry.id, revision: hash(next), backup, ...(input.action === "delete" ? {} : { entry }) };
+    return {revision: hash(next), backup};
   }
 }
 

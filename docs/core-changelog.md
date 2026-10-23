@@ -4,6 +4,10 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Web 内存与重启登录优化：主 Node 堆 256→1024 MiB，提供仅修改 ExecStart 的既有 VPS drop-in；SYNC 摘要轮询、差异/覆盖展开读取、用量进度按秒合并且写入时再序列化，保留原报告/发布恢复格式和完整接口。登录摘要签名落盘，重启保留七天内 Cookie，退出/到期/改凭据继续失效；Origin/CSRF 不放宽。Node 22.23.2 构建、328 项全量检查及隔离浏览器重启/展开验证通过；合成 26.9 MB 报告四路读取的峰值 RSS 1369→190 MiB，非真实模型/VPS测量。见 2026-10-23 内存优化记录。
+
+- Memory Injection 新增 Edit Memory / Edit Extra Memory / Download Extra Memory，保留原主记忆下载。管理员直接编辑完整 Markdown，不调用 AI；格式/2MiB/Revision 校验、备份原子写入、草稿与冲突保护，Extra 与原 memory 工具共用单进程写队列；主记忆编辑使旧预览失效，下一 run 生效。新增固定文件管理员接口，无新依赖/env/systemd 修改；Node 22.23.2 构建、319 项全量和最终 19 项定向检查及隔离浏览器操作通过，见 2026-10-23 直接编辑记录。
+
 - WeCom 分表进入 SYNC 时核验现有导入回执/快照，以 docid + 工作表 ID 绑定自身共享来源；后台在原发布事务中维护总入口，保留独立产品 accessories 和旧整本迁移兜底，禁止误替换其他分表/整本。Guide 首次分表 SYNC 前需显式本地 routing 接管旧总入口；旧整本删除预览/提交核验最新全表替代状态。Node 22.23.2 构建、311 项全量回归及现有真实读取 38 份生成物的离线兼容核验通过，未执行真实模型发布或 VPS 迁移，见 2026-10-23 分表发布记录。
 
 - Source imports 新增 SFTP / Library / WeCom 子 Tab，一次只显示一个导入面板，URL 保留选择，支持键盘切换；导入与后台轮询逻辑不变。Node 22.23.2 构建、8 项既有界面回归及隔离浏览器切换/刷新验证通过，见 2026-10-23 子 Tab 记录。
@@ -98,7 +102,7 @@
 
 - 单文件上传默认30MiB，Excel/图片原件输入统一遵循FILE_MAX_BYTES，前端动态提示；见2026-10-18上传上限记录。
 
-- Web 登录固定有效期改为7天，Cookie与服务端过期时间一致，重启仍清空登录；见2026-10-18登录有效期记录。
+- Web 登录固定有效期为7天，Cookie与服务端过期时间一致；原重启清空行为已由2026-10-23签名摘要持久化修正，历史有效期调整见2026-10-18记录。
 
 - 新增可选企微长连接 Bridge、专用本机 API 和 Web/企微共用的有界并发队列；复用现有文件工具并结构化回传生成文件，systemd 使用 product-expert 与 wecom-bridge 两个独立服务分别管理。详见 2026-10-18 企业微信接入及独立启停修正记录。
 
@@ -875,3 +879,38 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - Node **22.23.2** TypeScript 构建通过；`node --test tests/*.test.mjs` **311 项通过、0 失败/跳过**。新增 13 项专项检查通过，并补跑相同专项核验 Duplicate 的无模型重复消费及拒绝 association-only 绕过。覆盖现有回执、单表更新/改名、占用 accessories、跨分表/整本误替换、部分/完整迁移、删除预览后上游变化、手工/恶意输入、错误 routing、事务中断回滚、Library 只读、withdrawal/显式恢复；真实 UTF-8 converter 核验正文不变，中文/空格/括号/符号路径编码可追踪引用。
 - 使用此前真实只读 Guide 采集留下的隔离生成物，离线重新核验 **38 份正文/回执、38 个唯一工作表及完整清单**，全部兼容。本轮没有重新连接企业微信，也没有把离线重放宣称为新一次真实读取或真实模型结果。
 - Planner、业务发布及恢复均使用隔离临时知识与模拟模型；未调用真实模型、未执行正式 SYNC、未修改正式知识/Memory/原 Excel/在线文档/VPS，未删除旧整本，未提交/推送/部署。真实模型的分表产品识别、迁移事实审查及 VPS 操作留待用户部署后确认。保留当前工作区既有 Source imports 子 Tab 改动；本任务不新增 UI 流程或重做浏览器验收。
+
+
+## 2026-10-23：Memory Injection 直接编辑主/额外记忆
+
+原因：管理员希望在现有对话框直接编辑两种记忆，并单独下载 Extra Memory，无需每次交给 AI 改写。本轮继续在此前已授权的 ProductExpertCloud 实现，未操作 pi-patrick 或 patrick-agent。
+
+行为/兼容性：
+
+- 原 Memory Injection 底部保留 Download Memory File，新增 Edit Memory、Edit Extra Memory、Download Extra Memory。共用独立编辑 dialog，显示固定目标文件、完整 Markdown、加载/保存/Unsaved changes；Save changes 才保存，不调用模型。关闭/Escape/Reload 保护草稿，保存冻结编辑/关闭，错误和冲突保留输入；读取迟到不覆盖另一次打开的文件。窄屏按钮换行，CRLF 编辑保留换行风格，不把加载后的换行规范化误判为修改。
+- 主记忆固定 `memory/urovo-product-expert/MEMORY.md`，复用 MemoryInjectionService 互斥、知识写锁、格式校验与原子发布，旧文存到 `maintenance-backups/main-memory/manual-<UUID>.md`。编辑读取不校验条目格式，允许修复损坏但仍合法 UTF-8 的旧正文；保存必须非空白、合法 UTF-8/NUL-free、2 MiB 以内并符合既有记忆格式。原 AI 预览/附件/确认流程保持；主记忆直接保存后，UI 禁止继续确认当前旧预览，后端 Revision 校验也拒绝其他页面持有的旧预览。
+- Extra 固定 `memory/urovo-product-expert/MEMORY_EXTRA.md`，缺失可读取为空，直接保存可首次创建或清空。新增整文件编辑入口与原 memory add/edit/delete 共用队列和原子 writer，保留原工具返回/备份格式及冲突时提供最新内容用于重新判断的行为。直接保存验证格式/重复 ID、UTF-8/NUL 和 2 MiB 上限，备份仍在 `maintenance-backups/extra-memory/`；未改工具原有单条 64,000 字符限制。沿用单进程写入边界，不宣称具有跨进程锁。普通快照和会话注入逻辑保持。
+- 新增 `GET/PUT /api/memory-injection/files/main|extra`，GET 返回完整 text/Revision，PUT 仅接收 text/revision；固定目标，无路径/query 参数，冲突 409。新增 `/api/memory-injection/download-extra` 返回当前保存的原始字节，正确文件名 MEMORY_EXTRA.md；缺失为空下载，格式异常亦可导出，拒绝链接和超过 2 MiB 的文件。API 沿用管理员 Cookie、Origin、CSRF/no-store，Bridge/MCP 机器凭证没有管理权限。
+- 两种记忆保存均在已有 session 的下一 run 生效，当前 run 快照不变。没有新增 npm 依赖、环境变量、timer/helper 或 systemd 修改；用户按原流程同步代码/构建/重启主服务并刷新即可，前提是原 Memory Injection 所需主记忆可写权限已就绪。README、Memory Injection、Synchronize 说明同步更新。
+
+验证：
+
+- Node **22.23.2** TypeScript 构建通过；全量 `node --test tests/*.test.mjs` **319 项通过、0 失败/跳过**。最终补回原工具迟到冲突的 revision/content 返回兼容后重建，主/Extra/Injection/新 UI 共 **19 项定向回归通过**。其中新增 5 项后端/HTTP 和 3 项 UI 检查，验证固定目标、格式/重复 ID/大小/NUL/UTF-8、BOM/CRLF 原文与备份、主/Extra 隔离、缺失/清空、并发工具与编辑器防覆盖、知识读锁等待、旧 AI 预览冲突、符号链接拒绝、下载原字节、登录/CSRF/Origin/机器凭证拒绝，以及草稿/迟到读取/错误下载/预览失效。
+- 使用隔离临时资料和空模型配置启动 Web，真实浏览器完成两个编辑器打开、中文主记忆保存、Extra 坏格式拒绝后草稿保留、有效 Extra 保存、下载按钮点击、窄窗口按钮换行。HTTP 自动化核对下载内容/文件名/no-store；未把浏览器点击等同于人工确认下载落盘。截图为 `/tmp/product-expert-memory-buttons-preview.png` 和 `/tmp/product-expert-memory-editor-preview.png`。UI 自动化还验证未保存关闭/Reload 和迟到响应；未进行真实手机设备验收。
+- 所有读写/模型协议验证使用隔离 fixtures 和模拟模型，未调用外部真实模型、未修改正式 Memory/知识/凭据/VPS，未提交/推送/部署。隔离预览服务与临时资料在交付前清理，截图保留供查看。
+
+
+## 2026-10-23 Web 内存与重启登录优化
+
+原因：管理员提供 VPS 日志，主服务在 16:39 与 16:53 连续触发 Node JS heap OOM（约 256 MiB），systemd 重启后内存会话丢失；当时机器仍有约 2.4 GiB 可用内存。本机发现报告轮询读取/structuredClone/发送整份历史差异、浏览器为折叠差异构建全文、每条 Token 回调在写队列前生成完整 JSON 的高内存路径。日志未证明所有内存来源均已排除。
+
+行为与兼容性影响：
+
+- 主 Web 模板改为 1024 MiB JS 堆，整组 MemoryHigh=2200M/MemoryMax=2600M、worker 上限与串行文件队列保持。新增 `deploy/product-expert-memory.conf`，管理员可只覆盖既有 VPS ExecStart，保留账号、硬化、timer 等配置；未安装、未重启 VPS。无新 npm 依赖或 env 字段。
+- 管理员报告 `?view=summary` 只返回状态、用量、业务选项、差异路径/内容修订摘要及覆盖数量；单项详情展开时读取，旧历史报告串行解析且不 structuredClone 整份内容。不带查询参数的完整 API 保持兼容。浏览器轮询保留展开状态、关闭释放正文，修订变化需重新展开，详情拒绝过期 revision；既有正式报告 JSON、发布计划、事务与恢复格式不迁移。
+- 高频用量保存按一秒窗口合并，序列化放到写入队列实际执行时，不积压完整 JSON 字符串。阶段、发布、错误、停止与关闭依旧等待原子保存，并刷新待保存计数。硬杀可能损失最近一秒用量，正式已提交事务恢复逻辑不变。
+- 固定 `.data/web-auth/sessions.json` 保存至多128条 Cookie SHA256摘要/原过期时间、随机盐及 HMAC，由配置凭据派生签名密钥，0600原子写入，拒绝链接与坏结构。Cookie或凭据原文不落盘；退出持久撤销、七天固定到期、改账号/密码使旧签名失效。服务重启更换 CSRF，旧页面刷新即可继续；不放宽 Origin/CSRF，不自动重放保存。首次升级前仅在内存的 Cookie 需重新登录一次。
+
+验证：Node 22.23.2 构建、328/328 全量本地检查通过，覆盖摘要/完整旧接口、详情修订冲突与管理员隔离、保存合并/定时/关键状态/关闭冲刷、登录跨重启/到期/撤销/改凭据/篡改/错误路径/并发/写失败、既有 SYNC 发布恢复及三类导入。旧测试关于“重启使 Cookie 失效”的断言按新规格更新。隔离真实浏览器验证初始折叠不含正文、展开差异和覆盖检查、服务重启后无需再登录；截图 `.data/debug/optimization-report-preview.png`。未访问/修改 VPS、未调用真实模型、未执行正式 SYNC。
+
+合成压测：`scripts/profile-sync-reports.mjs` 在隔离目录生成12项约26.9MB报告、两个独立1024MiB堆进程各进行64次/4路并发读取。完整接口响应26,934,839bytes、峰值RSS1369MiB；摘要7,715bytes、峰值RSS190MiB。结果 `.data/debug/report-profile.json`。为本机读取/序列化压力对照，不是 VPS或真实模型/原生转换的内存保证。显式展开旧大报告仍需一次完整JSON解析，完整旧API仍可能产生较大峰值；部署后需观察实际日志。

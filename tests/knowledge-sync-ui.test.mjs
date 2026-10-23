@@ -120,7 +120,7 @@ test("report suggestion is an explicit editable draft; only Re-Sync submits, old
   await find("Re-Sync →").onclick();
   assert.deepEqual(requests, [
     {
-      url: "/api/sync/jobs/job-a/resync",
+      url: "/api/sync/jobs/job-a/resync?view=summary",
       body: {
         itemId: "file-a",
         feedback: textarea().value,
@@ -153,7 +153,7 @@ test("report suggestion is an explicit editable draft; only Re-Sync submits, old
   assert.equal(find("Confirm deletion"), undefined);
   await find("Confirm publication").onclick();
   assert.deepEqual(requests.at(-1), {
-    url: "/api/sync/jobs/job-a/confirm",
+    url: "/api/sync/jobs/job-a/confirm?view=summary",
     body: { itemId: "file-a" },
   });
   job.status = "completed";
@@ -171,7 +171,30 @@ test("report suggestion is an explicit editable draft; only Re-Sync submits, old
   assert.equal(find("Review product coverage →").disabled, false);
   await find("Review product coverage →").onclick();
   assert.deepEqual(requests.at(-1), {
-    url: "/api/sync/jobs/job-a/resync",
+    url: "/api/sync/jobs/job-a/resync?view=summary",
     body: { itemId: "old-duplicate", feedback: textarea().value, forceConvert: false },
   });
+});
+
+test('report diff and coverage fetch only on expansion, survive polling, and release closed bodies', async () => {
+  const document={activeElement:null},nodes=new Map(),requests=[];
+  document.createElement=tag=>new Element(tag,document);
+  document.getElementById=id=>{if(!nodes.has(id))nodes.set(id,new Element('div',document));return nodes.get(id);};
+  const sandbox=vm.createContext({document,location:{hash:'',search:''},URLSearchParams,File:class{},fetch:async url=>{
+    requests.push(url);return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>url.includes('/coverage')?{coverage:['All checked']}:{change:{path:'fixture.md',before:'old',after:'new'}}};
+  }});
+  const source=await fs.readFile('resources/web/synchronize.js','utf8');
+  vm.runInContext(source.slice(0,source.indexOf('async function refresh()'))+'\nglobalThis.render=renderJob;',sandbox);
+  const usage={input:0,output:0,requests:0,recorded:0};
+  const item={id:'item',name:'fixture.md',status:'published',stage:'Published',textUsage:usage,visualUsage:usage,coverageCount:1,plan:{decision:{products:['RT30'],slot:'accessories'},changes:[{path:'fixture.md',action:'Update',lazy:true,revision:'a'.repeat(64)}]}};
+  const job={id:'job',created:'2026-10-23T00:00:00Z',kind:'sync',status:'completed',items:[item]};
+  const detail=label=>all(nodes.get('report')).find(n=>n.tagName==='DETAILS'&&n.children[0]?.textContent===label);
+  await sandbox.render(job);assert.equal(requests.length,0);
+  const diff=detail('Update · fixture.md');diff.open=true;diff.ontoggle();
+  await new Promise(r=>setImmediate(r));assert.equal(requests.length,1);assert.match(all(diff).find(n=>n.tagName==='PRE').textContent,/- old\n\+ new/);
+  item.stage='Progress changed';await sandbox.render(job);assert.equal(detail('Update · fixture.md'),diff);assert.equal(requests.length,1);
+  diff.open=false;diff.ontoggle();assert.equal(all(diff).filter(n=>n.tagName==='PRE').length,0);
+  diff.open=true;diff.ontoggle();await new Promise(r=>setImmediate(r));assert.equal(requests.length,2);
+  const coverage=detail('Conversion coverage · 1 checks');coverage.open=true;coverage.ontoggle();await new Promise(r=>setImmediate(r));assert.match(all(coverage).find(n=>n.tagName==='PRE').textContent,/All checked/);assert.equal(requests.length,3);
+  item.plan.changes[0].revision='b'.repeat(64);await sandbox.render(job);assert.notEqual(detail('Update · fixture.md'),diff);assert.equal(requests.length,3);
 });
