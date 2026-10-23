@@ -696,7 +696,7 @@ async function refresh() {
   try {
     await incoming();
     await loadHistory();
-    await Promise.all([refreshImports(), refreshLibraryImports()]);
+    await Promise.all([refreshImports(), refreshLibraryImports(), refreshWecomImports()]);
   } finally {
     polling = false;
   }

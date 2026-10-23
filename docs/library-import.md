@@ -138,14 +138,14 @@ Keep the existing `state.json`, report and old `work/` files. After updating cod
 
 **Settings** beside Library **Run now** reads the actual `product-expert-library-import.timer`. Change daily/weekly frequency, weekday, Beijing HH:MM and enable/pause, then click **Save schedule**. **Reload schedule** reads external VPS changes; unsaved edits require discard confirmation. Saving uses the opened version, rejects external conflicts, verifies the actual resulting state and attempts rollback on failure. SFTP timing remains independent. Unsupported/masked/custom multi-trigger schedules stay read-only. Helper absence disables schedule editing without blocking manual imports.
 
-This reuses the existing SFTP-named settings socket/helper, extended to a fixed two-timer whitelist. There is **no new socket, scheduler, npm dependency or env setting**. The helper service now permits writing both fixed drop-in directories; the main Web service permissions stay unchanged. The Library service/timer listed above must already be installed for Library schedule editing. **Do not overwrite the existing import `.service`/`.timer` during this update.** The updated helper reads their current values, including existing overrides.
+This reuses the existing SFTP-named settings socket/helper. It originally added a second fixed timer; the current helper also permits the independent WeCom timer. There is **no new socket, scheduler, npm dependency or env setting**. The current helper service requires all three fixed drop-in directories to exist before it starts; the main Web service permissions stay unchanged. The Library service/timer listed above must already be installed for Library schedule editing. **Do not overwrite the existing import `.service`/`.timer` during this update.** The updated helper reads their current values, including existing overrides.
 
 After updating code, run the following as root on the existing VPS. This also works if the helper was not installed previously:
 
 ```bash
 cd /opt/ProductExpertCloud
 npm run build
-install -d -o root -g root -m 0755 /usr/local/libexec /etc/systemd/system/product-expert-sftp.timer.d /etc/systemd/system/product-expert-library-import.timer.d
+install -d -o root -g root -m 0755 /usr/local/libexec /etc/systemd/system/product-expert-sftp.timer.d /etc/systemd/system/product-expert-library-import.timer.d /etc/systemd/system/product-expert-wecom-import.timer.d
 install -o root -g root -m 0644 dist/sftp-sync/schedule.js /usr/local/libexec/product-expert-sftp-settings.mjs
 install -o root -g root -m 0644 deploy/product-expert-sftp-settings.socket deploy/product-expert-sftp-settings@.service /etc/systemd/system/
 systemctl daemon-reload

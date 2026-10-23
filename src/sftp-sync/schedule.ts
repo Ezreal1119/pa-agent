@@ -10,12 +10,13 @@ import { fileURLToPath } from "node:url";
 export const SFTP_TIMER = "product-expert-sftp.timer";
 export const SFTP_SETTINGS_SOCKET = "/run/product-expert-sftp-settings.sock";
 export const LIBRARY_TIMER = "product-expert-library-import.timer";
-export type ScheduleSource = "sftp" | "library";
+export const WECOM_TIMER = "product-expert-wecom-import.timer";
+export type ScheduleSource = "sftp" | "library" | "wecom";
 export function scheduleSource(value: unknown): ScheduleSource {
   if (value === undefined || value === "sftp") return "sftp";
-  if (value === "library") return "library";
+  if (value === "library" || value === "wecom") return value;
   throw new ScheduleError(
-    "Only SFTP and Library timer settings are supported.",
+    "Only SFTP, Library and WeCom timer settings are supported.",
   );
 }
 const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -129,7 +130,12 @@ export class SftpTimerManager {
     private source: ScheduleSource = "sftp",
   ) {
     this.source = scheduleSource(source);
-    this.timer = this.source === "library" ? LIBRARY_TIMER : SFTP_TIMER;
+    this.timer =
+      this.source === "library"
+        ? LIBRARY_TIMER
+        : this.source === "wecom"
+          ? WECOM_TIMER
+          : SFTP_TIMER;
     this.service = this.timer.replace(/\.timer$/, ".service");
     this.dropIn =
       dropIn ?? `/etc/systemd/system/${this.timer}.d/90-web-schedule.conf`;
@@ -356,7 +362,7 @@ export class SftpScheduleClient {
         socket.end(
           JSON.stringify({
             ...request,
-            ...(this.source === "library" ? { source: "library" } : {}),
+            ...(this.source !== "sftp" ? { source: this.source } : {}),
           }) + "\n",
         ),
       );

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily WeCom online document import at 04:00 Beijing time
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=product-expert-wecom-import.service
+
+[Install]
+WantedBy=timers.target

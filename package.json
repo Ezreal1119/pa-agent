@@ -32,6 +32,8 @@
     "sftp:sync": "npm run build && node dist/sftp-sync/cli.js",
     "test:sftp": "npm run build && node --test tests/sftp-sync*.test.mjs",
     "sftp:check-host": "npm run build && node dist/sftp-sync/probe.js",
+    "wecom:import": "node dist/wecom-import/cli.js",
+    "test:wecom-import": "npm run build && node --test tests/wecom-import*.test.mjs",
     "library:import": "node dist/library-import/cli.js"
   },
   "dependencies": {

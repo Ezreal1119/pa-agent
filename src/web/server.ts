@@ -40,6 +40,9 @@ import { McpService } from "../mcp/service.js";
 import { handleMcp } from "../mcp/http.js";
 import { runMcpAgent } from "../mcp/runner.js";
 
+import { WecomImportService } from "../wecom-import/service.js";
+import { wecomConfig } from "../wecom-import/config.js";
+import type { Reader as WecomReader } from "../wecom-import/client.js";
 import { LibraryImportService } from "../library-import/service.js";
 import { libraryConfig } from "../library-import/config.js";
 import { createClassifier } from "../library-import/classifier.js";
@@ -62,7 +65,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -148,6 +151,9 @@ export async function createWebServer(options: WebOptions = {}) {
   const libraryImports = new LibraryImportService({dataDir, config:libraryOptions, modelConfigured:configured, modelId:()=>settings.modelId, redact,
     classifier:() => createClassifier({...settings}, agentSettings.effort, signal => runGate.acquire(signal))});
   await libraryImports.init();
+  const wecomImports = new WecomImportService({ dataDir, config: wecomConfig(cwd, dataDir, syncEnv), ...options.wecomImport });
+  await wecomImports.init();
+  const wecomSchedule = options.wecomSchedule ?? new SftpScheduleClient(undefined, "wecom");
   const memoryInjection = new MemoryInjectionService({dataDir, attachments: new MemoryAttachments(dataDir, () => fileConfig), modelId: () => settings.modelId, redact,
     planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
   await memoryInjection.init();
@@ -518,6 +524,39 @@ export async function createWebServer(options: WebOptions = {}) {
         if (match && match[2] && method === "POST") {
           if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Stop accepts only the saved run ID.");
           return json(res, 200, await libraryImports.stop(match[1]!));
+        }
+        throw new HttpError(404, "Import operation not found.");
+      }
+      if (url.pathname.startsWith("/api/wecom-import/")) {
+        if (machine) throw new HttpError(403, "Imports require administrator login.");
+        const route = url.pathname.slice("/api/wecom-import/".length);
+        if (route === "status" && method === "GET") return json(res, 200, await wecomImports.status());
+        if (route === "settings/docs" && method === "GET") return json(res, 200, await wecomImports.readDocs());
+        if (route === "settings/docs/check" && method === "POST") {
+          const body = await readBody(req, MAX_PATHS_BYTES * 6 + 1024);
+          if (Object.keys(body).length !== 1 || !Object.hasOwn(body, "text")) throw new HttpError(400, "Check accepts only JSONL text.");
+          return json(res, 200, wecomImports.checkDocs(body.text));
+        }
+        if (route === "settings/docs" && method === "PUT") {
+          const body = await readBody(req, MAX_PATHS_BYTES * 6 + 1024);
+          if (Object.keys(body).length !== 2 || !Object.hasOwn(body, "text") || !Object.hasOwn(body, "revision")) throw new HttpError(400, "Save accepts only text and its opened revision.");
+          return json(res, 200, await wecomImports.saveDocs(body.text, body.revision));
+        }
+        if (route === "settings/schedule" && method === "GET") return json(res, 200, await wecomSchedule.status());
+        if (route === "settings/schedule" && method === "PUT") {
+          const body = await readBody(req);
+          if (Object.keys(body).length !== 2 || !Object.hasOwn(body, "schedule") || !Object.hasOwn(body, "revision")) throw new HttpError(400, "Save accepts only schedule and its opened revision.");
+          return json(res, 200, await wecomSchedule.save(body.schedule, body.revision));
+        }
+        if (route === "runs" && method === "POST") {
+          if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Import uses the configured JSONL list; request parameters are not accepted.");
+          return json(res, 202, await wecomImports.start());
+        }
+        const match = route.match(/^runs\/([a-f0-9-]{36})(\/stop)?$/);
+        if (match && !match[2] && method === "GET") return json(res, 200, await wecomImports.get(match[1]!));
+        if (match && match[2] && method === "POST") {
+          if (Object.keys(await readBody(req)).length) throw new HttpError(400, "Stop accepts only the saved run ID.");
+          return json(res, 200, await wecomImports.stop(match[1]!));
         }
         throw new HttpError(404, "Import operation not found.");
       }
@@ -900,6 +939,8 @@ export async function createWebServer(options: WebOptions = {}) {
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
         "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
         "/synchronize-library.js": [path.join(resourcesDir, "web/synchronize-library.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-wecom-imports.js": [path.join(resourcesDir, "web/synchronize-wecom-imports.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-wecom-settings.js": [path.join(resourcesDir, "web/synchronize-wecom-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize-library-settings.js": [path.join(resourcesDir, "web/synchronize-library-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize-sftp-settings.js": [path.join(resourcesDir, "web/synchronize-sftp-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize.css": [path.join(resourcesDir, "web/synchronize.css"), "text/css; charset=utf-8"],
@@ -927,12 +968,14 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
+    const wecomClosing = wecomImports.close();
     const libraryClosing = libraryImports.close();
     const sftpClosing = sftpSync.close();
     const syncClosing = synchronize.close();
     const memoryClosing = memoryInjection.close();
     await mcp?.close();
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
+    await wecomClosing;
     await libraryClosing;
     await sftpClosing;
     await syncClosing;

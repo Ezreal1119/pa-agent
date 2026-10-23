@@ -17,6 +17,7 @@ import {
   SftpScheduleClient,
   SFTP_TIMER,
   LIBRARY_TIMER,
+  WECOM_TIMER,
   scheduleSource,
   validateSchedule,
 } from "../dist/sftp-sync/schedule.js";
@@ -36,7 +37,12 @@ async function temp(t) {
   return root;
 }
 async function fakeTimer(t, source = "sftp") {
-  const timerUnit = source === "library" ? LIBRARY_TIMER : SFTP_TIMER;
+  const timerUnit =
+    source === "library"
+      ? LIBRARY_TIMER
+      : source === "wecom"
+        ? WECOM_TIMER
+        : SFTP_TIMER;
   const calendar =
     source === "library"
       ? "Mon *-*-* 06:00:00 Asia/Shanghai"
@@ -350,6 +356,7 @@ test("timer rollback failures require VPS investigation instead of claiming sett
 test("schedule socket client handles actual responses, conflicts and missing helper without touching host systemd", async (t) => {
   const f = await fakeTimer(t),
     library = await fakeTimer(t, "library"),
+    wecom = await fakeTimer(t, "wecom"),
     root = await temp(t),
     socket = path.join(root, "timer.sock");
   const server = net.createServer({ allowHalfOpen: true }, (connection) => {
@@ -365,7 +372,9 @@ test("schedule socket client handles actual responses, conflicts and missing hel
             result: await (
               scheduleSource(JSON.parse(input).source) === "library"
                 ? library
-                : f
+                : scheduleSource(JSON.parse(input).source) === "wecom"
+                  ? wecom
+                  : f
             ).manager.handle(JSON.parse(input)),
           }),
         );
@@ -399,9 +408,25 @@ test("schedule socket client handles actual responses, conflicts and missing hel
     weekly,
     "Library edits leave SFTP untouched",
   );
+  const wecomClient = new SftpScheduleClient(socket, "wecom");
+  const wecomBefore = await wecomClient.status();
+  assert.equal(wecomBefore.unit, WECOM_TIMER);
+  await wecomClient.save(
+    { ...weekly, time: "04:00", weekday: "Thu" },
+    wecomBefore.revision,
+  );
+  assert.equal((await wecomClient.status()).schedule.time, "04:00");
+  assert.deepEqual((await client.status()).schedule, weekly);
+  assert.deepEqual((await libraryClient.status()).schedule, daily);
+  await wecomClient.save(
+    { enabled: false, frequency: "daily", time: "05:00" },
+    (await wecomClient.status()).revision,
+  );
+  assert.equal((await wecomClient.status()).enabled, false);
+  assert.equal((await libraryClient.status()).enabled, true);
   assert.throws(
     () => scheduleSource("../../other.timer"),
-    /Only SFTP and Library/,
+    /Only SFTP, Library and WeCom/,
   );
   await assert.rejects(
     f.manager.handle({ operation: "status", source: "library" }),

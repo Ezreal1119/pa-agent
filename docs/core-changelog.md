@@ -4,7 +4,9 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
-- Library imports 新增仅定时管理的 Settings，与 SFTP 共用既有 socket/helper，通过固定双 timer 白名单独立读取/保存每日或每周北京时间、启用/暂停。沿用版本冲突、原子 drop-in、状态核对/失败回滚；VPS 需更新 root-owned helper 副本及模板，并创建两处固定 drop-in 目录。Node 22.23.2 构建与 36 项定向检查通过；真实 VPS systemd 未验证，见 2026-10-22 Library 定时设置记录。
+- 新增 WeCom imports：官方 CLI 只读采集普通在线表格/Word，不经过 MCP 或 AI；工作簿版本预检、完整分块/隐藏表/公式/链接/合并范围校验、前后版本一致性及逐表文字 Hash，仅变化 Markdown 投递到 newly_added。独立 JSONL Settings、跨进程锁/停止/待投递恢复、管理员 API 和每日北京时间 04:00 service/timer 模板；共用 helper 扩为 SFTP/Library/WeCom 三个固定 timer，安装前须创建三处 drop-in。Node 22.23.2 构建、298 项全量检查及隔离浏览器交互通过；已授权 Guide 的 38 表/4,065 个非空单元格/635 个合并范围与原件一致。真实 Word、独立 VPS 授权刷新及 Ubuntu systemd 未验证，见 2026-10-23 记录。
+
+- Library imports 新增仅定时管理的 Settings，与 SFTP 共用既有 socket/helper，初始通过固定双 timer 白名单（后续 WeCom 扩为三项）独立读取/保存每日或每周北京时间、启用/暂停。沿用版本冲突、原子 drop-in、状态核对/失败回滚；VPS 需更新 root-owned helper 副本及模板，并创建两处固定 drop-in 目录。Node 22.23.2 构建与 36 项定向检查通过；真实 VPS systemd 未验证，见 2026-10-22 Library 定时设置记录。
 
 - SFTP imports 的 Run now 左侧新增 Settings：可编辑配置中的 JSONL，显式 Check 校验格式/path/重复项，未通过或改文后未重检禁止保存；后端重检、版本冲突、原子保存、备份及既有跨进程导入锁。另可查看/调整现有 timer 的每日/每周北京时间及启停，使用固定单元的 root-owned Unix socket helper，不新增调度器或开放任意命令。需在 VPS 一次性安装两份 helper unit 和独立编译脚本，无 npm/env/主服务权限变更。Node 22.23.2 构建、31 项定向检查及隔离浏览器交互通过；真实 VPS systemd 未验证，见 2026-10-22 SFTP 设置记录。
 
@@ -820,3 +822,25 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - Helper：复用原 Unix socket、flock 和独立 root-owned 编译副本，通过固定 `sftp`/`library` 枚举选择两份明确 timer/service/drop-in；旧 SFTP 无 source 请求继续有效。未知 source、任意 unit/path/命令拒绝。两边复用既有校验、原子写入、daemon-reload、实际状态核对与失败回滚，各自只操作其 timer，不直接启动/停止 import service。Persistent 补跑保持，启用/重启时仍可能由 systemd 触发正常补跑。
 - API 与权限：新增 `GET/PUT /api/library-import/settings/schedule`，后台绑定 Library 来源，HTTP 不接受目标来源参数；仅管理员 Cookie/Origin/CSRF，WeCom/MCP 凭证无管理权限，不暴露密钥。helper 模板只新增另一处固定 timer drop-in 写权限，主 Web 权限不变，无新依赖/env/socket/调度器。需用户构建并重新安装 root-owned helper 与更新模板，先创建两份固定 drop-in 目录，再 daemon-reload/重启 Web；不覆盖现有 import timer/service，不提交或部署。
 - 验证：**Node 22.23.2** TypeScript 构建通过，七个定向测试文件 **36 项检查全部通过、无跳过**（含嵌套用例）。包含实际临时 Unix socket 的双来源路由、SFTP/Library 相互隔离、Library 日/周/暂停及失败回滚、未知来源/越权 unit 拒绝、管理员鉴权/CSRF/Origin/冲突、UI 草稿/失败/迟到读取，以及原 SFTP 路径、传输恢复和 SYNC HTTP 回归。systemctl 为隔离模拟；Library UI 执行真实脚本于最小 DOM，**不是本次真实浏览器视觉验证或 Ubuntu systemd 激活验证**。未运行全量测试、真实模型/资料库/SFTP 下载，未修改正式知识/Memory/env 或 VPS。保留此前所有工作区改动，README、Library/SFTP 说明同步提供更新步骤。
+
+## 2026-10-23：企业微信在线资料定时导入
+
+原因：将企业微信在线表格/文档的文字稳定导入现有收件流程，避免依赖个人电脑 MCP、重复消耗模型或人工反复导出；图片不作为知识来源。本轮延续管理员此前明确授权，在 ProductExpertCloud 实现，未修改 pi-patrick、patrick-agent 或 wecom-mcp 项目源码。
+
+行为与兼容性：
+
+- Source imports 新增 WeCom imports 的 Run now、Stop、Settings、历史/逐文档输出与读取覆盖；新增 `/api/wecom-import/*`，沿用管理员 Cookie、Origin、CSRF。Bridge/MCP 机器凭证不授予维护权限，无任意命令/路径/输出目录入口。前端所有远端名称、描述、错误作为文字展示。
+- 独立清单 `.data/wecom_sync_docs.jsonl` 仅 `docid` + `description`，支持普通 `e3_` 表格和 `w3_` Word；智能表格/文档、幻灯片拒绝。Check、保存重检、打开版本冲突、旧清单备份、原子保存和已有 proper-lockfile 机制；清单保存与该导入器互斥，当前 run 使用启动时快照。为复用编辑器，仅给 SftpPathsEditor 增加默认不变的校验函数注入。
+- 官方 CLI 只允许六个读取操作，明确隔离授权目录，子进程环境不继承 Bridge bot、外部 access token/header/debug 配置。有限重试、45 秒请求、10 分钟文档及两小时批次截止；POSIX 私有进程组停止官方 npm launcher 及 native 子进程。每工作簿 200 表/500,000 格，快照/单份 Markdown 16 MiB，写入保留 256 MiB 余量。权限失败逐文档记录，授权/磁盘失败停止剩余文档。
+- 表格同成功版本跳过全文；版本变化时读取所有表（含隐藏表）、实际范围分块值/公式/文字链接与合并区域，拒绝截断/不可见/覆盖不符；前后版本变化最多重新完整采集一次。成功但省略空 merges 字段的 CLI 响应兼容为空，其他不完整响应失败。每表独立内容 Hash，排除图片、单元格样式、版本和抓取时间；真实合并才传播锚点，并保留来源行列、多行文字、数字/布尔类型和公式。稀疏跨行/列合并避免扩张无关空白的笛卡尔积，并有输出预算。
+- Word 每次读取正文及可用版本，支持直接正文、限定请求目录内的正文文件/JSON 包装文件；规范化正文 Hash，不假设独立版本预检。忽略图片，不调用 AI；缺少真实 Word 样本，本轮只完成模拟协议验证。
+- `.data/logs/wecom_sync/` 保存状态、成功快照、JSON/JSONL 报告。逐来源/工作表稳定文件名，改描述不触发内容更新，重命名保留文件名。比较最近成功 Hash，消费后不重复投递，A→B→A 仍作为真实更新。完整采集核验后在收件目录内隐藏暂存，避免 EXDEV；先落待投递记录再原子发布。旧收件副本须符合已管理 Hash 才替换；人工修改保留并报冲突。重启先恢复待投递，不能用版本未变绕过恢复；证据不充分则拒绝猜测。保留原 SYNC 输入 Hash 校验。移除来源/工作表只报告，不删除正式知识。
+- 新增 `npm run wecom:import`，直接执行已有 dist；没有新增项目 npm 依赖，VPS 需单独安装/授权官方 CLI。`.env.example` 仅新增 CLI 路径、独立授权目录、清单路径及可选超时占位，不保存真实凭据。
+- 新增独立 service/timer 模板：每天 04:00 Asia/Shanghai，Persistent 补一次漏跑，不依赖主 Web 服务，不自动启动知识 SYNC。既有 SFTP 命名 helper/socket 仅扩为三个固定 timer，分别读取/保存实际 systemd 状态、冲突校验/失败回滚。安装说明要求**先建三个 drop-in 目录再更新 helper**，防止此前 226/NAMESPACE；不覆盖现有 SFTP/Library service/timer。用户负责提交、VPS 更新、授权与安装启用。
+
+验证：
+
+- Node **22.23.2** 构建通过；最终 `node --test tests/*.test.mjs` **298 项通过，0 失败**。模拟覆盖清单 Check/冲突/备份/锁、版本跳过、样式/图片变化但文字未变、单表更新、隐藏/合并/多行/公式/数值、重命名/同名来源、内容恢复旧值、消费去重、截断/不可见/中途变版、授权/磁盘/取消、人工改动、真实 CLI 子进程与 Web 锁重叠、待投递重启恢复/硬链接中断/证据不足拒绝、损坏/符号链接、Word 正文及临时文件、进程组取消/限流重试、管理员访问边界、三个 timer 隔离。
+- 隔离浏览器确认 Source imports 新入口、JSONL 错误禁止保存、有效 Check→保存、独立模拟计划保存以及 Run now/逐文档报告。前端自动化覆盖草稿保存失败、迟到 Check/读取、关闭未保存提示；systemctl 及计划保存是模拟，不能视为真实 VPS 成功。
+- 使用已授权官方 CLI **1.2.1** 只读抓取 Device and Accessories Guide，前后版本 **14519**，全部 **38 张表**（隐藏 SR5600、i9100 非金版）、**4,065 个非空单元格**的值/类型/坐标及 **635 个实际合并区域**与管理员原始 XLSX 完全一致，零差异。隔离首次投递 38 份，第二次仅一次版本请求即 Unchanged；使用最终 Markdown 渲染器重新输出 38 份约 349 KB 的文字文件验证。证据/生成物位于本机临时目录，未修改原 Excel、在线内容、正式知识或 Memory，未执行正式 SYNC。
+- Guide 的真实只读采集复用了本机已有授权；没有在 VPS 初始化或更改部署凭据。真实 Word、长期 token 自动刷新、Ubuntu systemd 激活/计划与沙箱权限尚未验证，留待管理员部署。未调用真实模型，未安装/启用定时器，未提交或推送。

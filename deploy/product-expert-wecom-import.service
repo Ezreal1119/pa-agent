@@ -1,0 +1,42 @@
+[Unit]
+Description=Import changed WeCom online document text
+Wants=network-online.target
+After=network-online.target
+# Independent of product-expert.service. Does not start knowledge Sync.
+
+[Service]
+Type=oneshot
+# Use the same account/group as the Web service and CLI authorization directory.
+User=productexpert
+Group=productexpert
+WorkingDirectory=/opt/ProductExpertCloud
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --max-old-space-size=256 /opt/ProductExpertCloud/dist/wecom-import/cli.js
+TimeoutStartSec=2h
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+LimitCORE=0
+MemoryAccounting=yes
+MemoryHigh=700M
+MemoryMax=900M
+MemorySwapMax=256M
+CPUQuota=100%
+TasksMax=64
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/ProductExpertCloud/.data/logs/wecom_sync
+# Hidden staging and final Markdown must share the inbox mount.
+ReadWritePaths=/opt/ProductExpertCloud/.data/urovo-product-expert/newly_added
+# Official CLI refreshes its own credentials here. Initialize before starting.
+ReadWritePaths=/opt/ProductExpertCloud/.data/wecom-auth

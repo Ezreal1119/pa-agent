@@ -32,6 +32,7 @@ export class SftpPathsEditor {
   constructor(
     readonly file: string,
     readonly stateDir: string,
+    private readonly checker: typeof checkPaths = checkPaths,
   ) {}
   async read() {
     if (!this.file.endsWith(".jsonl"))
@@ -63,12 +64,12 @@ export class SftpPathsEditor {
       text,
       revision: hash(bytes ?? "missing"),
       exists: !!bytes,
-      check: checkPaths(text),
+      check: this.checker(text),
     };
   }
   // The service holds its existing cross-process import lock while saving.
   async save(text: unknown, revision: unknown) {
-    const checked = checkPaths(text);
+    const checked = this.checker(text);
     if (!checked.valid)
       throw new SyncError(
         checked.errors

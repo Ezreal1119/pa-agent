@@ -12,6 +12,8 @@
     <script src="/synchronize-library.js" defer></script>
     <script src="/synchronize-sftp-settings.js" defer></script>
     <script src="/synchronize-library-settings.js" defer></script>
+    <script src="/synchronize-wecom-imports.js" defer></script>
+    <script src="/synchronize-wecom-settings.js" defer></script>
   </head>
   <body class="sync-body">
     <main class="sync-page">
@@ -219,6 +221,14 @@
           <div class="sftp-status"><p id="library-import-config" role="status">Checking configuration…</p><p class="sync-subtle">PDF · PPTX · XLSX · DOCX · up to 100 MiB per file. Latest report only; no history catch-up or automatic Sync.</p><p id="library-import-schedule" class="sync-subtle">Checking systemd schedule…</p></div>
           <div class="sync-reports-layout"><aside id="library-import-history" class="sync-history" aria-label="Library import history"></aside><div id="library-import-report" class="sync-report"><div class="sync-empty-report"><h3>No library imports yet</h3><p>Run an import to see classification and delivery results here.</p></div></div></div>
         </div>
+        <div class="sync-panel wecom-import-panel">
+          <div class="sync-panel-heading">
+            <div><h2>WeCom imports</h2><p>Read changed online spreadsheets and Word documents. Text only; review Markdown in Incoming files before starting Sync.</p></div>
+            <div class="sftp-heading-actions"><button id="wecom-settings-open" class="sync-button" type="button">Settings</button><button id="wecom-import-run" class="sync-button sync-button-primary" disabled>Run now →</button></div>
+          </div>
+          <div class="sftp-status"><p id="wecom-import-config" role="status">Checking configuration…</p><p class="sync-subtle">Ordinary spreadsheets and Word only. Images are omitted. No AI or automatic Sync.</p><p id="wecom-schedule-summary" class="sync-subtle">Checking systemd schedule…</p></div>
+          <div class="sync-reports-layout"><aside id="wecom-import-history" class="sync-history" aria-label="WeCom import history"></aside><div id="wecom-import-report" class="sync-report"><div class="sync-empty-report"><h3>No WeCom imports yet</h3><p>Run an import to see document reading and delivery results here.</p></div></div></div>
+        </div>
       </section>
       <section id="panel-library" role="tabpanel" aria-labelledby="tab-library" class="sync-tab-panel" hidden>
         <div class="sync-panel">
@@ -266,6 +276,32 @@
         <div class="sftp-settings-actions"><small id="sftp-schedule-unsaved" class="sync-subtle"></small><button id="sftp-schedule-save" type="button" class="sync-button sync-button-primary" disabled>Save schedule</button></div>
       </section>
       <div class="sftp-settings-footer"><button id="sftp-settings-close" type="button" class="sync-button">Close</button></div>
+    </dialog>
+    <dialog id="wecom-settings-dialog" class="sftp-settings-dialog" aria-labelledby="wecom-settings-title">
+      <div class="sftp-settings-title"><div><p class="sftp-settings-eyebrow">SOURCE IMPORT SETTINGS</p><h2 id="wecom-settings-title">WeCom import settings</h2><p>Save the document list and systemd schedule independently. CLI authorization stays on the VPS.</p></div><button id="wecom-settings-x" type="button" class="sync-button sync-button-quiet" aria-label="Close WeCom import settings">✕</button></div>
+      <section class="sftp-settings-section" aria-labelledby="wecom-paths-title">
+        <div class="sftp-settings-section-heading"><h3 id="wecom-paths-title">Documents</h3><button id="wecom-paths-reload" class="sync-button sync-button-quiet" type="button">Reload documents</button></div>
+        <p id="wecom-editor-file" class="sync-subtle"></p>
+        <label for="wecom-paths-text">Document list · JSONL</label>
+        <textarea id="wecom-paths-text" class="sftp-paths-editor" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder='{"docid":"e3_...","description":"Device and Accessories Guide"}' disabled></textarea>
+        <p class="sync-subtle">One {"docid":"e3_… or w3_…","description":"Document name"} per line. Check validates locally; it does not access WeCom.</p>
+        <div id="wecom-paths-result" class="sftp-settings-result" role="status" aria-live="polite"></div>
+        <div class="sftp-settings-actions"><small id="wecom-paths-unsaved" class="sync-subtle"></small><button id="wecom-paths-check" type="button" class="sync-button" disabled>Check</button><button id="wecom-paths-save" type="button" class="sync-button sync-button-primary" disabled>Save documents</button></div>
+      </section>
+      <section class="sftp-settings-section" aria-labelledby="wecom-schedule-title">
+        <div class="sftp-settings-section-heading"><h3 id="wecom-schedule-title">Schedule</h3><button id="wecom-schedule-reload" class="sync-button sync-button-quiet" type="button">Reload schedule</button></div>
+        <p class="sync-subtle">Uses the existing product-expert-wecom-import.timer. All times are Beijing time (UTC+08:00). Missed-run catch-up remains enabled.</p>
+        <p id="wecom-timer-current" class="sync-subtle"></p>
+        <div class="sftp-schedule-fields">
+          <label class="sftp-schedule-enabled"><input id="wecom-schedule-enabled" type="checkbox" disabled> Enable scheduled imports</label>
+          <label>Frequency<select id="wecom-schedule-frequency" disabled><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+          <label id="wecom-schedule-day-label" hidden>Day<select id="wecom-schedule-day" disabled><option value="Mon">Monday</option><option value="Tue">Tuesday</option><option value="Wed">Wednesday</option><option value="Thu">Thursday</option><option value="Fri">Friday</option><option value="Sat">Saturday</option><option value="Sun">Sunday</option></select></label>
+          <label>Time<input id="wecom-schedule-time" type="time" step="60" value="04:00" required disabled></label>
+        </div>
+        <p id="wecom-schedule-result" class="sftp-settings-result" role="status" aria-live="polite"></p>
+        <div class="sftp-settings-actions"><small id="wecom-schedule-unsaved" class="sync-subtle"></small><button id="wecom-schedule-save" type="button" class="sync-button sync-button-primary" disabled>Save schedule</button></div>
+      </section>
+      <div class="sftp-settings-footer"><button id="wecom-settings-close" type="button" class="sync-button">Close</button></div>
     </dialog>
     <dialog id="library-settings-dialog" class="sftp-settings-dialog" aria-labelledby="library-settings-title">
       <div class="sftp-settings-title"><div><p class="sftp-settings-eyebrow">SOURCE IMPORT SETTINGS</p><h2 id="library-settings-title">Library import settings</h2><p>Adjust the Library systemd timer. Downloads only; start knowledge Sync separately.</p></div><button id="library-settings-x" type="button" class="sync-button sync-button-quiet" aria-label="Close Library settings">✕</button></div>
