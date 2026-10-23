@@ -201,7 +201,7 @@ export function createPlanner(options: {
         candidate: Type.Optional(Type.Boolean()),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
       });
-      function stage(name: string, text: string) {
+      function checkStagePath(name: string) {
         if(input.association)throw new Error("Association review is read-only. Submit associate without staged pages; the backend generates additive index changes.");
         relative(name);
         if (
@@ -214,6 +214,9 @@ export function createPlanner(options: {
           throw new Error(
             "The backend appends the log. Submit only logEntry in finish_sync.",
           );
+      }
+      function stage(name: string, text: string) {
+        checkStagePath(name);
         if (!text.trim() || Buffer.byteLength(text) > 2 * 1024 * 1024)
           throw new Error(
             "Candidate knowledge page must contain 1–2 MiB of text.",
@@ -389,7 +392,7 @@ export function createPlanner(options: {
         ),
         tool(
           "patch_candidate",
-          "Stage exact local replacements in a Vault page. Supply the hash from read_knowledge; each before must occur exactly once. Does not publish. Log is appended by backend.",
+          "Stage exact local replacements in a Vault page. Supply the hash from the current read_knowledge view (candidate=true if already staged); each before must occur exactly once. Replacements run sequentially and the whole call is atomic. On failure, structured diagnostics identify the path, replacementIndex, matchCount and nextRead offsets; reread that view and repair the whole batch. Does not publish. Log is appended by backend.",
           Type.Object({
             path: Type.String(),
             expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
@@ -402,20 +405,51 @@ export function createPlanner(options: {
             ),
           }),
           (a) => {
-            let text = staged.get(a.path) ?? input.base.get(a.path);
-            if (text === undefined || hash(text) !== a.expectedHash)
+            checkStagePath(a.path);
+            const candidate = staged.has(a.path);
+            const original = staged.get(a.path) ?? input.base.get(a.path);
+            const currentHash = original === undefined ? null : hash(original);
+            const nextRead = original === undefined ? null : { path: a.path, candidate, offset: 0 };
+            if (original === undefined || currentHash !== a.expectedHash)
               throw new Error(
-                "Candidate baseline conflict. Read the current candidate and retry.",
+                JSON.stringify({
+                  error: "Candidate baseline conflict. Read the current candidate and retry.",
+                  code: original === undefined ? "PATCH_FILE_NOT_FOUND" : "PATCH_BASELINE_CONFLICT",
+                  path: a.path, expectedHash: a.expectedHash, currentHash,
+                  currentView: candidate ? "candidate" : "original", nextRead,
+                  stagedUnchanged: true,
+                  instruction: original === undefined
+                    ? "Verify the exact current Vault path using list_knowledge. No replacements were saved."
+                    : "Use read_knowledge with nextRead. Continue nextOffset as needed, copy exact text from this current view and retry the entire batch with its hash. No replacements were saved.",
+                }),
               );
-            for (const edit of a.replacements) {
+            let text = original;
+            for (const [index, edit] of a.replacements.entries()) {
+              const locations: { offset: number; line: number; column: number; readOffset: number }[] = [];
+              let matchCount = 0, line = 1, lastNewline = -1;
               const at = text.indexOf(edit.before);
-              if (
-                !edit.before ||
-                at < 0 ||
-                text.indexOf(edit.before, at + 1) >= 0
-              )
+              for (let found = at; edit.before && found >= 0; found = text.indexOf(edit.before, found + 1)) {
+                matchCount++;
+                if (locations.length < 8) {
+                  for (let newline = text.indexOf("\n", lastNewline + 1); newline >= 0 && newline < found; newline = text.indexOf("\n", newline + 1)) {
+                    line++; lastNewline = newline;
+                  }
+                  locations.push({ offset: found, line, column: found - lastNewline, readOffset: Math.floor(found / 20000) * 20000 });
+                }
+              }
+              if (!edit.before || matchCount !== 1)
                 throw new Error(
-                  "Each replacement must match exactly once; include more surrounding context.",
+                  JSON.stringify({
+                    error: "Each replacement must match exactly once; include more surrounding context.",
+                    code: matchCount === 0 ? "PATCH_NO_MATCH" : "PATCH_MULTIPLE_MATCHES",
+                    path: a.path, replacementIndex: index + 1, matchCount,
+                    currentHash, currentView: candidate ? "candidate" : "original",
+                    nextRead: { ...nextRead, offset: index === 0 ? locations[0]?.readOffset ?? 0 : 0 },
+                    locations, locationsTruncated: matchCount > locations.length,
+                    matchBasis: index === 0 ? "current_view" : "temporary_text_after_earlier_replacements",
+                    stagedUnchanged: true,
+                    instruction: "No replacements in this call were saved. Use read_knowledge with nextRead (candidate=true only if currentView=candidate). For the first replacement, locations/readOffset refer to that current view; for later replacements they refer to temporary text after earlier replacements, so recheck the whole batch in order. Copy exact text and add unique surrounding context; do not normalize whitespace or replace all matches. Retry the entire corrected batch with currentHash.",
+                  }),
                 );
               text =
                 text.slice(0, at) +

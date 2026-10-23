@@ -623,3 +623,282 @@ test("normal SYNC does not expose automatic deletion reads or change source-depe
     ]),
   });
 });
+
+function latestToolValue(f) {
+  const text = f.requests
+    .at(-1)
+    .messages.filter((m) => m.role === "tool")
+    .at(-1).content;
+  return JSON.parse(text.slice(text.indexOf("{")));
+}
+
+test("patch diagnostics distinguish absent, repeated, overlapping, stale, missing and sequential-batch failures without saving partial edits", async (t) => {
+  const f = await setup(t);
+  const cases = [
+    {
+      name: "absent",
+      text: "# 中文\n正确文字\n",
+      before: "不存在的文字",
+      code: "PATCH_NO_MATCH",
+      count: 0,
+    },
+    {
+      name: "repeated",
+      text: "# 中文\n" + "重复片段\n".repeat(12),
+      before: "重复片段",
+      code: "PATCH_MULTIPLE_MATCHES",
+      count: 12,
+    },
+    {
+      name: "overlapping",
+      text: "aaa",
+      before: "aa",
+      code: "PATCH_MULTIPLE_MATCHES",
+      count: 2,
+    },
+    {
+      name: "stale",
+      text: "# Current original",
+      before: "Current",
+      code: "PATCH_BASELINE_CONFLICT",
+      stale: true,
+    },
+    {
+      name: "missing",
+      text: undefined,
+      before: "none",
+      code: "PATCH_FILE_NOT_FOUND",
+      stale: true,
+    },
+    {
+      name: "sequential",
+      text: "# Alpha\n",
+      before: "absent",
+      code: "PATCH_NO_MATCH",
+      count: 0,
+      sequential: true,
+    },
+  ];
+  for (const c of cases)
+    await t.test(c.name, async () => {
+      const replacements = [
+        ...(c.sequential ? [{ before: "Alpha", after: "Beta" }] : []),
+        { before: c.before, after: "CHANGED" },
+      ];
+      const base = new Map(c.text === undefined ? [] : [[hub, c.text]]);
+      const calls = [
+        tool("patch_candidate", {
+          path: hub,
+          expectedHash: c.stale ? "0".repeat(64) : hash(c.text),
+          replacements,
+        }),
+        tool("read_knowledge", { path: hub }),
+        tool("finish_sync", decision),
+      ];
+      f.set((res, n) => {
+        if (n === 1) {
+          const diagnostic = latestToolValue(f);
+          assert.equal(diagnostic.path, hub);
+          assert.equal(diagnostic.code, c.code);
+          assert.equal(diagnostic.currentView, "original");
+          assert.equal(
+            diagnostic.currentHash,
+            c.text === undefined ? null : hash(c.text),
+          );
+          assert.equal(diagnostic.stagedUnchanged, true);
+          if (!c.stale) {
+            assert.equal(diagnostic.replacementIndex, c.sequential ? 2 : 1);
+            assert.equal(diagnostic.matchCount, c.count);
+            assert.equal(
+              diagnostic.matchBasis,
+              c.sequential
+                ? "temporary_text_after_earlier_replacements"
+                : "current_view",
+            );
+            assert.ok(diagnostic.locations.length <= 8);
+            assert.equal(diagnostic.locationsTruncated, c.count > 8);
+            if (c.count > 0) {
+              const loc = diagnostic.locations[0];
+              const at = c.text.indexOf(c.before);
+              assert.equal(loc.offset, at);
+              assert.equal(loc.line, c.text.slice(0, at).split("\n").length);
+              assert.equal(loc.readOffset, Math.floor(at / 20000) * 20000);
+            }
+          }
+          if (c.text !== undefined)
+            assert.deepEqual(diagnostic.nextRead, {
+              path: hub,
+              candidate: false,
+              offset: 0,
+            });
+          else assert.equal(diagnostic.nextRead, null);
+        }
+        if (n === 2 && c.text !== undefined)
+          assert.equal(latestToolValue(f).text, c.text);
+        reply(res, calls[n]);
+      });
+      const result = await f.run({ base });
+      assert.equal(result.staged.size, 0);
+      if (c.text !== undefined) assert.equal(base.get(hub), c.text);
+    });
+});
+
+test("already-staged patch failure points to the current candidate and its exact segment, then a unique repair succeeds", async (t) => {
+  const f = await setup(t);
+  const original = "# Original";
+  const candidate =
+    "# Candidate\n" + "前".repeat(21000) + "\nLEFT repeat\nRIGHT repeat\n";
+  const fixed = candidate.replace("RIGHT repeat", "RIGHT changed");
+  const calls = [
+    tool("write_candidate", { path: hub, text: candidate }),
+    tool("patch_candidate", {
+      path: hub,
+      expectedHash: hash(candidate),
+      replacements: [{ before: "repeat", after: "changed" }],
+    }),
+    tool("read_knowledge", { path: hub, candidate: true, offset: 20000 }),
+    tool("patch_candidate", {
+      path: hub,
+      expectedHash: hash(candidate),
+      replacements: [{ before: "RIGHT repeat", after: "RIGHT changed" }],
+    }),
+    tool("read_knowledge", { path: hub, candidate: true, offset: 20000 }),
+    tool("finish_sync", decision),
+  ];
+  f.set((res, n) => {
+    if (n === 2) {
+      const d = latestToolValue(f);
+      assert.equal(d.code, "PATCH_MULTIPLE_MATCHES");
+      assert.equal(d.currentView, "candidate");
+      assert.equal(d.currentHash, hash(candidate));
+      assert.deepEqual(d.nextRead, {
+        path: hub,
+        candidate: true,
+        offset: 20000,
+      });
+      assert.equal(d.matchCount, 2);
+    }
+    if (n === 3)
+      assert.equal(latestToolValue(f).text, candidate.slice(20000, 40000));
+    if (n === 5)
+      assert.equal(latestToolValue(f).text, fixed.slice(20000, 40000));
+    reply(res, calls[n]);
+  });
+  const result = await f.run({ base: new Map([[hub, original]]) });
+  assert.equal(result.staged.get(hub), fixed);
+  assert.equal(f.requests.length, calls.length);
+});
+
+test("patch diagnostics retain repeated-error termination and do not reveal protected text or hashes", async (t) => {
+  const f = await setup(t),
+    text = "# Repeated";
+  const bad = tool("patch_candidate", {
+    path: hub,
+    expectedHash: hash(text),
+    replacements: [{ before: "MISSING", after: "x" }],
+  });
+  f.set((res) => reply(res, bad));
+  await assert.rejects(
+    f.run({ base: new Map([[hub, text]]) }),
+    /PATCH_NO_MATCH/,
+  );
+  assert.equal(f.requests.length, 2);
+  const privateText = "PRIVATE_PATCH_SENTINEL";
+  const protectedPaths = [
+    "MEMORY.md",
+    "product-knowledge-vault/MEMORY.md",
+    "product-knowledge-vault/log.md",
+    "DT610/specs/test_202610230001/x.md",
+  ];
+  for (const p of protectedPaths) {
+    f.set((res, n) =>
+      reply(
+        res,
+        n === 0
+          ? tool("patch_candidate", {
+              path: p,
+              expectedHash: "0".repeat(64),
+              replacements: [{ before: "PRIVATE", after: "x" }],
+            })
+          : tool("finish_sync", decision),
+      ),
+    );
+    await f.run({ base: new Map([[p, privateText]]) });
+    const payload = JSON.stringify(f.requests);
+    assert.ok(!payload.includes(privateText));
+    assert.ok(!payload.includes(hash(privateText)));
+    assert.ok(!payload.includes('"currentHash"'));
+  }
+});
+
+test("failed exact patch can be repaired through a real deletion preview; no deletion occurs until confirmation", async (t) => {
+  const f = await setup(t),
+    root = path.join(f.dataDir, "urovo-product-expert");
+  const original = `# DT610\n${existing}\n${source}\nKEEP INDEPENDENT FACTS\n`;
+  for (const [p, text] of [
+    [source, "# Source to retire"],
+    [existing, "# Independent specs"],
+    [hub, original],
+    ["product-knowledge-vault/index.md", "[[products/DT610|DT610]]"],
+  ]) {
+    await fs.mkdir(path.dirname(path.join(root, p)), { recursive: true });
+    await fs.writeFile(path.join(root, p), text);
+  }
+  const service = await f.service();
+  const calls = [
+    tool("source_dependents", { paths: [source] }),
+    tool("read_next_deletion_batch"),
+    tool("patch_candidate", {
+      path: hub,
+      expectedHash: hash(original),
+      replacements: [{ before: "HALLUCINATED OLD LINK", after: "" }],
+    }),
+    tool("read_knowledge", { path: hub }),
+    tool("patch_candidate", {
+      path: hub,
+      expectedHash: hash(original),
+      replacements: [{ before: source + "\n", after: "" }],
+    }),
+    tool("finish_sync", {
+      ...decision,
+      action: "delete",
+      oldPaths: [source],
+      reviewedPaths: [hub],
+    }),
+  ];
+  f.set((res, n) => {
+    if (n === 3) {
+      const d = latestToolValue(f);
+      assert.equal(d.code, "PATCH_NO_MATCH");
+      assert.deepEqual(d.nextRead, { path: hub, candidate: false, offset: 0 });
+    }
+    reply(res, calls[n]);
+  });
+  const preview = await done(
+    service,
+    (await service.preview("Delete only the fixture source")).id,
+  );
+  assert.equal(
+    preview.status,
+    "awaiting_confirmation",
+    preview.items[0].reason,
+  );
+  assert.equal(await fs.readFile(path.join(root, hub), "utf8"), original);
+  assert.equal(
+    await fs.readFile(path.join(root, source), "utf8"),
+    "# Source to retire",
+  );
+  assert.equal(f.requests.length, calls.length);
+  const confirmed = await done(service, (await service.confirm(preview.id)).id);
+  assert.equal(confirmed.items[0].status, "deleted", confirmed.items[0].reason);
+  await assert.rejects(fs.stat(path.join(root, source)), { code: "ENOENT" });
+  assert.equal(
+    await fs.readFile(path.join(root, hub), "utf8"),
+    original.replace(source + "\n", ""),
+  );
+  assert.equal(
+    await fs.readFile(path.join(root, existing), "utf8"),
+    "# Independent specs",
+  );
+  assert.equal(f.requests.length, calls.length);
+});
