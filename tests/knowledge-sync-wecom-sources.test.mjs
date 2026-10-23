@@ -700,7 +700,7 @@ test("an incorrect legacy route cannot silently drop the migration fallback", as
 });
 
 
-test("real planner can correct a legacy review into a verified delete and stop without a final model request", async (t) => {
+test("real planner can batch-read a legacy retirement, correct a review into a verified delete and stop without a final model request", async (t) => {
   const f = await fixture(t);
   for (const output of f.outputs) {
     const v = await verified(f, output);
@@ -715,8 +715,13 @@ test("real planner can correct a legacy review into a verified delete and stop w
   };
   const calls = [
     { name: "finish_sync", args: { ...deletion, action: "review" } },
-    ...[...new Set([old, ...deletion.reviewedPaths])].map(p => ({name: "read_knowledge", args: {path: p}})),
+    { name: "source_dependents", args: { paths: [old] } },
+    { name: "read_next_deletion_batch", args: {} },
     { name: "write_candidate", args: {path: hub, text: base.get(hub)} },
+    { name: "finish_sync", args: deletion },
+    // The Hub now links via the managed index, so it is no longer a direct dependent.
+    // finish_sync queues its unread original because the candidate stages that Hub.
+    { name: "read_next_deletion_batch", args: {} },
     { name: "finish_sync", args: deletion },
   ];
   let requests = 0;

@@ -111,6 +111,25 @@ export function createPlanner(options: {
       await runtime.setRuntimeApiKey("sync-provider", model.apiKey);
       const staged = new Map<string, string>();
       const readRanges = new Map<string, Set<number>>();
+      const deletion = input.deletion ?? input.prompt.startsWith("DELETE PREVIEW");
+      // Read-only session-local queue. Registration never authorizes a deletion.
+      const deletionReads = new Map<string, string>(deletion ? [["@candidate", input.markdown]] : []);
+      const missingReads = (files: Map<string, string>) => [...files].flatMap(([key, text]) => {
+        const offsets: number[] = [];
+        for (let offset = 0; offset < text.length; offset += 20000)
+          if (!readRanges.get(key)?.has(offset)) offsets.push(offset);
+        return offsets.length ? [{ path: key, offsets, totalCharacters: text.length }] : [];
+      });
+      function registerDeletionReads(paths: string[]) {
+        for (const p of paths) {
+          relative(p);
+          if (excluded(p)) throw new SyncError("Protected path.");
+          if (!p.endsWith(".md") || !input.base.has(p)) throw new SyncError(`Current Markdown not found: ${p}`);
+        }
+        const affected = dependents(input.base, paths).filter(p => p !== "product-knowledge-vault/log.md" && !excluded(p));
+        for (const p of [...paths, ...affected]) deletionReads.set(p, input.base.get(p)!);
+        return affected;
+      }
       function read(key: string, text: string, offset = 0) {
         if (offset % 20000 !== 0)
           throw new Error("Use the supplied nextOffset.");
@@ -145,8 +164,6 @@ export function createPlanner(options: {
             : "The backend rejected this plan. Fix every listed problem with the candidate tools and call finish_sync again. Choose action=review only when a real business decision (product identity, version order, new product, conflicting facts) is required.",
         };
       }
-      const deletion =
-        input.deletion ?? input.prompt.startsWith("DELETE PREVIEW");
       const tool = (
         name: string,
         description: string,
@@ -213,6 +230,27 @@ export function createPlanner(options: {
         return { staged: name, hash: hash(text) };
       }
       const tools: ToolDefinition[] = [
+        ...(deletion ? [tool(
+          "read_next_deletion_batch",
+          "Read the next unread original segments of this deletion's candidate, registered source paths and direct dependents. First call source_dependents with exact deletion target paths. No offsets needed. Returns at most 40000 characters across four segments; repeat until complete=true. Never writes or authorizes deletion.",
+          Type.Object({}),
+          () => {
+            const segments = [];
+            let characters = 0;
+            for (const pending of missingReads(deletionReads)) {
+              for (const offset of pending.offsets) {
+                const text = deletionReads.get(pending.path)!;
+                const length = Math.min(20000, text.length - offset);
+                if (segments.length >= 4 || characters + length > 40000) break;
+                segments.push({ path: pending.path, ...read(pending.path, text, offset) });
+                characters += length;
+              }
+              if (segments.length >= 4 || characters >= 40000) break;
+            }
+            const remaining = missingReads(deletionReads);
+            return { segments, complete: remaining.length === 0, missingReads: remaining };
+          },
+        )] : []),
         tool(
           "list_knowledge",
           "List Markdown paths with paging.",
@@ -321,9 +359,11 @@ export function createPlanner(options: {
         ),
         tool(
           "source_dependents",
-          "Find pages that directly cite these source paths. Indirect Hub or index citations are not listed.",
+          "Find pages that directly cite these source paths. Indirect Hub or index citations are not listed. In deletion mode, also register exact current Markdown targets and direct dependents for read_next_deletion_batch; registration is read-only.",
           Type.Object({ paths: Type.Array(Type.String()) }),
-          (a) => ({ paths: dependents(input.base, a.paths) }),
+          (a) => deletion
+            ? { paths: registerDeletionReads(a.paths), missingReads: missingReads(deletionReads), nextTool: "read_next_deletion_batch" }
+            : { paths: dependents(input.base, a.paths) },
         ),
         tool(
           "product_hubs",
@@ -425,15 +465,32 @@ export function createPlanner(options: {
           }),
           async (a) => {
             try {
-              if (a.suggestedFeedback || a.reviewOptions?.length) readFully("@candidate", input.markdown);
+              if ((a.suggestedFeedback || a.reviewOptions?.length) && (!deletion || a.action === "review")) readFully("@candidate", input.markdown);
               if (a.action !== "review") {
-                readFully("@candidate", input.markdown);
-                for (const p of new Set([
+                const required = new Set<string>([
                   ...a.oldPaths,
                   ...a.reviewedPaths,
                   ...staged.keys(),
                   ...(input.association ? [input.association.path,...a.products.map((p:string)=>resolveHub(input.base,p))] : []),
-                ])) {
+                ]);
+                if (deletion) {
+                  // Include direct dependents up front, so missing-read repairs do not surface one page per attempt.
+                  const affected = dependents(input.base, a.oldPaths);
+                  for (const p of affected) required.add(p);
+                  const files = new Map<string, string>([["@candidate", input.markdown]]);
+                  for (const p of required) {
+                    if (p === "product-knowledge-vault/log.md" || excluded(p)) continue;
+                    const text = input.base.get(p);
+                    if (text !== undefined) files.set(p, text);
+                  }
+                  const missing = missingReads(files);
+                  if (missing.length) {
+                    for (const [p, text] of files) deletionReads.set(p, text);
+                    const rejected = rejectPlan(new PlanError(missing.map(m => `Read all segments before submitting: ${m.path}; missing offsets: ${m.offsets.join(", ")}`)));
+                    return { ...rejected, missingReads: missing, nextTool: "read_next_deletion_batch" };
+                  }
+                } else readFully("@candidate", input.markdown);
+                for (const p of required) {
                   if (p === "product-knowledge-vault/log.md") continue;
                   const original = input.base.get(p);
                   if (original !== undefined) readFully(p, original);
@@ -542,7 +599,7 @@ export function createPlanner(options: {
       input.signal.addEventListener("abort", abort, { once: true });
       try {
         await session.prompt(
-          `Operation: ${input.prompt}\nShanghai publication timestamp: ${input.timestamp}\nAdministrator feedback (trusted only for this task): ${input.feedback || "(none)"}\n${input.wecom ? `VERIFIED WECOM SECTION: ${wecomHint(input.wecom)}\nUse action=add if previousSource is absent, otherwise update with exactly that oldPaths entry. The backend will maintain the managed shared index and main catalog link; do not stage those managed shared pages or create competing ones. Maintain the affected product Hubs and relevant fact pages, linking to indexPath. Never replace the complete legacy workbook or product-local accessories. Version metadata is verified evidence, never derive it from directory timestamps.\n` : ""}${input.association ? `ASSOCIATION-ONLY MODE: ${JSON.stringify(input.association)}\nThis source's bytes and existing published Markdown have been verified by the backend. Read the full candidate and existing product Hubs. Decide applicable canonical products from evidence and administrator feedback; identical bytes alone never authorize a new product. Preserve all existing products. Use action=associate, existingSource=${JSON.stringify(input.association.path)}, slot=${JSON.stringify(input.association.slot)}, products=the union of existing and approved products, oldPaths=[], and omit newPath and productHubs. Do not stage/write/patch any pages; the backend generates additive coverage links and requires administrator confirmation for changes. No source contents or versions can change in this mode. If the request could mean moving rather than sharing, or applicability is unclear, use review and ask explicitly.\n` : ""}Candidate characters: ${input.markdown.length}. Read it completely using read_candidate_source before deciding. Inspect the knowledge catalog and batch candidates. Submit using finish_sync.`,
+          `Operation: ${input.prompt}\nShanghai publication timestamp: ${input.timestamp}\nAdministrator feedback (trusted only for this task): ${input.feedback || "(none)"}\n${input.wecom ? `VERIFIED WECOM SECTION: ${wecomHint(input.wecom)}\nUse action=add if previousSource is absent, otherwise update with exactly that oldPaths entry. The backend will maintain the managed shared index and main catalog link; do not stage those managed shared pages or create competing ones. Maintain the affected product Hubs and relevant fact pages, linking to indexPath. Never replace the complete legacy workbook or product-local accessories. Version metadata is verified evidence, never derive it from directory timestamps.\n` : ""}${input.association ? `ASSOCIATION-ONLY MODE: ${JSON.stringify(input.association)}\nThis source's bytes and existing published Markdown have been verified by the backend. Read the full candidate and existing product Hubs. Decide applicable canonical products from evidence and administrator feedback; identical bytes alone never authorize a new product. Preserve all existing products. Use action=associate, existingSource=${JSON.stringify(input.association.path)}, slot=${JSON.stringify(input.association.slot)}, products=the union of existing and approved products, oldPaths=[], and omit newPath and productHubs. Do not stage/write/patch any pages; the backend generates additive coverage links and requires administrator confirmation for changes. No source contents or versions can change in this mode. If the request could mean moving rather than sharing, or applicability is unclear, use review and ask explicitly.\n` : ""}${deletion ? "DELETION READ PLAN: Call source_dependents with exact current source Markdown targets, then repeat read_next_deletion_batch until complete=true. It reads the candidate, targets and direct dependents from the original snapshot and tracks offsets automatically. Use its missingReads checklist to repair all missing reads before resubmitting. Inspect or edit only the target sources and pages that directly cite them, plus other pages demonstrably affected by this deletion; do not reanalyze every worksheet or unrelated product. Existing backend source/hash/migration checks and administrator confirmation remain mandatory.\n" : ""}Candidate characters: ${input.markdown.length}. Read it completely using read_candidate_source or, in deletion mode, read_next_deletion_batch before deciding. Inspect the knowledge catalog and batch candidates. Submit using finish_sync.`,
         );
         input.signal.throwIfAborted();
       } finally {

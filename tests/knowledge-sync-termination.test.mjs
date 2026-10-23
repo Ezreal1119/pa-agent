@@ -64,8 +64,9 @@ async function setup(t) {
     services = [];
   let respond;
   const server = createServer(async (req, res) => {
-    let raw = "";
-    for await (const c of req) raw += c;
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const raw = Buffer.concat(chunks).toString("utf8");
     const index = requests.length;
     requests.push(JSON.parse(raw));
     if (respond) await respond(res, index);
@@ -231,8 +232,8 @@ test("valid source publishes and a valid deletion preview confirms through the r
     reviewedPaths: [hub],
   };
   const remove = [
-    tool("read_knowledge", { path: source }),
-    tool("read_knowledge", { path: hub }),
+    tool("source_dependents", { paths: [source] }),
+    tool("read_next_deletion_batch"),
     tool("write_candidate", { path: hub, text: `# DT610\n${existing}` }),
     tool("finish_sync", deletion),
   ];
@@ -421,4 +422,204 @@ test("cancellation after a rejected plan remains cancellation, not the old valid
     /Fixture cancellation/,
   );
   assert.equal(f.requests.length, 2);
+});
+
+test("deletion missing reads list every original segment; automatic batches repair the same plan without rereading or following indirect references", async (t) => {
+  const f = await setup(t);
+  const index = "product-knowledge-vault/shared/fixture.md";
+  const note = "product-knowledge-vault/shared/retirement-note.md";
+  const indirect = "product-knowledge-vault/products/UNRELATED.md";
+  const original = "# Source\n" + "原文".repeat(12000);
+  const indexText = `# Shared reference\n${source}\n` + "索引".repeat(21000);
+  const hubText = `# DT610\n${existing}\n${source}\n${index}`;
+  const base = new Map([
+    [source, original],
+    [existing, "# Independent specs"],
+    [hub, hubText],
+    [index, indexText],
+    [note, "# Relevant retirement note"],
+    [indirect, `# Unrelated\n${hub}`],
+  ]);
+  const plan = {
+    ...decision,
+    action: "delete",
+    oldPaths: [source],
+    reviewedPaths: [hub, index, note],
+  };
+  const script = [
+    tool("source_dependents", { paths: [source] }),
+    tool("read_knowledge", { path: source }),
+    tool("write_candidate", {
+      path: hub,
+      text: `# DT610\n${existing}\n${index}`,
+    }),
+    tool("write_candidate", {
+      path: index,
+      text: "# Shared reference\nIndependent material retained",
+    }),
+    tool("read_knowledge", { path: index, candidate: true }),
+    tool("finish_sync", plan),
+  ];
+  const seen = new Set([`${source}:0`]);
+  let checklist,
+    validated = 0,
+    batches = 0,
+    complete = false;
+  const output = () =>
+    JSON.parse(
+      f.requests
+        .at(-1)
+        .messages.filter((m) => m.role === "tool")
+        .at(-1).content,
+    );
+  f.set((res, n) => {
+    if (n < script.length) return reply(res, script[n]);
+    if (n === script.length) {
+      checklist = output();
+      assert.equal(checklist.submitted, false);
+      assert.equal(checklist.repairsLeft, 2);
+      assert.equal(checklist.nextTool, "read_next_deletion_batch");
+      const missing = Object.fromEntries(
+        checklist.missingReads.map((m) => [m.path, m.offsets]),
+      );
+      assert.deepEqual(missing[source], [20000]);
+      assert.deepEqual(missing[index], [0, 20000, 40000]);
+      assert.deepEqual(missing[hub], [0]);
+      assert.deepEqual(missing[note], [0]); // Additional declared pages join the same queue at finish.
+      assert.deepEqual(missing["@candidate"], [0]);
+      assert.ok(!missing[indirect]);
+    } else {
+      const batch = output();
+      batches++;
+      assert.ok(batch.segments.length <= 4);
+      assert.ok(
+        batch.segments.reduce((sum, s) => sum + s.text.length, 0) <= 40000,
+      );
+      for (const segment of batch.segments) {
+        const key = `${segment.path}:${segment.offset}`;
+        assert.ok(!seen.has(key), `Duplicate segment ${key}`);
+        seen.add(key);
+        assert.equal(
+          segment.hash,
+          hash(
+            segment.path === "@candidate"
+              ? "Fixture source"
+              : base.get(segment.path),
+          ),
+        );
+        const expected = (
+          segment.path === "@candidate"
+            ? "Fixture source"
+            : base.get(segment.path)
+        ).slice(segment.offset, segment.offset + 20000);
+        assert.equal(
+          segment.text.length,
+          expected.length,
+          `${key}: original segment length`,
+        );
+        assert.equal(
+          hash(segment.text),
+          hash(expected),
+          `${key}: original segment content`,
+        );
+      }
+      if (batch.complete) {
+        assert.deepEqual(batch.missingReads, []);
+        complete = true;
+        return reply(res, tool("finish_sync", plan));
+      }
+    }
+    reply(res, tool("read_next_deletion_batch"));
+  });
+  const result = await f.run({
+    base,
+    deletion: true,
+    validate: async () => {
+      validated++;
+    },
+  });
+  assert.equal(result.decision.action, "delete");
+  assert.equal(validated, 1);
+  assert.ok(complete && batches >= 2);
+  assert.equal(seen.size, 8);
+  assert.ok(!result.staged.has(indirect));
+  assert.equal(base.get(source), original);
+  assert.equal(base.get(index), indexText);
+  assert.equal(f.requests.length, script.length + batches + 1); // No inference after accepted finish.
+  assert.ok(
+    JSON.stringify(f.requests[0].messages).includes("DELETION READ PLAN"),
+  );
+});
+
+test("deletion batch completion is idempotent, rejects protected or unknown targets, and remains cancellation-aware", async (t) => {
+  const f = await setup(t);
+  const base = new Map([
+    [source, "# Fixture"],
+    ["MEMORY.md", "PRIVATE_MEMORY_SENTINEL"],
+  ]);
+  const script = [
+    tool("source_dependents", { paths: [source, "MEMORY.md"] }),
+    tool("read_next_deletion_batch"), // Failed registration must not register even the valid target.
+    tool("read_next_deletion_batch"),
+    tool("source_dependents", { paths: ["missing.md"] }),
+    tool("read_next_deletion_batch"),
+    tool("finish_sync", decision),
+  ];
+  f.set((res, n) => {
+    if (n === 2 || n === 3 || n === 5) {
+      const value = JSON.parse(
+        f.requests
+          .at(-1)
+          .messages.filter((m) => m.role === "tool")
+          .at(-1).content,
+      );
+      assert.equal(value.complete, true);
+      assert.deepEqual(value.missingReads, []);
+      if (n === 2)
+        assert.deepEqual(
+          value.segments.map((s) => s.path),
+          ["@candidate"],
+        );
+      else assert.deepEqual(value.segments, []);
+    }
+    reply(res, script[n]);
+  });
+  await f.run({ base, deletion: true });
+  assert.ok(!JSON.stringify(f.requests).includes("PRIVATE_MEMORY_SENTINEL"));
+  const controller = new AbortController();
+  f.set((res, n) => {
+    if (n === 0) reply(res, tool("source_dependents", { paths: [source] }));
+    else {
+      controller.abort(new Error("Fixture queued read cancellation"));
+      reply(res, tool("read_next_deletion_batch"));
+    }
+  });
+  await assert.rejects(
+    f.run({ base, deletion: true, signal: controller.signal }),
+    /queued read cancellation/,
+  );
+});
+
+test("normal SYNC does not expose automatic deletion reads or change source-dependency results", async (t) => {
+  const f = await setup(t);
+  f.set((res, n) => {
+    assert.ok(
+      !f.requests[n].tools.some(
+        (t) => t.function.name === "read_next_deletion_batch",
+      ),
+    );
+    if (n === 0)
+      return reply(res, tool("source_dependents", { paths: [source] }));
+    const value = JSON.parse(
+      f.requests[n].messages.filter((m) => m.role === "tool").at(-1).content,
+    );
+    assert.deepEqual(value, { paths: [hub] });
+    reply(res, tool("finish_sync", decision));
+  });
+  await f.run({
+    base: new Map([
+      [source, "# Source"],
+      [hub, `# DT610\n${source}`],
+    ]),
+  });
 });

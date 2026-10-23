@@ -447,7 +447,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (!await auth.signIn(req, res, body.account.trim(), body.password, secureCookies)) throw new HttpError(401, "Incorrect account or password.");
         return json(res, 200, { ok: true });
       }
-      const publicAsset = ["/login", "/login.js", "/style.css"].includes(url.pathname) && (method === "GET" || method === "HEAD");
+      const publicAsset = ["/login", "/login.js", "/style.css", "/favicon.png", "/favicon.ico"].includes(url.pathname) && (method === "GET" || method === "HEAD");
       if (!authenticated && !publicAsset) {
         if (["/", "/wecom-contacts", "/mcp-usage", "/synchronize"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
         throw new HttpError(401, "Please sign in first.");
@@ -966,6 +966,8 @@ export async function createWebServer(options: WebOptions = {}) {
         }
       }
       const assets: Record<string, [string, string]> = {
+        "/favicon.png": [path.join(resourcesDir, "web/favicon.png"), "image/png"],
+        "/favicon.ico": [path.join(resourcesDir, "web/favicon.png"), "image/png"],
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
@@ -992,6 +994,7 @@ export async function createWebServer(options: WebOptions = {}) {
       };
       const asset = assets[url.pathname];
       if ((method === "GET" || method === "HEAD") && asset) {
+        if (url.pathname === "/favicon.png" || url.pathname === "/favicon.ico") res.setHeader("Cache-Control", "public, max-age=86400");
         const data = await fs.readFile(asset[0]); res.writeHead(200, { "Content-Type": asset[1] }); res.end(method === "HEAD" ? undefined : data); return;
       }
       throw new HttpError(404, "Page or endpoint not found.");
