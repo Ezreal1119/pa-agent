@@ -47,6 +47,12 @@ Startup takes the same CLI/Web lock and recovers pending outputs **before** the 
 
 Removing a source or worksheet is recorded on the next read. It never deletes formal knowledge or existing Incoming files. WeCom authorization loss/deletion is a reported failure, not an instruction to remove knowledge. Snapshots from removed sources are retained for continuity; unreferenced work/cache files are cleaned under the importer lock.
 
+## Publishing split worksheets with Sync
+
+Only changed worksheets enter Incoming files. Sync verifies importer receipts/cache and binds each source by `docid` + worksheet ID, rather than guessing ownership from its filename. A shared family navigation is maintained by the backend in the same publication transaction. Existing product-local accessories remain independent. This is separate from importing: delivered files have not yet become knowledge.
+
+For a workbook previously synchronized as a complete Excel document, use the [one-time migration procedure](wecom-sync-migration.md) before its split files' first Sync. Keep the old complete source until all replacements are verified and its dependent facts have been reviewed. Do not delete importer state or rename imported Markdown to force a rerun.
+
 ## CLI and administrator API
 
 Build once after updating code; timers run the existing build:

@@ -1,3 +1,4 @@
+import { verifyRetirement } from "./wecom-sources.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -73,6 +74,7 @@ export class Publisher {
           "Knowledge changed since this plan was prepared. Re-Sync or preview again.",
           409,
         );
+      await verifyRetirement(path.dirname(this.root), await catalog(this.root), plan.decision);
       const file = await safePath(this.stateDir, `transactions/${id}.json`);
       const journal: Journal = {
         state: "prepared",

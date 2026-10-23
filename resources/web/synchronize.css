@@ -1337,7 +1337,7 @@
 }
 
 /* Source import providers retain independent controls and report histories. */
-.library-import-panel { margin-top: 24px; }
+.source-import-tabs { margin-bottom: 20px; }
 .library-import-panel .sync-card-body { overflow-wrap: anywhere; }
 
 .sftp-heading-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
@@ -1365,6 +1365,6 @@
 .sftp-settings-footer { display: flex; justify-content: flex-end; padding: 16px 28px 24px; border-top: 1px solid #dfe7d9; }
 @media (max-width: 600px) { .sftp-heading-actions { flex-wrap: wrap; } .sftp-settings-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); } .sftp-settings-title { padding: 20px; } .sftp-settings-section { margin: 0 20px; } .sftp-settings-footer { padding: 16px 20px; } .sftp-schedule-fields { align-items: stretch; } .sftp-schedule-fields .sftp-schedule-enabled { width: 100%; } .sftp-settings-actions { flex-wrap: wrap; } .sftp-settings-actions small { width: 100%; } }
 
-.wecom-import-panel { margin-top: 24px; }
+
 .wecom-import-output { border-top: 1px solid var(--line, #e4e9df); padding-top: 12px; margin-top: 12px; overflow-wrap: anywhere; }
 .wecom-import-output > strong { margin-right: 12px; }

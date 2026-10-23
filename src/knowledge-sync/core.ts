@@ -1,3 +1,4 @@
+import type { WecomInput } from "./wecom-sources.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -302,6 +303,7 @@ export type Attempt = {
   associationOnly?: boolean;
 };
 export type Item = {
+  wecom?: WecomInput;
   id: string;
   attempts?: Attempt[];
   name: string;

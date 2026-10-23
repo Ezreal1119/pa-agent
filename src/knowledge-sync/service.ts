@@ -1,3 +1,4 @@
+import { incomingWecom, contextFor, verifyRetirement } from "./wecom-sources.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -479,6 +480,8 @@ export class SyncService {
           "This item is already committed. Use cleanup retry, or upload a new revision.",
           409,
         );
+      if (old.wecom && old.status === "duplicate")
+        throw new SyncError("This verified WeCom section already has its own source binding. To review product coverage, restore its unchanged imported Markdown to Incoming files and start a new Sync with instructions; association-only review cannot change this binding.", 409);
       const instructions = `${old.feedback}${old.feedback ? "\n" : ""}${feedback}`;
       const associationOnly=job.kind==="sync" && (old.status==="duplicate" || old.associationOnly===true);
       if(associationOnly && force)
@@ -783,7 +786,8 @@ export class SyncService {
           let reusable:string|undefined;
           try {
             const current = await catalog(this.root);
-            matches=this.matches(item.sourceHash,current);item.matchedSources=matches;
+            item.wecom = await incomingWecom(this.options.dataDir,item.name,item.sourceHash);
+            matches=item.wecom ? [] : this.matches(item.sourceHash,current);item.matchedSources=matches;
             if(item.associationOnly || matches.length && !item.reconvert){
               const selected=this.selectMatch(item,matches);
               const fast=this.fastDuplicate(item,selected);
@@ -877,7 +881,7 @@ export class SyncService {
           release();
         }
         let association:SourceMatch|undefined;
-        if(job.kind==="sync"){
+        if(job.kind==="sync" && !item.wecom){
           const matches=this.matches(item.sourceHash,base);item.matchedSources=matches;
           if(item.associationOnly || matches.length && !item.reconvert){
             association=this.selectMatch(item,matches);
@@ -890,6 +894,11 @@ export class SyncService {
           }
         }
         const markdown = association ? base.get(association.path)! : converted.get(item.id)?.markdown ?? "";
+        const wecom = item.wecom ? contextFor(item.wecom,base) : undefined;
+        if (wecom?.previous && !wecom.previous.withdrawn && !item.feedback.trim() && wecom.previous.hash === hash(markdown)) {
+          item.status="duplicate";item.stage="Duplicate";item.reason="已核验同一 WeCom 文档/工作表的已发布正文，无需重复发布。";
+          await this.clean(job,item);continue;
+        }
         const result = await planner({
           base,
           markdown,
@@ -912,6 +921,8 @@ export class SyncService {
           usage: item.textUsage,
           update: () => this.save(job),
           association,
+          wecom,
+          validate: decision => verifyRetirement(this.options.dataDir,base,decision),
         });
         if (
           job.kind === "sync" &&
@@ -925,6 +936,7 @@ export class SyncService {
             ],
             true,
           );
+        await verifyRetirement(this.options.dataDir,base,result.decision);
         item.reason = result.decision.reason;
         item.summary = result.decision.summary;
         item.plan = buildPlan(
@@ -935,6 +947,7 @@ export class SyncService {
           item.feedback,
           job.kind === "delete",
           association,
+          wecom,
         );
         if (result.decision.action === "review") {
           item.status = "needs_review";

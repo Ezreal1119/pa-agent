@@ -9,6 +9,7 @@
     <script src="/vendor/marked.js" defer></script>
     <script src="/vendor/purify.js" defer></script>
     <script src="/synchronize.js" defer></script>
+    <script src="/synchronize-source-tabs.js" defer></script>
     <script src="/synchronize-library.js" defer></script>
     <script src="/synchronize-sftp-settings.js" defer></script>
     <script src="/synchronize-library-settings.js" defer></script>
@@ -205,7 +206,12 @@
         </div>
       </section>
       <section id="panel-imports" role="tabpanel" aria-labelledby="tab-imports" class="sync-tab-panel" hidden>
-        <div class="sync-panel">
+        <div class="sync-tabs source-import-tabs" role="tablist" aria-label="Import sources">
+          <button id="source-tab-sftp" type="button" role="tab" aria-controls="source-panel-sftp" aria-selected="true" tabindex="0">SFTP</button>
+          <button id="source-tab-library" type="button" role="tab" aria-controls="source-panel-library" aria-selected="false" tabindex="-1">Library</button>
+          <button id="source-tab-wecom" type="button" role="tab" aria-controls="source-panel-wecom" aria-selected="false" tabindex="-1">WeCom</button>
+        </div>
+        <div id="source-panel-sftp" role="tabpanel" aria-labelledby="source-tab-sftp" class="sync-panel">
           <div class="sync-panel-heading">
             <div><h2>SFTP imports</h2><p>Pull changed files from your configured SFTP paths. Review them in Incoming files before starting Sync.</p></div>
             <div class="sftp-heading-actions"><button id="sftp-settings-open" class="sync-button" type="button">Settings</button><button id="import-run" class="sync-button sync-button-primary" disabled>Run now →</button></div>
@@ -213,7 +219,7 @@
           <div class="sftp-status"><p id="import-config" role="status">Checking configuration…</p><small id="import-paths"></small><p id="sftp-schedule-summary" class="sync-subtle">Checking systemd schedule…</p><p class="sync-subtle">Up to 100 MiB per file. Downloads only; start knowledge Sync separately. WeCom notifications are not enabled.</p></div>
           <div class="sync-reports-layout"><aside id="import-history" class="sync-history" aria-label="Import history"></aside><div id="import-report" class="sync-report"><div class="sync-empty-report"><h3>No imports yet</h3><p>Run an import to see each file's result here.</p></div></div></div>
         </div>
-        <div class="sync-panel library-import-panel">
+        <div id="source-panel-library" role="tabpanel" aria-labelledby="source-tab-library" class="sync-panel library-import-panel" hidden>
           <div class="sync-panel-heading">
             <div><h2>Library imports</h2><p>Download eligible additions and updates from the latest completed library report. Start Sync separately when ready.</p></div>
             <div class="sftp-heading-actions"><button id="library-settings-open" class="sync-button" type="button">Settings</button><button id="library-import-run" class="sync-button sync-button-primary" disabled>Run now →</button></div>
@@ -221,7 +227,7 @@
           <div class="sftp-status"><p id="library-import-config" role="status">Checking configuration…</p><p class="sync-subtle">PDF · PPTX · XLSX · DOCX · up to 100 MiB per file. Latest report only; no history catch-up or automatic Sync.</p><p id="library-import-schedule" class="sync-subtle">Checking systemd schedule…</p></div>
           <div class="sync-reports-layout"><aside id="library-import-history" class="sync-history" aria-label="Library import history"></aside><div id="library-import-report" class="sync-report"><div class="sync-empty-report"><h3>No library imports yet</h3><p>Run an import to see classification and delivery results here.</p></div></div></div>
         </div>
-        <div class="sync-panel wecom-import-panel">
+        <div id="source-panel-wecom" role="tabpanel" aria-labelledby="source-tab-wecom" class="sync-panel wecom-import-panel" hidden>
           <div class="sync-panel-heading">
             <div><h2>WeCom imports</h2><p>Read changed online spreadsheets and Word documents. Text only; review Markdown in Incoming files before starting Sync.</p></div>
             <div class="sftp-heading-actions"><button id="wecom-settings-open" class="sync-button" type="button">Settings</button><button id="wecom-import-run" class="sync-button sync-button-primary" disabled>Run now →</button></div>

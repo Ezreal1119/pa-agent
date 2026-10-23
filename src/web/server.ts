@@ -938,6 +938,7 @@ export async function createWebServer(options: WebOptions = {}) {
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
         "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-source-tabs.js": [path.join(resourcesDir, "web/synchronize-source-tabs.js"), "text/javascript; charset=utf-8"],
         "/synchronize-library.js": [path.join(resourcesDir, "web/synchronize-library.js"), "text/javascript; charset=utf-8"],
         "/synchronize-wecom-imports.js": [path.join(resourcesDir, "web/synchronize-wecom-imports.js"), "text/javascript; charset=utf-8"],
         "/synchronize-wecom-settings.js": [path.join(resourcesDir, "web/synchronize-wecom-settings.js"), "text/javascript; charset=utf-8"],

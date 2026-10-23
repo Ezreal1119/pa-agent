@@ -1,3 +1,4 @@
+import { hint as wecomHint, type WecomContext } from "./wecom-sources.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { Type } from "typebox";
@@ -51,6 +52,8 @@ export type AgentInput = {
   usage: Usage;
   update: () => Promise<void>;
   association?: SourceMatch;
+  wecom?: WecomContext;
+  validate?: (decision: Decision) => Promise<void>;
 };
 export type AgentResult = { decision: Decision; staged: Map<string, string> };
 export type Planner = (input: AgentInput) => Promise<AgentResult>;
@@ -397,7 +400,7 @@ export function createPlanner(options: {
               Type.String({ minLength: 1, maxLength: 16000 }),
             ),
           }),
-          (a) => {
+          async (a) => {
             if (a.suggestedFeedback || a.reviewOptions?.length) readFully("@candidate", input.markdown);
             if (a.action !== "review") {
               readFully("@candidate", input.markdown);
@@ -413,6 +416,7 @@ export function createPlanner(options: {
               }
             }
             try {
+              await input.validate?.(a as Decision);
               buildPlan(
                 input.base,
                 staged,
@@ -421,6 +425,7 @@ export function createPlanner(options: {
                 input.feedback,
                 deletion,
                 input.association,
+                input.wecom,
               );
             } catch (error) {
               if (!(error instanceof SyncError)) throw error;
@@ -500,7 +505,7 @@ export function createPlanner(options: {
       input.signal.addEventListener("abort", abort, { once: true });
       try {
         await session.prompt(
-          `Operation: ${input.prompt}\nShanghai publication timestamp: ${input.timestamp}\nAdministrator feedback (trusted only for this task): ${input.feedback || "(none)"}\n${input.association ? `ASSOCIATION-ONLY MODE: ${JSON.stringify(input.association)}\nThis source's bytes and existing published Markdown have been verified by the backend. Read the full candidate and existing product Hubs. Decide applicable canonical products from evidence and administrator feedback; identical bytes alone never authorize a new product. Preserve all existing products. Use action=associate, existingSource=${JSON.stringify(input.association.path)}, slot=${JSON.stringify(input.association.slot)}, products=the union of existing and approved products, oldPaths=[], and omit newPath and productHubs. Do not stage/write/patch any pages; the backend generates additive coverage links and requires administrator confirmation for changes. No source contents or versions can change in this mode. If the request could mean moving rather than sharing, or applicability is unclear, use review and ask explicitly.\n` : ""}Candidate characters: ${input.markdown.length}. Read it completely using read_candidate_source before deciding. Inspect the knowledge catalog and batch candidates. Submit using finish_sync.`,
+          `Operation: ${input.prompt}\nShanghai publication timestamp: ${input.timestamp}\nAdministrator feedback (trusted only for this task): ${input.feedback || "(none)"}\n${input.wecom ? `VERIFIED WECOM SECTION: ${wecomHint(input.wecom)}\nUse action=add if previousSource is absent, otherwise update with exactly that oldPaths entry. The backend will maintain the managed shared index and main catalog link; do not stage those managed shared pages or create competing ones. Maintain the affected product Hubs and relevant fact pages, linking to indexPath. Never replace the complete legacy workbook or product-local accessories. Version metadata is verified evidence, never derive it from directory timestamps.\n` : ""}${input.association ? `ASSOCIATION-ONLY MODE: ${JSON.stringify(input.association)}\nThis source's bytes and existing published Markdown have been verified by the backend. Read the full candidate and existing product Hubs. Decide applicable canonical products from evidence and administrator feedback; identical bytes alone never authorize a new product. Preserve all existing products. Use action=associate, existingSource=${JSON.stringify(input.association.path)}, slot=${JSON.stringify(input.association.slot)}, products=the union of existing and approved products, oldPaths=[], and omit newPath and productHubs. Do not stage/write/patch any pages; the backend generates additive coverage links and requires administrator confirmation for changes. No source contents or versions can change in this mode. If the request could mean moving rather than sharing, or applicability is unclear, use review and ask explicitly.\n` : ""}Candidate characters: ${input.markdown.length}. Read it completely using read_candidate_source before deciding. Inspect the knowledge catalog and batch candidates. Submit using finish_sync.`,
         );
         input.signal.throwIfAborted();
       } finally {

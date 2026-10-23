@@ -78,7 +78,7 @@ export class KnowledgeLibrary {
   }
   async read(name: string) {
     const { file, stat } = await this.file(name);
-    const note = editability(name, stat.size);
+    let note = editability(name, stat.size);
     const textual = editableExtensions.has(path.posix.extname(name).toLowerCase());
     if (!textual || stat.size > LIBRARY_MAX_EDIT_BYTES)
       return { path: name, bytes: stat.size, editable: false, note, text: null, hash: null };
@@ -89,6 +89,7 @@ export class KnowledgeLibrary {
     } catch {
       return { path: name, bytes: stat.size, editable: false, note: "File is not valid UTF-8.", text: null, hash: null };
     }
+    if (name.startsWith("product-knowledge-vault/shared/") && text.includes("<!-- wecom-source-index:v1 ")) note = "This WeCom navigation index is maintained by Sync and is read-only.";
     return { path: name, bytes: stat.size, editable: !note, ...(note ? { note } : {}), text, hash: hash(bytes) };
   }
   async save(name: unknown, text: unknown, expectedHash: unknown) {
@@ -109,6 +110,7 @@ export class KnowledgeLibrary {
       });
     try {
       const before = await fs.readFile(file);
+      if (name.startsWith("product-knowledge-vault/shared/") && (before.includes(Buffer.from("<!-- wecom-source-index:v1 ")) || text.includes("<!-- wecom-source-index:v1 "))) throw new SyncError("Managed WeCom indexes are maintained by Sync, not the Library editor.",403);
       if (hash(before) !== expectedHash)
         throw new SyncError("This file changed after you opened it. Reload and reapply your edits.", 409);
       const after = Buffer.from(text);

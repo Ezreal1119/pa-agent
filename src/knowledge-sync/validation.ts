@@ -1,3 +1,4 @@
+import { indexes as wecomIndexes, prepareWecom, type WecomContext } from "./wecom-sources.js";
 import path from "node:path";
 import {
   excluded,
@@ -155,6 +156,7 @@ export function buildPlan(
   feedback: string,
   deletion = false,
   association?: SourceMatch,
+  wecom?: WecomContext,
 ): Plan {
   if (
     d.suggestedFeedback !== undefined &&
@@ -187,6 +189,7 @@ export function buildPlan(
   if (d.action === "review")
     return { decision: d, changes: [], baseline: fingerprint(base) };
   if (d.action === "associate") {
+    if (wecom || wecomIndexes(base).some(x=>x.members.some(m=>m.path===d.existingSource&&!m.withdrawn))) throw new PlanError(["Verified WeCom sections use their own source binding, not association-only mode."]);
     if (deletion) throw new PlanError(["A deletion preview cannot add associations."]);
     return buildAssociationPlan(base,staged,d,association,{references,resolveHub});
   }
@@ -223,6 +226,9 @@ export function buildPlan(
     oldPaths: normalizeOldPaths(base, d.oldPaths ?? []),
     reviewedPaths: d.reviewedPaths ?? [],
   };
+  const managed = prepareWecom(base, staged, d, markdown, wecom, deletion, product => d.productHubs?.find(h => h.product === product)?.path ?? resolveHub(base, product), feedback);
+  staged = managed.staged;
+  d = managed.decision;
   // Per-attempt Hub selection, never a persistent product mapping. Only a Hub
   // other than the resolved one requires a separate administrator confirmation.
   const resolved = new Map(d.products.map((p) => [p, resolveHub(base, p)]));
@@ -259,9 +265,9 @@ export function buildPlan(
   if (new Set(hubs.values()).size !== hubs.size)
     fail("Different products cannot share one product Hub.");
   const noncanonical = [...hubs].filter(([p, h]) => h !== resolved.get(p));
-  const confirmationReason = noncanonical.length
+  const confirmationReason = managed.confirmationReason || (noncanonical.length
     ? `Confirm product Hub selection: ${noncanonical.map(([p, h]) => `${p} → ${h}`).join("; ")}`
-    : undefined;
+    : undefined);
   // Historical log content is owned by the backend and can only be appended.
   staged = new Map(staged);
   const logPath = "product-knowledge-vault/log.md";
@@ -403,7 +409,7 @@ export function buildPlan(
       ![...staged].some(
         ([p, t]) =>
           p.startsWith("product-knowledge-vault/shared/") &&
-          t.includes(newSource!) &&
+          (t.includes(newSource!) || (wecom?.indexPath === p && references(t, next, p).includes(newSource!))) &&
           text.includes(p.slice(24).replace(/\.md$/, "")),
       )
     )
@@ -414,7 +420,7 @@ export function buildPlan(
     ![...staged].some(
       ([p, t]) =>
         p.startsWith("product-knowledge-vault/shared/") &&
-        t.includes(newSource!) &&
+        (t.includes(newSource!) || (wecom?.indexPath === p && references(t, next, p).includes(newSource!))) &&
         d.products.every((product) =>
           t.includes(hubs.get(product)!.slice(24).replace(/\.md$/, "")),
         ),
