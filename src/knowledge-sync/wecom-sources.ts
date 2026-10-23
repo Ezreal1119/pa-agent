@@ -506,6 +506,7 @@ export function hint(ctx: WecomContext) {
     version: ctx.version,
     indexPath: ctx.indexPath,
     slot: ctx.slot ?? "choose the document family semantic slot",
+    allowedSlots: [...slots],
     requiredSourcePrefix: namespace(
       ctx.docid,
       ctx.id,
@@ -625,12 +626,12 @@ export function prepareWecom(
     fail(
       `WeCom section ownership requires action=${action} and oldPaths=${JSON.stringify(expected)}. It cannot replace another source or the whole workbook.`,
     );
+  if (!slots.has(d.slot))
+    fail(`Unsupported WeCom slot ${JSON.stringify(d.slot)}. Allowed slots: ${[...slots].join(", ")}. Choose one allowed slot for this document family; do not invent a new slot. No source has been published.`);
   const slot = ctx.slot ?? d.slot;
-  if (
-    !slots.has(slot) ||
-    d.slot !== slot ||
-    !ownedPath(d.newPath ?? "", ctx.docid, ctx.id, slot)
-  )
+  if (!slots.has(slot) || d.slot !== slot)
+    fail(`This WeCom document family requires slot ${JSON.stringify(slot)}. Preserve its registered slot and use the corresponding shared source prefix; moving a family requires a separate migration.`);
+  if (!ownedPath(d.newPath ?? "", ctx.docid, ctx.id, slot))
     fail(
       `WeCom source must use ${namespace(ctx.docid, ctx.id, slot)}YYYYMMDDHHmm/<name>.md with slot ${slot}. Do not occupy product-local slots.`,
     );

@@ -803,3 +803,12 @@ test('empty or punctuation-only title keys never match blank or heading-less pag
     assert.equal(contextFor(input,base).indexPath,`product-knowledge-vault/shared/wecom-${hash(input.docid).slice(0,24)}.md`);
   }
 });
+
+test('slot diagnostics reject invented categories and still prohibit changing a registered family slot',async t=>{
+  const f=await fixture(t),v=await verified(f,f.outputs[0]),ctx=contextFor(v.input,v.base);
+  const p=proposed(ctx,v.base);
+  const check=d=>buildPlan(v.base,p.staged,d,v.body,'',false,undefined,ctx);
+  assert.throws(()=>check({...p.decision,slot:'project-matrix',newPath:p.decision.newPath.replace('/accessories/','/project-matrix/')}),e=>/Unsupported WeCom slot "project-matrix"/.test(e.message)&&/Allowed slots:/.test(e.message)&&!e.message.includes('must use _shared/project-matrix'));
+  assert.throws(()=>check({...p.decision,slot:'others',newPath:p.decision.newPath.replace('/accessories/','/others/')}),/requires slot "accessories"/);
+  assert.ok(check(p.decision));
+});

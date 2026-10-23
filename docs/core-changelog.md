@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- 修复 WeCom 非法分类与维护读取参数的误导反馈：元数据明确六种 allowedSlots，非法 slot 不再被提示为必须采用的路径；注册分类保持不可迁移。文本非法 offset 返回同视图第一未读段的精确工具参数，超范围请求不计覆盖。Node22.23.2构建、54项定向及368项全量检查通过，见2026-10-23分类/读取反馈记录。
+
 - 修复 WeCom 首次 SYNC 的中文标题空值碰撞：标题比较保留 Unicode 字母/数字，并排除空键；无关中文共享页不再触发错误接管要求，真正同名仍要求显式 routing。运行仅调整 `wecom-sources.ts` 的标题比较，不改已有索引/映射/业务文件；Node22.23.2构建、38项相关与359项全量检查通过，见2026-10-23中文标题记录。
 
 - SYNC 局部替换失败新增结构化反馈：区分零匹配、多匹配、基线冲突和缺失文件，附路径、替换项、当前视图/哈希及最多8处位置，指引读取正确候选稿并修复整批。失败整批不暂存，精确唯一匹配/哈希/发布确认不变；保护路径在正文诊断前拒绝。运行变更仅在 `knowledge-sync/agent.ts`；验证结果见 2026-10-23 替换反馈记录。
@@ -970,3 +972,12 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - 行为：比较键保留 Unicode 字母和数字，继续忽略大小写/空白/标点；只允许非空标题键参与同名匹配。真正同名的中文/英文共享总入口仍要求原有显式接管配置。默认 docid 哈希索引、section 身份、既有映射/总入口、源哈希、退役与发布保护不变；不修改 routing、业务文件或历史报告，也不新增自动接管/迁移。运行代码仅改变 `knowledge-sync/wecom-sources.ts` 的归一化和空键判断。
 - 验证：Node22.23.2构建、38项相关与359/359全量本地检查通过。新增3项回归覆盖实际无关中文标题、混合POS/PDA标题区分、同docid分表保持同一默认入口、真正中文/英文同名及标点/大小写等价仍受保护、Unicode数字、空/纯符号/无标题页面不碰撞。既有可信导入、单表更新、映射接管、跨来源拒绝、整本退役、事务回滚和导入器检查通过。日志 `.data/debug/wecom-title-targeted.log` 与 `wecom-title-full.log`。
 - 部署/验证边界：本轮未连接或部署VPS、未调用付费模型、未执行正式SYNC。管理员同步代码并build/重启后，对原两条Re-Sync即可，不必修改映射、填写额外指令或重新转换；后续真实业务判断仍由原流程处理。
+
+## 2026-10-23 WeCom 分类白名单与文本读取参数反馈修复
+
+- 原因：管理员提供的POS/PDA项目清单再次失败。只读VPS报告确认：POS使用 `project-matrix` 后，原错误把不支持的slot插进了“必须使用”的路径提示；PDA报 `Use the supplied nextOffset`，没有附可执行的修复参数。报告未保留逐工具轨迹，不能声称已知模型实际提交的offset或全部调用顺序。
+- 分类行为：VERIFIED WECOM SECTION增加六种allowedSlots，保持原 accessories/specs/brochure/presentation/user_guide/others 白名单。未知slot单独明确拒绝并列出允许值，不再用未知值构造必需路径；已注册文档族的slot不符单独报告，合法slot下仍执行原docid/section命名空间和路径格式校验。Prompt说明未适合其他五类的文档可选others，不新增project-matrix等分类、不自动更改映射/来源路径或迁移已发布文档。
+- 读取行为：read_knowledge、read_candidate_source、read_batch_source保留20000字符分段和原始哈希/覆盖记录。非法分段或正文范围外的非零offset返回JSON工具错误，包含requestedOffset、正文长度、同一视图第一未读offset及可直接调用的nextRead.tool/args；已经读完则明确complete=true、nextRead=null。原文/候选/同批ID通过调用方显式保留，不依赖路径前缀猜测。非法请求不登记覆盖、不自动读写、不跳过完整读取或扩充模型预算。列表/搜索分页单位不变。
+- 兼容性：运行只改knowledge-sync/agent.ts和wecom-sources.ts。成功读取返回形状、来源归属、内容Hash、模型重复错误终止、三次提交上限、发布事务和管理员确认保持；无新API、依赖、env或systemd配置。本轮未修改SFTP/Library、业务文件或VPS运行配置。
+- 验证：Node22.23.2构建、54项定向及368/368全量检查通过。真实SDK对本地HTTP模型替身：首次WeCom资料收到白名单，project-matrix被明确拒绝，改为others及合法共享路径后接受；已注册accessories族不能改为others。正常SYNC大中文正文在非法/越界offset后按精确参数补读成功提交；原文、候选和同批文件身份分别保留，已读完不发明下一段。既有中文标题、哈希/命名空间、分表发布、删除预览/确认与事务恢复等回归通过。日志 `.data/debug/wecom-slot-offset-targeted.log`、`wecom-slot-offset-full.log`。
+- 范围：仅真实VPS报告只读调查；实现验证未调用付费模型、重跑生产SYNC或部署代码。模拟成功不保证真实模型一次完成；未以放宽校验换取成功。

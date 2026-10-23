@@ -130,9 +130,19 @@ export function createPlanner(options: {
         for (const p of [...paths, ...affected]) deletionReads.set(p, input.base.get(p)!);
         return affected;
       }
-      function read(key: string, text: string, offset = 0) {
-        if (offset % 20000 !== 0)
-          throw new Error("Use the supplied nextOffset.");
+      function read(key: string, text: string, offset = 0, request?: { tool: string; args: Record<string, unknown> }) {
+        if (offset % 20000 !== 0 || (offset !== 0 && offset >= text.length)) {
+          const nextOffset = missingReads(new Map([[key, text]]))[0]?.offsets[0] ?? null;
+          throw new Error(JSON.stringify({
+            error: "Use the supplied nextOffset.", code: "INVALID_READ_OFFSET",
+            path: key, requestedOffset: offset, segmentCharacters: 20000,
+            totalCharacters: text.length, complete: nextOffset === null, nextOffset,
+            nextRead: nextOffset !== null && request ? { tool: request.tool, args: { ...request.args, offset: nextOffset } } : null,
+            instruction: nextOffset === null
+              ? "This view has already been fully read. Do not invent another offset. Continue the maintenance task."
+              : "Offsets are character positions, not line numbers. Call nextRead.tool with exactly nextRead.args, then follow its returned nextOffset. This rejected read did not mark any segment as read.",
+          }));
+        }
         const ranges = readRanges.get(key) ?? new Set<number>();
         ranges.add(offset);
         readRanges.set(key, ranges);
@@ -199,7 +209,7 @@ export function createPlanner(options: {
       const fileArgs = Type.Object({
         path: Type.String(),
         candidate: Type.Optional(Type.Boolean()),
-        offset: Type.Optional(Type.Integer({ minimum: 0 })),
+        offset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset, not a line number. Start at 0 and copy the returned nextOffset exactly." })),
       });
       function checkStagePath(name: string) {
         if(input.association)throw new Error("Association review is read-only. Submit associate without staged pages; the backend generates additive index changes.");
@@ -281,6 +291,7 @@ export function createPlanner(options: {
               original ? a.path : `@staged:${a.path}`,
               text,
               a.offset,
+              { tool: "read_knowledge", args: { path: a.path, candidate: !original } },
             );
           },
         ),
@@ -315,7 +326,7 @@ export function createPlanner(options: {
           "read_candidate_source",
           "Read the full converted candidate in bounded segments.",
           Type.Object({ offset: Type.Optional(Type.Integer({ minimum: 0 })) }),
-          (a) => read("@candidate", input.markdown, a.offset),
+          (a) => read("@candidate", input.markdown, a.offset, { tool: "read_candidate_source", args: {} }),
         ),
         tool(
           "read_batch_source",
@@ -328,7 +339,7 @@ export function createPlanner(options: {
             const text = input.candidates?.get(a.id);
             if (text === undefined)
               throw new Error("No converted candidate with this ID.");
-            return read(`@batch:${a.id}`, text, a.offset);
+            return read(`@batch:${a.id}`, text, a.offset, { tool: "read_batch_source", args: { id: a.id } });
           },
         ),
         tool(

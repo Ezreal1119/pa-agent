@@ -8,6 +8,7 @@ import { once } from "node:events";
 import { createPlanner } from "../dist/knowledge-sync/agent.js";
 import { SyncService } from "../dist/knowledge-sync/service.js";
 import { emptyUsage, hash, PlanError } from "../dist/knowledge-sync/core.js";
+import { sourceKey, hint } from "../dist/knowledge-sync/wecom-sources.js";
 
 const hub = "product-knowledge-vault/products/DT610.md";
 const source = "DT610/others/fixture_202610230001/spec.md";
@@ -901,4 +902,203 @@ test("failed exact patch can be repaired through a real deletion preview; no del
     "# Independent specs",
   );
   assert.equal(f.requests.length, calls.length);
+});
+
+test("WeCom receives allowed slots and can repair an invented project-matrix slot into a valid shared source", async (t) => {
+  const f = await setup(t);
+  const wecom = {
+    docid: "e3_project_fixture",
+    id: "pos",
+    title: "项目对应各部门关系表",
+    sectionTitle: "POS项目清单",
+    version: "1",
+    inputHash: hash("Fixture source"),
+    contentHash: hash("Fixture content"),
+    indexPath: "product-knowledge-vault/shared/project-fixture.md",
+    inventory: [
+      { id: "pos", title: "POS项目清单", contentHash: hash("Fixture content") },
+    ],
+  };
+  const allowed = [
+    "accessories",
+    "specs",
+    "brochure",
+    "presentation",
+    "user_guide",
+    "others",
+  ];
+  assert.deepEqual(JSON.parse(hint(wecom)).allowedSlots, allowed);
+  const base = new Map([
+    [existing, "# Existing specs"],
+    [hub, `# DT610\n${existing}`],
+    ["product-knowledge-vault/index.md", "[[products/DT610|DT610]]"],
+  ]);
+  const wrong = {
+    ...decision,
+    action: "add",
+    slot: "project-matrix",
+    newPath: `_shared/project-matrix/wecom-${sourceKey(wecom.docid, wecom.id)}_202610230001/pos.md`,
+    reviewedPaths: [hub],
+  };
+  const corrected = {
+    ...wrong,
+    slot: "others",
+    newPath: wrong.newPath.replace("/project-matrix/", "/others/"),
+  };
+  const calls = [
+    tool("read_candidate_source"),
+    tool("read_knowledge", { path: hub }),
+    tool("write_candidate", {
+      path: hub,
+      text: `# DT610\n${existing}\n[[shared/project-fixture|Project contacts]]`,
+    }),
+    tool("finish_sync", wrong),
+    tool("finish_sync", corrected),
+  ];
+  f.set((res, n) => {
+    if (n === 0)
+      assert.ok(
+        JSON.stringify(f.requests[0].messages).includes("allowedSlots"),
+      );
+    if (n === 4) {
+      const e = latestToolValue(f);
+      assert.equal(e.submitted, false);
+      assert.match(
+        e.problems.join("\n"),
+        /Unsupported WeCom slot "project-matrix"/,
+      );
+      assert.match(
+        e.problems.join("\n"),
+        /Allowed slots: accessories, specs, brochure, presentation, user_guide, others/,
+      );
+      assert.ok(
+        !e.problems.join("\n").includes("must use _shared/project-matrix"),
+      );
+    }
+    reply(res, calls[n]);
+  });
+  const result = await f.run({ base, wecom });
+  assert.equal(result.decision.slot, "others");
+  assert.equal(result.decision.newPath, corrected.newPath);
+  assert.equal(f.requests.length, calls.length);
+  assert.deepEqual(
+    [...base.keys()],
+    [existing, hub, "product-knowledge-vault/index.md"],
+  );
+});
+
+test("invalid source offsets return an executable next read and normal SYNC can finish after exact continuation", async (t) => {
+  const f = await setup(t),
+    markdown = "中文".repeat(20001);
+  const base = new Map([
+    [existing, "# Independent specs"],
+    [hub, `# DT610\n${existing}`],
+  ]);
+  for (const badOffset of [123, 60000])
+    await t.test(String(badOffset), async () => {
+      const calls = [
+        tool("read_candidate_source"),
+        tool("read_candidate_source", { offset: badOffset }),
+        null,
+        tool("read_candidate_source", { offset: 40000 }),
+        tool("read_knowledge", { path: hub }),
+        tool("write_candidate", {
+          path: hub,
+          text: `# DT610\n${existing}\n${source}\nConverted; original removed after successful sync`,
+        }),
+        tool("finish_sync", {
+          ...decision,
+          action: "add",
+          newPath: source,
+          reviewedPaths: [hub],
+        }),
+      ];
+      f.set((res, n) => {
+        if (n === 2) {
+          const d = latestToolValue(f);
+          assert.equal(d.code, "INVALID_READ_OFFSET");
+          assert.equal(d.requestedOffset, badOffset);
+          assert.equal(d.totalCharacters, markdown.length);
+          assert.equal(d.nextOffset, 20000);
+          assert.equal(d.complete, false);
+          assert.deepEqual(d.nextRead, {
+            tool: "read_candidate_source",
+            args: { offset: 20000 },
+          });
+          return reply(res, tool(d.nextRead.tool, d.nextRead.args));
+        }
+        if (n === 3) {
+          const segment = latestToolValue(f);
+          assert.equal(segment.offset, 20000);
+          assert.equal(segment.nextOffset, 40000);
+          assert.equal(segment.text, markdown.slice(20000, 40000));
+        }
+        reply(res, calls[n]);
+      });
+      const result = await f.run({ base, markdown });
+      assert.equal(result.decision.action, "add");
+      assert.equal(f.requests.length, calls.length);
+    });
+});
+
+test("invalid offsets preserve original, candidate and batch view identities; completed views do not invent further reads", async (t) => {
+  const f = await setup(t),
+    text = "x".repeat(20001);
+  const cases = [
+    {
+      call: tool("read_knowledge", { path: hub }),
+      next: {
+        tool: "read_knowledge",
+        args: { path: hub, candidate: false, offset: 20000 },
+      },
+    },
+    {
+      call: tool("read_knowledge", { path: hub, candidate: true }),
+      stage: true,
+      next: {
+        tool: "read_knowledge",
+        args: { path: hub, candidate: true, offset: 20000 },
+      },
+    },
+    {
+      call: tool("read_batch_source", { id: "batch-fixture" }),
+      next: {
+        tool: "read_batch_source",
+        args: { id: "batch-fixture", offset: 20000 },
+      },
+    },
+  ];
+  for (const c of cases)
+    await t.test(c.next.tool + JSON.stringify(c.next.args), async () => {
+      const script = [
+        ...(c.stage ? [tool("write_candidate", { path: hub, text })] : []),
+        c.call,
+        tool(c.call.name, { ...c.call.args, offset: 20001 }),
+        null,
+        tool(c.call.name, { ...c.call.args, offset: 20001 }),
+        tool("finish_sync", decision),
+      ];
+      const errorStep = c.stage ? 3 : 2;
+      f.set((res, n) => {
+        if (n === errorStep) {
+          const e = latestToolValue(f);
+          assert.equal(e.code, "INVALID_READ_OFFSET");
+          assert.deepEqual(e.nextRead, c.next);
+          return reply(res, tool(e.nextRead.tool, e.nextRead.args));
+        }
+        if (n === errorStep + 2) {
+          const e = latestToolValue(f);
+          assert.equal(e.code, "INVALID_READ_OFFSET");
+          assert.equal(e.complete, true);
+          assert.equal(e.nextOffset, null);
+          assert.equal(e.nextRead, null);
+        }
+        reply(res, script[n]);
+      });
+      await f.run({
+        base: new Map([[hub, c.stage ? "# Original" : text]]),
+        candidates: new Map([["batch-fixture", text]]),
+      });
+      assert.equal(f.requests.length, script.length);
+    });
 });
