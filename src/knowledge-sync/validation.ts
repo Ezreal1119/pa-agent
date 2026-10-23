@@ -351,12 +351,15 @@ export function buildPlan(
         "Choose a fresh timestamped source path; do not overwrite a source in place.",
       );
     else newSource = candidate;
+    // Existing Hubs also identify products whose sources are entirely shared.
+    // Resolve only against the original library, never staged or overridden Hubs.
     for (const product of d.products)
       if (
         ![...base.keys()].some((p) => p.startsWith(`${product}/`)) &&
+        !base.has(resolved.get(product)!) &&
         !feedback.trim()
       )
-        fail("New products require administrator feedback.");
+        fail(`New products require administrator feedback: ${product}.`);
     if (!markdown.trim()) fail("Empty converted Markdown.");
     if (newSource) next.set(newSource, markdown);
   }

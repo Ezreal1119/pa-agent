@@ -624,6 +624,89 @@ test("new product requires feedback; encoded and relative source dependencies ca
   );
 });
 
+for (const hubName of ["DT510", "dt510"]) {
+  test(`shared-only existing product publishes without new-product feedback (${hubName})`, async (t) => {
+    const productHub = `product-knowledge-vault/products/${hubName}.md`;
+    const sharedNode = "product-knowledge-vault/shared/certifications.md";
+    const accessory = "_shared/accessories/fixture_202610220001/DT510.md";
+    const certification = "_shared/others/fixture_202610230001/CTA-SRRC.md";
+    const f = await setup(t, {
+      planner: () => async () => ({
+        decision: {
+          action: "add", reason: "Existing DT510 receives shared certification",
+          summary: "Add CTA & SRRC", products: ["DT510"], slot: "others",
+          oldPaths: [], newPath: certification, versionEvidence: "First publication",
+          authorizedException: false, reviewedPaths: [productHub, sharedNode],
+        },
+        staged: new Map([
+          [productHub, `# DT510\n${accessory}\n${certification}`],
+          [sharedNode, `# Certifications\n${certification}\n[[products/${hubName}]]`],
+        ]),
+      }),
+    });
+    for (const [p, text] of [
+      [accessory, "# DT510 accessories"],
+      [productHub, `# DT510\n${accessory}`],
+      [sharedNode, "# Certifications"],
+    ]) {
+      await fs.mkdir(path.dirname(path.join(f.knowledge, p)), { recursive: true });
+      await fs.writeFile(path.join(f.knowledge, p), text);
+    }
+    const before = await catalog(f.knowledge);
+    assert.equal([...before.keys()].some(p => p.startsWith("DT510/")), false);
+    const file = await upload(f.service, "certification.txt", "# DT510 CTA & SRRC");
+    const report = await done(f.service, (await f.service.start([file.id])).id);
+    assert.equal(report.items[0].status, "published", report.items[0].reason);
+    assert.equal(report.items[0].plan.confirmationReason, undefined);
+    assert.equal(await fs.readFile(path.join(f.knowledge, certification), "utf8"), "# DT510 CTA & SRRC");
+    assert.match(await fs.readFile(path.join(f.knowledge, productHub), "utf8"), /CTA-SRRC\.md/);
+    const after = await catalog(f.knowledge);
+    for (const [p, text] of before) {
+      if (![productHub, sharedNode, log].includes(p)) assert.equal(after.get(p), text, p);
+    }
+    assert.equal([...after.keys()].some(p => p.startsWith("DT510/")), false);
+  });
+}
+
+test("new-product authorization uses original identity, not staged or unrelated Hubs", () => {
+  const added = "_shared/others/fixture_202610230001/new.md";
+  const newHub = "product-knowledge-vault/products/NEW.md";
+  const shared = "product-knowledge-vault/shared/new.md";
+  const base = new Map([[idx, "# Index"], [log, "history"]]);
+  const staged = new Map([
+    [newHub, `# NEW\n${added}`],
+    [shared, `# Shared\n${added}\n[[products/NEW]]`],
+    [idx, "[[products/NEW]]\n[[shared/new]]"],
+  ]);
+  const d = {
+    action: "add", reason: "New product", summary: "Add new source",
+    products: ["NEW"], slot: "others", oldPaths: [], newPath: added,
+    versionEvidence: "First publication", authorizedException: false, reviewedPaths: [],
+  };
+  const needsAuthorization = e => e.review === true &&
+    e.problems.includes("New products require administrator feedback: NEW.");
+  assert.throws(() => buildPlan(base, staged, d, "new source", ""), needsAuthorization);
+  // Explicit administrator feedback still authorizes an actual new product.
+  assert.ok(buildPlan(base, staged, d, "new source", "Allow creation of NEW"));
+  const unrelatedHub = "product-knowledge-vault/products/OTHER.md";
+  const overrideBase = new Map([...base, [unrelatedHub, "# OTHER"]]);
+  const overrideStaged = new Map([
+    [unrelatedHub, `# OTHER\n${added}`],
+    [shared, `# Shared\n${added}\n[[products/OTHER]]`],
+    [idx, "[[products/OTHER]]\n[[shared/new]]"],
+  ]);
+  assert.throws(() => buildPlan(overrideBase, overrideStaged, {
+    ...d, productHubs: [{ product: "NEW", path: unrelatedHub }],
+  }, "new source", ""), needsAuthorization);
+  // Two equivalent names do not silently resolve an ambiguous product identity.
+  const ambiguous = new Map([
+    ...base,
+    ["product-knowledge-vault/products/new.md", "# Existing A"],
+    ["product-knowledge-vault/products/New.md", "# Existing B"],
+  ]);
+  assert.throws(() => buildPlan(ambiguous, staged, d, "new source", ""), needsAuthorization);
+});
+
 test("cleanup never deletes a changed input and retry does not republish; 90-day pruning leaves reports intact", async (t) => {
   let fixture;
   const f = await setup(t, {
