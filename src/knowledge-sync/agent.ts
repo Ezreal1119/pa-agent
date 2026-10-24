@@ -286,7 +286,25 @@ export function createPlanner(options: {
             if (excluded(a.path)) throw new Error("Protected path.");
             const original = !a.candidate && input.base.has(a.path);
             const text = original ? input.base.get(a.path) : staged.get(a.path);
-            if (text === undefined) throw new Error("Not found.");
+            if (text === undefined) {
+              const originalExists = input.base.has(a.path);
+              throw new Error(JSON.stringify({
+                error: "Not found.", code: "KNOWLEDGE_NOT_FOUND",
+                path: a.path, requestedView: a.candidate ? "candidate" : "original",
+                requestedOffset: a.offset ?? 0,
+                originalExists, candidateExists: staged.has(a.path),
+                nextRead: originalExists ? {
+                  tool: "read_knowledge", args: { path: a.path, candidate: false, offset: 0 },
+                } : null,
+                nextTools: originalExists ? [] : [
+                  { tool: "search_knowledge", args: { query: path.posix.basename(a.path, ".md") } },
+                  { tool: "list_knowledge", args: { offset: 0 } },
+                ],
+                instruction: originalExists
+                  ? "No staged candidate exists at this path. Read the original with nextRead first. Only stage intended, authorized changes before requesting candidate=true."
+                  : "This path exists in neither the original library nor staged pages. Use nextTools to find an exact existing path; for product Hubs use product_hubs with the canonical product. Read the incoming document with read_candidate_source. Do not guess another filename, create a page solely to satisfy a read, or treat this technical error as a business decision.",
+              }));
+            }
             return read(
               original ? a.path : `@staged:${a.path}`,
               text,
@@ -614,7 +632,17 @@ export function createPlanner(options: {
         if (event.type === "tool_execution_end" && !decision && !failure) {
           if (event.isError) {
             const message = event.result.content.filter((c: {type: string; text?: string}) => c.type === "text").map((c: {text?: string}) => c.text ?? "").join("\n");
-            const signature = event.toolName + "\0" + message;
+            let signature = event.toolName + "\0" + message;
+            // Missing-page diagnostics identify the requested target, not just
+            // a generic message. Changing offsets must not reset its stop rule.
+            if (event.toolName === "read_knowledge") {
+              try {
+                const error = JSON.parse(message.slice(message.indexOf("{")));
+                if (error.code === "KNOWLEDGE_NOT_FOUND" && typeof error.path === "string" &&
+                    ["original", "candidate"].includes(error.requestedView))
+                  signature = JSON.stringify([event.toolName, error.path, error.requestedView, error.code]);
+              } catch { /* Other tool errors retain their existing identity. */ }
+            }
             repeatedToolErrors = signature === lastToolError ? repeatedToolErrors + 1 : 1;
             lastToolError = signature;
             if (event.toolName === "finish_sync") rejectPlan(new SyncError(message));

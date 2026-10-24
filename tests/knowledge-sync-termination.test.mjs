@@ -633,6 +633,171 @@ function latestToolValue(f) {
   return JSON.parse(text.slice(text.indexOf("{")));
 }
 
+test("missing knowledge diagnostics distinguish targets and guide recovery through actual publication", async (t) => {
+  const f = await setup(t), root = path.join(f.dataDir, "urovo-product-expert");
+  for (const [p, text] of [
+    [existing, "# Independent specs"],
+    [hub, `# DT610\n${existing}`],
+    ["product-knowledge-vault/index.md", "[[products/DT610]]"],
+  ]) {
+    await fs.mkdir(path.dirname(path.join(root, p)), { recursive: true });
+    await fs.writeFile(path.join(root, p), text);
+  }
+  const service = await f.service();
+  const missingA = "product-knowledge-vault/products/DT610-old.md";
+  const missingB = "products/DT610.md";
+  const stagedText = `# DT610\n${existing}\n${source}`;
+  const script = [
+    tool("read_candidate_source"),
+    tool("read_knowledge", { path: missingA }),
+    tool("read_knowledge", { path: missingB }),
+    tool("read_knowledge", { path: missingB, candidate: true }),
+    null,
+    tool("product_hubs", { products: ["DT610"] }),
+    tool("read_knowledge", { path: hub, candidate: true }),
+    null,
+    tool("write_candidate", { path: hub, text: stagedText }),
+    tool("read_knowledge", { path: hub, candidate: true }),
+    tool("finish_sync", {
+      ...decision, action: "add", newPath: source, reviewedPaths: [hub],
+    }),
+  ];
+  f.set((res, n) => {
+    if ([2, 3, 4].includes(n)) {
+      const e = latestToolValue(f);
+      assert.equal(e.code, "KNOWLEDGE_NOT_FOUND");
+      assert.equal(e.path, n === 2 ? missingA : missingB);
+      assert.equal(e.requestedView, n === 4 ? "candidate" : "original");
+      assert.equal(e.originalExists, false);
+      assert.equal(e.candidateExists, false);
+      assert.equal(e.nextRead, null);
+      assert.deepEqual(e.nextTools[1], { tool: "list_knowledge", args: { offset: 0 } });
+      if (n === 4) return reply(res, tool(e.nextTools[0].tool, e.nextTools[0].args));
+    }
+    if (n === 5) assert.ok(latestToolValue(f).matches.some(m => m.path === hub));
+    if (n === 6) assert.deepEqual(latestToolValue(f).hubs, [{ product: "DT610", path: hub, exists: true }]);
+    if (n === 7) {
+      const e = latestToolValue(f);
+      assert.equal(e.path, hub);
+      assert.equal(e.requestedView, "candidate");
+      assert.equal(e.originalExists, true);
+      assert.equal(e.candidateExists, false);
+      assert.deepEqual(e.nextRead, {
+        tool: "read_knowledge", args: { path: hub, candidate: false, offset: 0 },
+      });
+      assert.deepEqual(e.nextTools, []);
+      return reply(res, tool(e.nextRead.tool, e.nextRead.args));
+    }
+    if (n === 8) assert.equal(latestToolValue(f).text, `# DT610\n${existing}`);
+    if (n === 10) assert.equal(latestToolValue(f).text, stagedText);
+    reply(res, script[n]);
+  });
+  const upload = await service.upload("missing-page-recovery.md", (async function* () {
+    yield Buffer.from("Fixture source");
+  })());
+  const report = await done(service, (await service.start([upload.id])).id);
+  assert.equal(report.items[0].status, "published", report.items[0].reason);
+  assert.equal(f.requests.length, script.length);
+  assert.equal(await fs.readFile(path.join(root, source), "utf8"), "Fixture source");
+  assert.equal(await fs.readFile(path.join(root, existing), "utf8"), "# Independent specs");
+  assert.equal(await fs.readFile(path.join(root, hub), "utf8"), stagedText);
+  for (const p of [missingA, missingB])
+    await assert.rejects(fs.stat(path.join(root, p)), { code: "ENOENT" });
+});
+
+test("same missing target stops after two errors even when offset or default-view spelling changes", async (t) => {
+  const f = await setup(t);
+  f.set((res, n) => reply(res, tool("read_knowledge", {
+    path: hub, ...(n ? { candidate: false, offset: 20000 } : {}),
+  })));
+  await assert.rejects(f.run(), e => {
+    const d = JSON.parse(e.message.slice(e.message.indexOf("{")));
+    assert.equal(d.code, "KNOWLEDGE_NOT_FOUND");
+    assert.equal(d.path, hub);
+    assert.equal(d.requestedView, "original");
+    assert.equal(d.requestedOffset, 20000);
+    return true;
+  });
+  assert.equal(f.requests.length, 2);
+});
+
+test("missing-target stop rules also apply within one sequential tool batch", async (t) => {
+  const f = await setup(t);
+  f.set(res => reply(res, [
+    tool("read_knowledge", { path: hub }),
+    tool("read_knowledge", { path: hub, candidate: true }),
+    tool("read_knowledge", { path: "product-knowledge-vault/shared/missing.md" }),
+    tool("finish_sync", decision),
+  ]));
+  assert.equal((await f.run()).decision.action, "review");
+  assert.equal(f.requests.length, 1);
+  f.set(res => reply(res, [
+    tool("read_knowledge", { path: hub }),
+    tool("read_knowledge", { path: hub, offset: 20000 }),
+    tool("finish_sync", decision),
+  ]));
+  await assert.rejects(f.run(), /KNOWLEDGE_NOT_FOUND/);
+  assert.equal(f.requests.length, 1);
+});
+
+test("successful reads reset missing-target errors; original and staged read semantics remain unchanged", async (t) => {
+  const f = await setup(t), original = "# Original", staged = "# Candidate";
+  const missing = "product-knowledge-vault/shared/missing.md";
+  const fresh = "product-knowledge-vault/shared/fresh.md";
+  const script = [
+    tool("read_knowledge", { path: missing }),
+    tool("read_knowledge", { path: hub }),
+    tool("read_knowledge", { path: missing }),
+    tool("write_candidate", { path: hub, text: staged }),
+    tool("read_knowledge", { path: hub }),
+    tool("write_candidate", { path: fresh, text: staged }),
+    tool("read_knowledge", { path: fresh }),
+    tool("finish_sync", decision),
+  ];
+  f.set((res, n) => {
+    if ([2, 5].includes(n)) assert.equal(latestToolValue(f).text, original);
+    if (n === 7) assert.equal(latestToolValue(f).text, staged);
+    reply(res, script[n]);
+  });
+  await f.run({ base: new Map([[hub, original]]) });
+  assert.equal(f.requests.length, script.length);
+});
+
+test("distinct missing paths still hit the unchanged overall request budget", async (t) => {
+  const f = await setup(t);
+  f.set((res, n) => reply(res, tool("read_knowledge", {
+    path: `product-knowledge-vault/products/missing-${n}.md`,
+  })));
+  await assert.rejects(f.run({}, 4), /budget exceeded \(4\/4 request attempts\)/);
+  assert.equal(f.requests.length, 4);
+});
+
+test("missing-read recovery does not grant original coverage or disclose protected-path availability", async (t) => {
+  const f = await setup(t);
+  const script = [
+    tool("read_candidate_source"),
+    tool("read_knowledge", { path: hub, candidate: true }),
+    tool("write_candidate", { path: hub, text: `# DT610\n${existing}\n${source}` }),
+    tool("read_knowledge", { path: hub, candidate: true }),
+    tool("finish_sync", { ...decision, action: "add", newPath: source, reviewedPaths: [hub] }),
+    tool("finish_sync", { ...decision, action: "add", newPath: source, reviewedPaths: [hub] }),
+  ];
+  f.set((res, n) => reply(res, script[n]));
+  await assert.rejects(f.run({ base: new Map([[hub, `# DT610\n${existing}`], [existing, "# Spec"]]) }),
+    /Read all segments before submitting: product-knowledge-vault\/products\/DT610\.md/);
+  assert.equal(f.requests.length, script.length);
+  const secret = "PRIVATE_READ_SENTINEL";
+  for (const p of ["MEMORY.md", "product-knowledge-vault/MEMORY.md", "../private.md", "/tmp/private.md", "newly_added/private.md"]) {
+    f.set((res, n) => reply(res, n ? tool("finish_sync", decision) : tool("read_knowledge", { path: p, candidate: true })));
+    await f.run({ base: new Map([[p, secret]]) });
+    const payload = JSON.stringify(f.requests.flatMap(r => r.messages.filter(m => m.role === "tool")));
+    assert.ok(!payload.includes(secret));
+    assert.ok(!payload.includes(hash(secret)));
+    assert.ok(!payload.includes("originalExists"));
+    assert.ok(!payload.includes("candidateExists"));
+  }
+});
+
 test("patch diagnostics distinguish absent, repeated, overlapping, stale, missing and sequential-batch failures without saving partial edits", async (t) => {
   const f = await setup(t);
   const cases = [
