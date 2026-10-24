@@ -1563,3 +1563,31 @@ test("invalid offsets preserve original, candidate and batch view identities; co
       assert.equal(f.requests.length, script.length);
     });
 });
+
+test("maintenance prompt separates current decision from history and finish accepts explicit company-only WeCom scope", async t => {
+  const f = await setup(t);
+  const markdown = "# Company qualifications\nQ2020132 — enterprise only; no product applicability";
+  const docid = "e3_company_scope", id = "other";
+  const wecom = {
+    docid, id, title: "Company qualifications", sectionTitle: "Other", version: "1",
+    inputHash: hash(markdown), contentHash: hash("receipt"),
+    inventory: [{ id, title: "Other", contentHash: hash("receipt") }],
+    indexPath: "product-knowledge-vault/shared/company-qualifications.md", slot: "others",
+  };
+  const d = { ...decision, action: "add", sourceScope: "organization", products: [],
+    newPath: `_shared/others/wecom-${sourceKey(docid, id)}_202610242210/other.md`,
+    reason: "Administrator approved company-only publication; no product Hub is affected" };
+  f.set((res, n) => reply(res, n === 0 ? tool("read_candidate_source") : tool("finish_sync", d)));
+  const result = await f.run({ markdown, wecom,
+    feedback: "Publish company qualifications; do not attach to products",
+    feedbackHistory: "Previously: do not publish; later: publish" });
+  assert.equal(result.decision.action, "add");
+  assert.equal(result.decision.sourceScope, "organization");
+  assert.deepEqual(result.decision.products, []);
+  assert.equal(f.requests.length, 2, "Successful finish must end immediately");
+  const prompt = f.requests[0].messages.map(m => typeof m.content === "string" ? m.content : (m.content ?? []).map(c => c.text ?? "").join("\n")).join("\n");
+  assert.match(prompt, /"history":"Previously: do not publish; later: publish","current":"Publish company qualifications; do not attach to products"/);
+  assert.match(prompt, /current answer supersedes older answers to the SAME business question/);
+  assert.match(prompt, /without asking it again/);
+  assert.match(prompt, /tool\/schema failures are technical failures/);
+});

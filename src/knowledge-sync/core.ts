@@ -255,6 +255,8 @@ export type ReviewOption = {
   instructions: string;
 };
 export type Decision = {
+  /** Explicit company-level WeCom source, with no product applicability. */
+  sourceScope?: "organization";
   reviewQuestion?: string;
   reviewOptions?: ReviewOption[];
   suggestedFeedback?: string;
@@ -293,6 +295,7 @@ export type Attempt = {
   reason?: string;
   summary?: string;
   feedback: string;
+  currentFeedback?: string;
   started?: string;
   finished?: string;
   elapsedMs?: number;
@@ -312,6 +315,7 @@ export type Item = {
   status: string;
   stage: string;
   feedback: string;
+  currentFeedback?: string;
   previous?: string;
   matchedSources?: SourceMatch[];
   associationOnly?: boolean;

@@ -188,7 +188,10 @@ export function buildPlan(
   }
   if (d.action === "review")
     return { decision: d, changes: [], baseline: fingerprint(base) };
+  if (d.sourceScope !== undefined && d.sourceScope !== "organization")
+    throw new PlanError(["Unsupported source scope."]);
   if (d.action === "associate") {
+    if (d.sourceScope) throw new PlanError(["Association-only mode requires product applicability."]);
     if (wecom || wecomIndexes(base).some(x=>x.members.some(m=>m.path===d.existingSource&&!m.withdrawn))) throw new PlanError(["Verified WeCom sections use their own source binding, not association-only mode."]);
     if (deletion) throw new PlanError(["A deletion preview cannot add associations."]);
     return buildAssociationPlan(base,staged,d,association,{references,resolveHub});
@@ -281,8 +284,20 @@ export function buildPlan(
   staged.set(logPath, appendedLog);
   const next = new Map(base),
     allowedDeletes = new Set(d.oldPaths);
+  // Narrow exception for verified company-level WeCom text. No inferred
+  // product, fake Hub, ordinary upload or legacy workbook can use this mode.
+  const organization = d.sourceScope === "organization";
+  const organizationDeletion = organization && deletion && d.oldPaths.length > 0 && d.oldPaths.every(p =>
+    wecomIndexes(base).some(x => x.members.some(m => m.path === p && !m.withdrawn && m.sourceScope === "organization")));
+  if (organization && (
+    (!deletion && !feedback.trim() && wecom?.previous?.sourceScope !== "organization") ||
+    d.slot !== "others" || d.products.length !== 0 ||
+    (d.productHubs?.length ?? 0) > 0 ||
+    !(deletion ? organizationDeletion : wecom && ["add", "update"].includes(d.action))
+  ))
+    fail("Organization scope requires administrator feedback for first publication, verified WeCom shared text in others, no products or product Hubs; deletion is limited to registered organization sources.");
   if (
-    !d.products.length ||
+    (!d.products.length && !organization) ||
     d.products.some(
       (p) => !p || p.includes("/") || p.includes("\\") || p.startsWith("."),
     )

@@ -12,6 +12,7 @@ import {
   incomingWecom,
   contextFor,
   indexes,
+  hint,
   sourceKey,
   verifyRetirement,
 } from "../dist/knowledge-sync/wecom-sources.js";
@@ -32,7 +33,7 @@ const old = "_shared/accessories/old-guide_202609182242/old.md",
   main = "product-knowledge-vault/index.md",
   dock = "UPad/accessories/dock_202608281943/dock.md";
 const docid = "e3_testguide";
-async function fixture(t) {
+async function fixture(t, slot = "accessories") {
   const dataDir = await fs.mkdtemp(
     path.join(os.tmpdir(), "sync-wecom-sources-"),
   );
@@ -105,7 +106,7 @@ async function fixture(t) {
   const route = {
     version: 1,
     documents: {
-      [docid]: { indexPath: node, slot: "accessories", legacySources: [old] },
+      [docid]: { indexPath: node, slot, legacySources: [old] },
     },
   };
   await fs.mkdir(path.join(dataDir, "knowledge-sync"));
@@ -811,4 +812,184 @@ test('slot diagnostics reject invented categories and still prohibit changing a 
   assert.throws(()=>check({...p.decision,slot:'project-matrix',newPath:p.decision.newPath.replace('/accessories/','/project-matrix/')}),e=>/Unsupported WeCom slot "project-matrix"/.test(e.message)&&/Allowed slots:/.test(e.message)&&!e.message.includes('must use _shared/project-matrix'));
   assert.throws(()=>check({...p.decision,slot:'others',newPath:p.decision.newPath.replace('/accessories/','/others/')}),/requires slot "accessories"/);
   assert.ok(check(p.decision));
+});
+
+function organizationProposal(ctx, base, stamp = "202610242200") {
+  return {
+    decision: {
+      action: ctx.previous ? "update" : "add", sourceScope: "organization",
+      products: [], slot: "others",
+      oldPaths: ctx.previous ? [ctx.previous.path] : [],
+      newPath: `_shared/others/wecom-${sourceKey(ctx.docid, ctx.id)}_${stamp}/qualifications.md`,
+      reason: "Company qualifications; no product applicability or product Hub changes",
+      summary: "Publish company-level qualifications",
+      versionEvidence: `Verified source version ${ctx.version}`,
+      authorizedException: false,
+      reviewedPaths: [node, ...dependents(base, ctx.previous ? [ctx.previous.path] : [])],
+    },
+    staged: new Map(),
+  };
+}
+
+test("verified organization source publishes, reloads and updates with no product Hub or legacy changes", async t => {
+  const f = await fixture(t, "others");
+  f.change("Company qualification Q2020132; organization only, not any product");
+  const outputs = await f.collect();
+  const v = await verified(f, outputs[0]), ctx = contextFor(v.input, v.base);
+  const p = organizationProposal(ctx, v.base);
+  const plan = buildPlan(v.base, p.staged, p.decision, v.body, "Publish company qualifications without product applicability", false, undefined, ctx);
+  assert.deepEqual(plan.decision.products, []);
+  assert(!plan.changes.some(c => c.path.startsWith("product-knowledge-vault/products/")));
+  await publish(f, plan);
+  let base = await catalog(f.root);
+  let member = indexes(base)[0].members.find(m => m.id === ctx.id);
+  assert.equal(member.sourceScope, "organization");
+  assert.deepEqual(member.products, []);
+  assert.deepEqual(member.hubs, []);
+  assert.equal(base.get(member.path), v.body);
+  assert.match(base.get(node), /Organization-level; no product applicability/);
+  for (const path of [hub, old, dock]) assert.equal(base.get(path), v.base.get(path));
+
+  // The persisted organization binding is enough for a later verified update.
+  f.change("Company qualification Q2020132; updated organization-only record");
+  await f.collect();
+  const newer = await verified(f, outputs[0]), nextCtx = contextFor(newer.input, newer.base);
+  assert.equal(JSON.parse(hint(nextCtx)).previousSourceScope, "organization");
+  const update = organizationProposal(nextCtx, newer.base, "202610242201");
+  const updatePlan = buildPlan(newer.base, update.staged, update.decision, newer.body, "", false, undefined, nextCtx);
+  await publish(f, updatePlan);
+  base = await catalog(f.root);
+  assert(!base.has(member.path));
+  member = indexes(base)[0].members.find(m => m.id === ctx.id);
+  assert.equal(base.get(member.path), newer.body);
+  for (const path of [hub, old, dock]) assert.equal(base.get(path), v.base.get(path));
+
+  // Source deletion is still a scoped plan, and its Publisher transaction must
+  // retain the managed family page and withdraw only this registered member.
+  const deletion = { ...update.decision, action: "delete", newPath: undefined, oldPaths: [member.path], reviewedPaths: [node] };
+  const deletePlan = buildPlan(base, new Map(), deletion, "Delete this company source", "", true);
+  await publish(f, deletePlan);
+  base = await catalog(f.root);
+  assert(!base.has(member.path));
+  assert(indexes(base)[0].members.find(m => m.id === ctx.id).withdrawn);
+  for (const path of [hub, old, dock]) assert.equal(base.get(path), v.base.get(path));
+});
+
+test("organization scope cannot bypass product, source, slot, dependency or managed-index guards", async t => {
+  const f = await fixture(t, "others"), v = await verified(f, f.outputs[0]), ctx = contextFor(v.input, v.base);
+  const p = organizationProposal(ctx, v.base);
+  const check = (decision = p.decision, staged = p.staged, feedback = "Publish company-only source", wecom = ctx, deletion = false) =>
+    buildPlan(v.base, staged, decision, v.body, feedback, deletion, undefined, wecom);
+  assert.throws(() => check(p.decision, p.staged, ""), /Organization scope requires administrator feedback/);
+  assert.throws(() => check({ ...p.decision, sourceScope: undefined }), /Explicit canonical products/);
+  assert.throws(() => check(p.decision, p.staged, "publish", null), /Organization scope requires/);
+  assert.throws(() => check({ ...p.decision, products: ["UPad"] }), /Organization scope requires/);
+  assert.throws(() => check({ ...p.decision, productHubs: [{ product: "UPad", path: hub }] }), /Organization scope requires/);
+  assert.throws(() => check(p.decision, new Map([[hub, "Fake attribution"]])), /Unrelated product Hub change/);
+  assert.throws(() => check({ ...p.decision, newPath: "UPad/others/company_202610242200/q.md" }), /WeCom source must use/);
+  assert.throws(() => check({ ...p.decision, slot: "specs" }), /requires slot/);
+  assert.throws(() => check({ ...p.decision, action: "update", oldPaths: [old] }), /cannot replace another source or the whole workbook|legacy complete workbook/);
+  assert.throws(() => check({ ...p.decision, action: "delete", newPath: undefined, oldPaths: [old] }, new Map(), "delete", null, true), /retirement is blocked|Organization scope requires/);
+  assert.throws(() => check(p.decision, new Map([[node, "Forged managed index"]])), /maintained by the backend/);
+
+  // A product-linked section cannot shed its products under the new flag.
+  const linked = { ...p.decision, sourceScope: undefined, products: ["UPad"] };
+  const productPlan = check(linked, new Map([[hub, `# UPad\n${dock}\n[[shared/device-and-accessories-guide|Guide]]`]]));
+  await publish(f, productPlan);
+  const base = await catalog(f.root), linkedCtx = contextFor(v.input, base);
+  const drop = organizationProposal(linkedCtx, base, "202610242203");
+  assert.throws(() => buildPlan(base, drop.staged, drop.decision, v.body, "company only", false, undefined, linkedCtx), /must preserve its associated products/);
+
+  // Empty legacy products without an explicit scope remain invalid metadata;
+  // ordinary, already published product indexes continue to reload unchanged.
+  const text = base.get(node), encoded = text.match(/<!-- wecom-source-index:v1 ([A-Za-z0-9_-]+) -->/)[1];
+  const data = JSON.parse(Buffer.from(encoded, "base64url"));
+  data.members[0].products = []; data.members[0].hubs = [];
+  const forged = new Map(base);
+  forged.set(node, text.replace(encoded, Buffer.from(JSON.stringify(data)).toString("base64url")));
+  assert.throws(() => indexes(forged), /Invalid WeCom member/);
+  assert.equal(indexes(base)[0].members[0].products[0], "UPad");
+});
+
+// Actual service persistence/publication flow with a deterministic planner.
+// No external model, production report or live source is touched.
+test("organization Re-Sync separates current answer from contradictory history across restart and empty retry", async t => {
+  const f = await fixture(t, "others"), observed = [];
+  let convertCalls = 0;
+  let publishNow = false;
+  const options = {
+    dataDir: f.dataDir, maxBytes: 1048576, timeoutMs: 5000,
+    modelId: () => "fixture", redact: e => e.message,
+    converter: () => {
+      const convert = createConverter(fileToolConfig(f.dataDir, f.dataDir, {}), "", 1, async () => () => {});
+      return async (file, dir, ...args) => {
+        if (!await fs.stat(path.join(dir, "conversion.json")).catch(() => null)) convertCalls++;
+        return convert(file, dir, ...args);
+      };
+    },
+    planner: () => async input => {
+      observed.push({ current: input.feedback, history: input.feedbackHistory });
+      if (input.deletion) {
+        const member = indexes(input.base)[0].members.find(m => m.id === "a");
+        return { decision: {
+          action: "delete", sourceScope: "organization", products: [], slot: "others",
+          oldPaths: [member.path], reviewedPaths: [node],
+          reason: "Remove only the explicitly requested organization source",
+          summary: "Company source deletion preview", versionEvidence: "Explicit deletion request",
+          authorizedException: false,
+        }, staged: new Map() };
+      }
+      const p = organizationProposal(input.wecom, input.base);
+      return publishNow ? p : { decision: { ...p.decision, action: "review", reason: "Fixture review" }, staged: new Map() };
+    },
+  };
+  let sync = new SyncService(options);
+  t.after(() => sync.close());
+  await sync.init();
+  const file = (await sync.incoming()).find(i => i.name === f.outputs[0].target);
+  let job = await sync.start([file.id]); await sync.active; job = await sync.get(job.id);
+  job = await sync.resync(job.id, job.items[0].id, "Do not publish this section"); await sync.active; job = await sync.get(job.id);
+  await sync.close();
+  // Simulate the exact append-only format of a pre-fix report, including a
+  // blank retry. Recovery must not mistake the entire history for one answer.
+  const reportPath = path.join(f.dataDir, "knowledge-sync/jobs", job.id + ".json");
+  const legacy = JSON.parse(await fs.readFile(reportPath, "utf8"));
+  delete legacy.items[0].currentFeedback;
+  legacy.items[0].feedback = "Publish (obsolete answer)\nDo not publish this section\n";
+  legacy.items[0].attempts = [
+    { ...legacy.items[0].attempts[0], feedback: "Publish (obsolete answer)" },
+    { ...legacy.items[0].attempts[0], id: crypto.randomUUID(), feedback: "Publish (obsolete answer)\nDo not publish this section" },
+  ];
+  await fs.writeFile(reportPath, JSON.stringify(legacy));
+  sync = new SyncService(options); await sync.init();
+  job = await sync.resync(job.id, job.items[0].id, ""); await sync.active; job = await sync.get(job.id);
+  assert.equal(observed.at(-1).current, "Do not publish this section");
+  assert.match(observed.at(-1).history, /Publish \(obsolete answer\)/);
+  job = await sync.resync(job.id, job.items[0].id, "Publish company qualifications; no product Hub changes"); await sync.active; job = await sync.get(job.id);
+  assert.equal(observed.at(-1).current, "Publish company qualifications; no product Hub changes");
+  assert.match(observed.at(-1).history, /Do not publish/);
+  assert.equal(job.items[0].currentFeedback, observed.at(-1).current);
+  assert.match(job.items[0].feedback, /Do not publish[\s\S]*Publish company/);
+  assert.equal(job.items[0].attempts.at(-1).currentFeedback, "Do not publish this section");
+  publishNow = true;
+  job = await sync.resync(job.id, job.items[0].id, ""); await sync.active; job = await sync.get(job.id);
+  assert.equal(observed.at(-1).current, "Publish company qualifications; no product Hub changes");
+  assert.equal(job.items[0].status, "published", job.items[0].reason);
+  assert.equal(convertCalls, 1, "Re-Sync must reuse the unchanged conversion");
+  const base = await catalog(f.root);
+  const member = indexes(base)[0].members.find(m => m.id === "a");
+  assert.equal(member.sourceScope, "organization");
+  assert.deepEqual(member.products, []);
+  assert.equal(base.get(hub), `# UPad\n${dock}\n[[shared/device-and-accessories-guide|Guide]]`);
+  assert(base.has(old));
+  let preview = await sync.preview(`Delete only company source ${member.path}; keep legacy and product Hubs`);
+  await sync.active; preview = await sync.get(preview.id);
+  assert.equal(preview.items[0].status, "awaiting_confirmation", preview.items[0].reason);
+  assert((await catalog(f.root)).has(member.path), "A preview must not delete live text");
+  await sync.confirm(preview.id); await sync.active;
+  const removed = await sync.get(preview.id), after = await catalog(f.root);
+  assert.equal(removed.items[0].status, "deleted", removed.items[0].reason);
+  assert(!after.has(member.path));
+  assert(after.has(old));
+  assert.equal(after.get(hub), base.get(hub));
 });

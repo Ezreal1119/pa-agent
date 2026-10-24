@@ -43,12 +43,27 @@ const extensions = new Set([
   ".txt",
   ".md",
 ]);
+// Older reports only store append-only feedback. Recover the last non-empty
+// submission by exact attempt prefixes, never by interpreting its wording.
+const currentAnswer = (item: Item): string => {
+  if (item.currentFeedback !== undefined) return item.currentFeedback;
+  let text = item.feedback;
+  for (const previous of [...(item.attempts ?? [])].reverse()) {
+    const prefix = previous.feedback ? previous.feedback + "\n" : "";
+    if (!text.startsWith(prefix)) continue;
+    const submitted = text.slice(prefix.length);
+    if (submitted.trim()) return submitted;
+    text = previous.feedback;
+  }
+  return text;
+};
 const attemptOf = (item: Item): Attempt => ({
   id: item.id,
   status: item.status,
   reason: item.reason,
   summary: item.summary,
   feedback: item.feedback,
+  currentFeedback: item.currentFeedback,
   started: item.started,
   finished: item.finished,
   elapsedMs: item.elapsedMs,
@@ -476,7 +491,7 @@ export class SyncService {
   }
   private selectMatch(item:Item,matches:SourceMatch[]):SourceMatch{
     if(matches.length===1)return matches[0]!;
-    const selected=matches.filter(m=>item.feedback.includes(m.path));
+    const selected=matches.filter(m=>currentAnswer(item).includes(m.path));
     if(selected.length===1)return selected[0]!;
     throw new PlanError([matches.length
       ? `相同原件匹配多份已发布资料，请在反馈中明确指定一条完整 Markdown 路径：\n${matches.map(m=>m.path).join("\n")}`
@@ -565,6 +580,9 @@ export class SyncService {
           }
         }
       }
+      // Preserve the legacy cumulative audit text; current instructions are
+      // separate. An empty retry retains the last explicitly submitted answer.
+      item.currentFeedback = feedback.trim() ? feedback : currentAnswer(old);
       item.attempts = [...(old.attempts ?? []), attemptOf(old)];
       job.items[index] = item;
       job.confirmed = undefined;
@@ -945,7 +963,8 @@ export class SyncService {
             job.kind === "delete"
               ? `DELETE PREVIEW: ${job.prompt}`
               : `SYNC input ${item.name} (id ${item.id})`,
-          feedback: item.feedback,
+          feedback: currentAnswer(item),
+          feedbackHistory: item.currentFeedback !== undefined ? item.attempts?.at(-1)?.feedback : undefined,
           deletion: job.kind === "delete",
           candidates: new Map(
             [...converted].map(([id, c]) => [id, c.markdown]),
@@ -983,7 +1002,7 @@ export class SyncService {
           result.staged,
           result.decision,
           markdown,
-          item.feedback,
+          currentAnswer(item),
           job.kind === "delete",
           association,
           wecom,

@@ -57,6 +57,7 @@ export type WecomInput = {
 };
 type Route = { indexPath: string; slot: string; legacySources: string[] };
 type Member = {
+  sourceScope?: "organization";
   id: string;
   title: string;
   path: string;
@@ -329,7 +330,10 @@ export function indexes(base: Map<string, string>): Index[] {
         !hex.test(member.hash) ||
         !hex.test(member.contentHash) ||
         !Array.isArray(member.products) ||
-        !member.products.length ||
+        (member.sourceScope !== undefined && member.sourceScope !== "organization") ||
+        (member.sourceScope === "organization"
+          ? x.slot !== "others" || member.products.length !== 0
+          : !member.products.length) ||
         member.products.some(
           (p) => typeof p !== "string" || !p || /[\\/\x00-\x1f]/.test(p),
         ) ||
@@ -454,7 +458,9 @@ function render(x: Index) {
   let out = `# ${esc(x.title)}\n\nNavigation for this online document. Detailed facts remain in the linked worksheet/document sources.\n\nOnline source: https://doc.weixin.qq.com/${x.docid.startsWith("e3_") ? "sheet" : "doc"}/${x.docid}\n\n| Worksheet / document | Applicable products | Published text source | Summary |\n| --- | --- | --- | --- |\n`;
   for (const s of x.inventory) {
     const member = x.members.find((m) => m.id === s.id && !m.withdrawn);
-    out += `| ${esc(s.title)} | ${member ? member.products.map(esc).join(", ") : "—"} | ${member ? `[Read source](${linked(member.path)})` : "Pending Sync"} | ${member ? esc(member.summary) : "Not yet published"} |\n`;
+    const applicability = !member ? "—" : member.sourceScope === "organization"
+      ? "Organization-level; no product applicability" : member.products.map(esc).join(", ");
+    out += `| ${esc(s.title)} | ${applicability} | ${member ? `[Read source](${linked(member.path)})` : "Pending Sync"} | ${member ? esc(member.summary) : "Not yet published"} |\n`;
   }
   const removed = x.members.filter(
     (m) => !x.inventory.some((s) => s.id === m.id) && !m.withdrawn,
@@ -513,6 +519,7 @@ export function hint(ctx: WecomContext) {
       ctx.slot ?? "<chosen-slot>",
     ),
     previousSource: ctx.previous?.withdrawn ? undefined : ctx.previous?.path,
+    previousSourceScope: ctx.previous?.sourceScope,
     withdrawn: !!ctx.previous?.withdrawn,
     protectedLegacy: ctx.route?.legacySources ?? [],
   });
@@ -657,6 +664,7 @@ export function prepareWecom(
   x.title = ctx.title;
   x.inventory = ctx.inventory;
   const member: Member = {
+    ...(d.sourceScope === "organization" ? { sourceScope: d.sourceScope } : {}),
     id: ctx.id,
     title: ctx.sectionTitle,
     path: d.newPath!,
