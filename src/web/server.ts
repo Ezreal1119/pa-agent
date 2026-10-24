@@ -1,3 +1,4 @@
+import { WecomRoles, roleScope, senderScope } from "./wecom-roles.js";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -64,7 +65,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
-type RecordState = { channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
+type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
 export interface WebOptions { wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
@@ -105,6 +106,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const auth = new WebAuth(adminAccount, adminPassword);
   await auth.initialize(dataDir);
   const wecomContacts = new WecomContacts(dataDir);
+  const wecomRoles = new WecomRoles(dataDir);
   const bridgeToken = options.bridgeToken ?? process.env.WECOM_API_TOKEN ?? diskEnv.WECOM_API_TOKEN ?? "";
   const bridge = new BridgeAccess(dataDir, bridgeToken);
   await bridge.load();
@@ -281,7 +283,7 @@ export async function createWebServer(options: WebOptions = {}) {
         const saved = (await savedSessions()).find(s => s.id === item.id);
         const manager = saved ? SessionManager.open(saved.path, sessionsDir, cwd) : SessionManager.create(cwd, sessionsDir, { id: item.id });
         const textOnly = item.channel === "mcp" || mcpStore.hasSession(item.id) || manager.getEntries().some(entry => entry.type === "custom" && entry.customType === RUN_METRICS_TYPE && Boolean((entry.data as Partial<RunMetric>)?.mcpTaskId));
-        const session = await engine.createSession(manager, { textOnly });
+        const session = await engine.createSession(manager, { textOnly, userRoleStyle: () => item.userRoleStyle });
         // Replay persisted snapshots after a restart; cursors make this idempotent.
         await wecomContacts.recoverSession(item.id, getRunMetrics(session));
         return item.session = session;
@@ -421,6 +423,17 @@ export async function createWebServer(options: WebOptions = {}) {
       if (machine) {
         if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "WeCom API credentials are invalid or not configured.");
         const route = url.pathname.slice("/api/wecom".length);
+        if (route === "/role" && ["GET", "PUT", "DELETE"].includes(method ?? "")) {
+          let scope;
+          try { scope = roleScope(JSON.parse(url.searchParams.get("scope") ?? "null")); }
+          catch { throw new HttpError(400, "Invalid WeCom conversation scope."); }
+          if (method !== "GET") {
+            const input = await readBody(req);
+            if (Object.keys(input).some(key => key !== "text") || method === "PUT" && (typeof input.text !== "string" || !input.text.trim() || input.text.length > 12000 || input.text.includes("\0")) || method === "DELETE" && Object.keys(input).length) throw new HttpError(400, "Invalid role request.");
+            await wecomRoles.set(scope, method === "DELETE" ? undefined : input.text);
+          }
+          return json(res, 200, { text: await wecomRoles.get(scope) ?? null });
+        }
         const owned = route.match(/^\/sessions\/([\w-]+)(?:\/(run|stop|files)(?:\/([a-f0-9-]{36}))?)?$/);
         const allowed = route === "/contacts" && method === "POST" || route === "/status" && method === "GET" || route === "/sessions" && method === "POST" || owned && (
           !owned[2] && ["GET", "PATCH", "DELETE"].includes(method ?? "") ||
@@ -709,8 +722,9 @@ export async function createWebServer(options: WebOptions = {}) {
         if (configuring) throw new HttpError(409, "Agent settings are being updated. Please wait.");
         openingSessions++;
         try {
-          const session = await (await getRuntime()).createSession();
-          const item: RecordState = { id: session.sessionId, session, running: false, title: "New conversation", updated: new Date().toISOString() };
+          let item: RecordState;
+          const session = await (await getRuntime()).createSession(undefined, { userRoleStyle: () => item?.userRoleStyle });
+          item = { id: session.sessionId, session, running: false, title: "New conversation", updated: new Date().toISOString() };
           records.set(item.id, item);
           if (machine) await bridge.register(item.id);
           return json(res, 201, { id: item.id });
@@ -809,6 +823,7 @@ export async function createWebServer(options: WebOptions = {}) {
           res.once("close", cancelWaiting);
           try {
             const body = await readBody(req);
+            if (body.userRoleStyle !== undefined || body.role !== undefined) throw new HttpError(403, "Roles are configured only through the WeCom role API.");
             if (typeof body.text !== "string" || body.text.length > 12000) throw new HttpError(400, "Enter a question with at most 12000 characters.");
             let sender;
             if (body.wecomSender !== undefined) {
@@ -833,6 +848,7 @@ export async function createWebServer(options: WebOptions = {}) {
             catch (error) { throw new HttpError(queuedAbort.signal.aborted ? 499 : 429, (error as Error).message); }
             res.off("close", cancelWaiting);
             item.cancelQueued = undefined;
+            item.userRoleStyle = machine && sender ? await wecomRoles.get(senderScope(sender)) : undefined;
             const acceptedAt = performance.now();
             const acceptedAtIso = new Date().toISOString();
             session = await getSession(item);
@@ -962,7 +978,7 @@ export async function createWebServer(options: WebOptions = {}) {
               }
             }
             return;
-          } finally { res.off("close", cancelWaiting); item.cancelQueued = undefined; releaseRun?.(); item.running = false; item.updated = new Date().toISOString(); }
+          } finally { res.off("close", cancelWaiting); item.cancelQueued = undefined; delete item.userRoleStyle; releaseRun?.(); item.running = false; item.updated = new Date().toISOString(); }
         }
       }
       const assets: Record<string, [string, string]> = {

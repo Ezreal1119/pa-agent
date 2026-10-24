@@ -316,3 +316,8 @@ nodeTest('administrator instructions match preview, refresh each run, stay fixed
   await assert.rejects(session.prompt('should not infer'),/damaged/);
   assert.equal(f.requests.length,count);
 });
+
+test('text-only MCP sessions ignore a supplied role provider and retain their read-only tools',async t=>{
+ const f=await fixture(t);const runtime=await f.runtime();const session=await runtime.createSession(undefined,{textOnly:true,userRoleStyle:()=>{throw new Error('MCP must not load a private WeCom role');}});f.sessions.push(session);
+ await session.prompt('MCP question');const request=f.requests.at(-1);assert.ok(!systemText(request).includes('User Role & Style'));assert.ok(request.tools.some(tool=>tool.function.name==='read'));assert.ok(!request.tools.some(tool=>tool.function.name==='memory'));
+});

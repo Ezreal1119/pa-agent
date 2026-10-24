@@ -6,6 +6,7 @@ import { bridgeConfig } from './config.mjs';
 import { AgentApi } from './api.mjs';
 import { BridgeStore } from './store.mjs';
 import { WecomBridge } from './bridge.mjs';
+import { welcome } from './commands.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 dotenv({ path: path.join(root, '.env'), quiet: true });
@@ -45,7 +46,9 @@ try {
         // Invalid credentials have a bounded SDK retry budget; let systemd recover after repair.
         if (error.code === 'WS_AUTH_FAILURE_EXHAUSTED') { void bridge.close().finally(() => { process.exitCode = 1; }); }
       });
-      // Entering a chat is silent; respond only to user messages.
+      client.on('event.enter_chat', frame => {
+        void welcome(client, frame).catch(error => console.warn('WeCom welcome:', bridge.safeError(error)));
+      });
       for (const type of ['text', 'image', 'file', 'mixed', 'voice', 'video']) client.on(`message.${type}`, frame => {
         void bridge.receive(botId, frame).catch(error => console.error('WeCom receive:', bridge.safeError(error)));
       });

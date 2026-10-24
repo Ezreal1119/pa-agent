@@ -37,6 +37,10 @@ export class BridgeStore {
     try {
       const value = JSON.parse(await fs.readFile(this.file, 'utf8'));
       if (value.version !== 1 || !Array.isArray(value.jobs) || !value.conversations || typeof value.conversations !== 'object') throw new Error('WeCom 状态文件格式错误，拒绝重置已有映射。');
+      if (value.scopes !== undefined && (!value.scopes || typeof value.scopes !== 'object' || Array.isArray(value.scopes) || Object.entries(value.scopes).some(([key, scope]) => {
+        let parts; try { parts = JSON.parse(key); } catch { return true; }
+        return !Array.isArray(parts) || parts.length !== 3 || !['single', 'group'].includes(parts[1]) || !scope || !Number.isSafeInteger(scope.generation) || scope.generation < 0 || scope.awaitingUser !== undefined && (typeof scope.awaitingUser !== 'string' || !scope.awaitingUser || scope.awaitingUser.length > 256);
+      }))) throw new Error('WeCom command scope state is invalid; existing preferences were not reset.');
       this.data = value;
     } catch (error) { if (error.code !== 'ENOENT') { await this.close(); throw error; } }
     return this;

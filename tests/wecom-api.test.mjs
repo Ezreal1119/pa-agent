@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
+import {randomUUID} from 'node:crypto';
 import {createWebServer} from '../dist/web/server.js';
 import {AgentApi, ApiError} from '../integrations/wecom-bridge/api.mjs';
 
@@ -18,13 +19,13 @@ function modelReply(res,text='独立回答'){
 async function setup(t,limits={}){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-api-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});
  await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRODUCT RULE');await writeMemoryFixture(dataDir,'urovo-product-expert','PRODUCT MEMORY');
- let handler;let requestCount=0;const model=createServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);requestCount++;if(handler)return handler(body,res);modelReply(res);});model.listen(0,'127.0.0.1');await once(model,'listening');
+ let handler;let requestCount=0;const requests=[];const model=createServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);requests.push(body);requestCount++;if(handler)return handler(body,res);modelReply(res);});model.listen(0,'127.0.0.1');await once(model,'listening');
  const options={cwd:root,dataDir,bridgeToken:TOKEN,admin:{account:'admin',password:'password'},model:{apiKey:'FAKE_TEST_KEY',modelId:'fixture',baseUrl:`http://127.0.0.1:${model.address().port}/v1`},...limits};
- let app,base,api;
+ let app,base,api;const finalizers=[];
  async function start(){app=await createWebServer(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');base=`http://127.0.0.1:${app.server.address().port}`;api=new AgentApi(base,TOKEN);}
- await start();t.after(async()=>{await app.close();model.closeAllConnections();await new Promise(r=>model.close(r));await fs.rm(root,{recursive:true,force:true});});
+ await start();t.after(async()=>{for(const cleanup of finalizers)await cleanup();await app.close();model.closeAllConnections();await new Promise(r=>model.close(r));await fs.rm(root,{recursive:true,force:true});});
  async function browser(){const token=(await(await fetch(base+'/api/auth/status')).json()).token;const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':token},body:JSON.stringify(options.admin)});const cookie=login.headers.get('set-cookie').split(';')[0];return(route,method='GET',body)=>fetch(base+route,{method,headers:{'Content-Type':'application/json','X-Local-Token':token,Cookie:cookie},...(body===undefined?{}:{body:JSON.stringify(body)})});}
- return {root,dataDir,get api(){return api;},get base(){return base;},get requestCount(){return requestCount;},browser,setHandler(fn){handler=fn;},async restart(){await app.close();await start();}};
+ return {root,dataDir,requests,beforeCleanup:fn=>finalizers.push(fn),get api(){return api;},get base(){return base;},get requestCount(){return requestCount;},browser,setHandler(fn){handler=fn;},async restart(){await app.close();await start();}};
 }
 async function waitFor(fn){const end=Date.now()+5000;while(!await fn()){if(Date.now()>end)throw new Error('wait timeout');await new Promise(r=>setTimeout(r,10));}}
 
@@ -132,4 +133,71 @@ test('parallel independent sessions keep sender counters separate and stopped ru
  const contacts=(await(await browser('/api/wecom-contacts')).json()).contacts;
  const stoppedStats=contacts.find(c=>c.userId==='stopped').stats;assert.equal(stoppedStats.questions,1);assert.equal(stoppedStats.finishedRuns,1);assert.equal(stoppedStats.reportedRequests,0);
  assert.equal(contacts.find(c=>c.userId==='other').stats.inputTokens,100);
+});
+
+const roleRoute = (bot,kind,target) => '/role?scope='+encodeURIComponent(JSON.stringify([bot,kind,target]));
+const sender = (user,group,bot='bot') => ({botId:bot,userId:user,chatType:group?'group':'single',...(group?{chatId:group}:{}),at:Date.now()});
+const systemOf = body => body.messages.filter(message=>message.role==='system').map(message=>message.content).join('\n');
+
+test('scoped roles persist, appear once after extra memory, stay out of Web/history and preserve tools', {timeout:30000},async t=>{
+ const f=await setup(t);const route=roleRoute('bot','single','a');
+ assert.deepEqual(await f.api.json(route),{text:null});assert.equal(f.requestCount,0);
+ const raw='  原文角色\n只给明确结论。\n\n保留换行与空格。  ';
+ await f.api.json(route,'PUT',{text:raw});assert.deepEqual(await f.api.json(route),{text:raw});
+ assert.equal((await fs.stat(path.join(f.dataDir,'wecom/roles.json'))).mode&0o777,0o600);
+ await f.api.json(roleRoute('bot','group','g'),'PUT',{text:'全群角色'});
+ const {id}=await f.api.json('/sessions','POST',{});
+ await f.api.run(id,'question-a',[],()=>{},undefined,sender('a'));
+ const payload=f.requests.at(-1),system=systemOf(payload);assert.ok(system.endsWith('# User Role & Style\n'+raw));assert.ok(system.indexOf('## Extra agent memory')<system.indexOf('# User Role & Style'));assert.equal(system.split('# User Role & Style').length,2);
+ const tools=payload.tools.map(tool=>tool.function.name).sort();assert.ok(tools.includes('read'));assert.ok(tools.includes('memory'));assert.ok(!tools.includes('bash'));
+ const {id:other}=await f.api.json('/sessions','POST',{});await f.api.run(other,'question-b',[],()=>{},undefined,sender('b'));assert.ok(!systemOf(f.requests.at(-1)).includes('User Role & Style'));
+ await f.api.run(other,'question-other-bot',[],()=>{},undefined,sender('a',undefined,'other'));assert.ok(!systemOf(f.requests.at(-1)).includes('User Role & Style'));
+ for(const user of ['a','b']){await f.api.run(other,'group-'+user,[],()=>{},undefined,sender(user,'g'));assert.ok(systemOf(f.requests.at(-1)).endsWith('全群角色'));}
+ const browser=await f.browser();await (await browser(`/api/sessions/${id}/run`,'POST',{text:'web-in-same-session'})).text();assert.ok(!systemOf(f.requests.at(-1)).includes('User Role & Style'));
+ const logs=await fs.readdir(path.join(f.dataDir,'sessions'),{recursive:true});const all=[];for(const file of logs)if(file.endsWith('.jsonl'))all.push(await fs.readFile(path.join(f.dataDir,'sessions',file),'utf8'));
+ assert.ok(all.length);assert.ok(all.every(log=>!log.includes('原文角色')&&!log.includes('# User Role & Style')));
+ const restartId=id;await f.restart();assert.deepEqual(await f.api.json(route),{text:raw});await f.api.run(restartId,'after restart',[],()=>{},undefined,sender('a'));assert.ok(systemOf(f.requests.at(-1)).endsWith(raw));
+ await f.api.json(route,'DELETE',{});await f.api.run(id,'default style',[],()=>{},undefined,sender('a'));assert.ok(!systemOf(f.requests.at(-1)).includes('User Role & Style'));assert.deepEqual(f.requests.at(-1).tools.map(t=>t.function.name).sort(),tools);assert.equal((await f.api.json(roleRoute('bot','group','g'))).text,'全群角色');
+});
+
+test('role API is Bridge-only, validates scopes/text, and never exposes arbitrary filesystem paths',async t=>{
+ const f=await setup(t);const route=roleRoute('bot','single','a');
+ assert.equal((await fetch(f.base+'/api/wecom'+route)).status,401);
+ const browser=await f.browser();assert.equal((await browser('/api/wecom'+route)).status,401);assert.equal((await browser('/api/role','PUT',{text:'forged'})).status,404);
+ await assert.rejects(f.api.json('/role?scope=bad'),error=>error.status===400);
+ await assert.rejects(f.api.json(roleRoute('bot','wrong','a')),error=>error.status===400);
+ for(const text of ['', '  ', 'x'.repeat(12001)])await assert.rejects(f.api.json(route,'PUT',{text}),error=>error.status===400);
+ await assert.rejects(f.api.json(route,'PUT',{text:'valid',path:'/tmp/role'}),error=>error.status===400);
+ const {id}=await f.api.json('/sessions','POST',{});const headers={'Content-Type':'application/json',Authorization:`Bearer ${TOKEN}`};
+ assert.equal((await fetch(f.base+`/api/wecom/sessions/${id}/run`,{method:'POST',headers,body:JSON.stringify({text:'question',userRoleStyle:'forged'})})).status,403);
+ assert.equal((await browser(`/api/sessions/${id}/run`,'POST',{text:'question',wecomSender:sender('a')})).status,403);assert.equal(f.requestCount,0);
+ const file=path.join(f.dataDir,'wecom/roles.json');await f.api.json(route,'PUT',{text:'valid'});const outside=path.join(f.root,'outside.json');await fs.writeFile(outside,'original');await fs.unlink(file);await fs.symlink(outside,file);
+ await assert.rejects(f.api.json(route,'PUT',{text:'overwrite'}));assert.equal(await fs.readFile(outside,'utf8'),'original');
+});
+
+test('role snapshots are fixed across actual SDK tool turns and reload for the next run', {timeout:30000},async t=>{
+ const f=await setup(t);const route=roleRoute('bot','single','a');await f.api.json(route,'PUT',{text:'FIRST-STYLE'});const {id}=await f.api.json('/sessions','POST',{});let changed=false;
+ f.setHandler(async(body,res)=>{
+  if(!changed){changed=true;await f.api.json(route,'PUT',{text:'NEXT-STYLE'});res.writeHead(200,{'content-type':'text/event-stream'});res.write(`data: ${JSON.stringify({id:'tool-request',model:'fixture',object:'chat.completion.chunk',created:1,choices:[{index:0,delta:{role:'assistant',tool_calls:[{index:0,id:'read-knowledge',type:'function',function:{name:'read',arguments:JSON.stringify({path:path.join(f.dataDir,'urovo-product-expert/SKILL.md')})}}]},finish_reason:null}]})}\n\n`);res.write(`data: ${JSON.stringify({id:'tool-request',model:'fixture',object:'chat.completion.chunk',created:1,choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})}\n\n`);res.end('data: [DONE]\n\n');}
+  else modelReply(res,'answer');
+ });
+ await f.api.run(id,'snapshot test',[],()=>{},undefined,sender('a'));assert.equal(f.requests.length,2);for(const body of f.requests)assert.ok(systemOf(body).endsWith('FIRST-STYLE'));
+ await f.api.run(id,'next run',[],()=>{},undefined,sender('a'));assert.ok(systemOf(f.requests.at(-1)).endsWith('NEXT-STYLE'));
+});
+
+test('real Bridge clear archives old SDK history, resets actual model context and retains scoped System style', {timeout:30000},async t=>{
+ const {BridgeStore}=await import('../integrations/wecom-bridge/store.mjs');const {WecomBridge}=await import('../integrations/wecom-bridge/bridge.mjs');
+ const f=await setup(t);const store=await new BridgeStore(path.join(f.dataDir,'wecom')).open();const replies=[];
+ const client={async replyStream(_frame,_id,text,finish){if(finish)replies.push(text);},async replyStreamNonBlocking(){},async sendMessage(_target,body){replies.push(body.markdown.content);},disconnect(){}};
+ const api={json:(...args)=>f.api.json(...args),run:(...args)=>f.api.run(...args)};
+ const bridge=new WecomBridge({config:{concurrency:2,queueLimit:8,timeoutMs:10000,token:TOKEN,bots:[{botId:'bot',secret:'fake'}]},store,api,clients:new Map([['bot',client]]),log:{warn(){},error(){}}});await bridge.start();bridge.authenticated('bot');f.beforeCleanup(()=>bridge.close());
+ const send=async text=>{await bridge.receive('bot',{headers:{req_id:randomUUID()},body:{msgid:randomUUID(),from:{userid:'a'},chattype:'single',msgtype:'text',text:{content:text}}});await bridge.idle();};
+ const key=JSON.stringify(['bot','single','a']);
+ await send('old conversation fact');const old=store.data.conversations[key].sessionId;
+ await send('/role');await send('My persistent style');const count=f.requestCount;await send('/clear suffix');assert.equal(f.requestCount,count);
+ const current=store.data.conversations[key].sessionId;assert.notEqual(current,old);assert.equal((await f.api.json(`/sessions/${current}`)).messages.length,0);assert.ok((await f.api.json(`/sessions/${old}`)).messages.some(message=>message.text==='old conversation fact'));
+ await send('fresh question');let body=f.requests.at(-1);assert.deepEqual(body.messages.filter(message=>message.role==='user').map(message=>typeof message.content==='string'?message.content:message.content.filter(c=>c.type==='text').map(c=>c.text).join('')),['fresh question']);assert.ok(systemOf(body).endsWith('My persistent style'));const tools=body.tools;
+ await f.restart();await send('after backend restart');assert.ok(systemOf(f.requests.at(-1)).endsWith('My persistent style'));
+ await send('/role');await send('清除');await send('/clear');await send('default fresh question');body=f.requests.at(-1);assert.ok(!systemOf(body).includes('User Role & Style'));assert.deepEqual(body.tools,tools);assert.deepEqual(body.messages.filter(message=>message.role==='user').map(message=>typeof message.content==='string'?message.content:message.content.filter(c=>c.type==='text').map(c=>c.text).join('')),['default fresh question']);
+ assert.ok(replies.includes('已清除当前的会话历史。'));assert.ok((await f.api.json(`/sessions/${old}`)).messages.length>0);
 });

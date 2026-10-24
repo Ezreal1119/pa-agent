@@ -5,6 +5,7 @@ import { identity, inbound, splitUtf8, resultFromDone, DAY } from './protocol.mj
 import { AgentUnavailableError, AGENT_UNAVAILABLE_MESSAGE } from './api.mjs';
 import { downloadMedia } from './media.mjs';
 import { MessageObserver, notificationInput } from './notifications.mjs';
+import { commandInput, processControl } from './commands.mjs';
 
 const live = job => !['done', 'interrupted'].includes(job.state);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -13,7 +14,15 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 export class WecomBridge {
   constructor({ config, store, api, clients, download = downloadMedia, log = console }) {
     Object.assign(this, { config, store, api, clients, download, log });
-    this.active = new Map(); this.connected = new Set(); this.mediaTail = Promise.resolve(); this.controllers = new Set(); this.receiving = new Set(); this.closing = false;
+    this.active = new Map(); this.controlActive = new Map(); this.jobControllers = new Map(); this.progress = new Map(); this.connected = new Set(); this.mediaTail = Promise.resolve(); this.controllers = new Set(); this.receiving = new Set(); this.closing = false;
+  }
+  scope(key) { this.store.data.scopes ??= {}; return this.store.data.scopes[key] ??= { generation: 0 }; }
+  isCurrent(job) { return live(job) && (job.generation ?? 0) === this.scope(job.key).generation; }
+  assertCurrent(job) { if (!this.isCurrent(job)) throw new Error('WeCom conversation was reset.'); }
+  trackProgress(job, task) {
+    if (!task) return;
+    const pending = this.progress.get(job.id) ?? new Set(); pending.add(task); this.progress.set(job.id, pending);
+    void task.finally(() => pending.delete(task));
   }
   async start() {
     try {
@@ -49,19 +58,43 @@ export class WecomBridge {
     if (previous) return; // Persist before processing, including same-process duplicate callbacks.
     const notice = notificationInput(frame.body);
     void this.observer?.enqueue(who, notice).catch(error => this.log.warn('WeCom observer:', this.safeError(error)));
+    const scope = this.scope(who.key);
+    const control = commandInput(frame.body, scope, who.userId);
+    if (control) {
+      const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'command', control, generation: scope.generation, sentParts: 0, sentFiles: [] };
+      if (control.kind === 'reset') {
+        job.oldSessionIds = [...new Set([this.store.data.conversations[who.key]?.sessionId, ...this.store.data.jobs.filter(old => old.key === who.key && live(old)).flatMap(old => [old.sessionId, ...(old.oldSessionIds ?? []), old.newSessionId])].filter(Boolean))];
+        job.cancelledJobIds = this.store.data.jobs.filter(old => old.key === who.key && live(old)).map(old => old.id);
+        scope.generation++; job.generation = scope.generation;
+        delete scope.awaitingUser; delete this.store.data.conversations[who.key];
+        for (const old of this.store.data.jobs) if (old.key === who.key && live(old)) {
+          old.state = 'done'; old.finished = Date.now();
+          this.jobControllers.get(old.id)?.abort();
+        }
+      } else if (control.kind === 'open') scope.awaitingUser = who.userId;
+      else if (!['notice', 'welcome'].includes(control.kind)) {
+        delete scope.awaitingUser;
+        // A completed/cancelled input must not wait behind an unavailable role
+        // preview, nor receive that stale preview after its confirmation.
+        for (const old of this.store.data.jobs) if (old.key === who.key && live(old) && ['open', 'notice'].includes(old.control?.kind)) {
+          old.state = 'done'; old.finished = Date.now(); this.jobControllers.get(old.id)?.abort();
+        }
+      }
+      this.store.data.jobs.push(job); await this.store.save(); this.pump(); return;
+    }
     let input;
     try { input = inbound(frame.body); } catch (error) { await this.send(who, error.message); return; }
     if (this.store.data.jobs.filter(live).length >= this.config.queueLimit + this.config.concurrency) { await this.send(who, '当前排队人数较多，请稍后再发送。'); return; }
-    const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'receiving', text: input.text, staged: [], attachmentIds: [], sentParts: 0, sentFiles: [] };
+    const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'receiving', generation: scope.generation, text: input.text, staged: [], attachmentIds: [], sentParts: 0, sentFiles: [] };
     this.store.data.jobs.push(job); await this.store.save();
     const client = this.client(botId);
     // This acknowledgement is best-effort; durable result delivery below is retried.
-    void client.replyStream(job.frame, job.streamId, 'AI Thinking...', false).catch(() => {});
+    if (this.isCurrent(job)) this.trackProgress(job, client.replyStream(job.frame, job.streamId, 'AI Thinking...', false).catch(() => {}));
     try {
       if (input.media.length) {
         const stage = async () => {
-          if (this.closing) throw new Error('服务正在停止，请重新发送附件。');
-          const controller = new AbortController(); this.controllers.add(controller);
+          this.assertCurrent(job); if (this.closing) throw new Error('服务正在停止，请重新发送附件。');
+          const controller = new AbortController(); this.controllers.add(controller); this.jobControllers.set(job.id, controller);
           try {
             const status = await this.api.json('/status', 'GET', undefined, controller.signal);
             if (!status.fileTools.enabled || !status.fileTools.tools.length) throw new Error('文件工具已关闭，请管理员在 Web 的 Agent 设置中启用。');
@@ -69,20 +102,22 @@ export class WecomBridge {
             const directory = this.store.jobDirectory(job.id); await fs.mkdir(directory, { recursive: true, mode: 0o700 });
             let total = 0;
             for (const [index, media] of input.media.entries()) {
-              if (this.closing) throw new Error('服务正在停止，请重新发送附件。');
+              this.assertCurrent(job); if (this.closing) throw new Error('服务正在停止，请重新发送附件。');
               if (Date.now() - job.created > 4 * 60000) throw new Error('附件接收排队过久，下载链接可能已过期，请重新上传。');
               const { buffer, name } = await this.download(media, maxBytes, index + 1, controller.signal);
+              this.assertCurrent(job);
               total += buffer.length;
               if (buffer.length > maxBytes || total > 60 * 1024 * 1024) throw new Error('单文件超过限制，或本条消息附件总量超过 60 MiB。');
               await fs.writeFile(path.join(directory, `${index}`), buffer, { mode: 0o600, flag: 'wx' });
               job.staged.push({ name, index, bytes: buffer.length });
             }
-          } finally { this.controllers.delete(controller); }
+          } finally { this.controllers.delete(controller); this.jobControllers.delete(job.id); }
         };
         const pending = this.mediaTail.then(stage); this.mediaTail = pending.catch(() => {}); await pending;
       }
-      job.state = 'queued'; await this.store.save();
+      this.assertCurrent(job); job.state = 'queued'; await this.store.save();
     } catch (error) {
+      if (!this.isCurrent(job)) { await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true }); return; }
       job.result = { text: this.safeError(error), files: [] }; job.state = 'delivering'; await this.store.save();
     }
     const names = input.media.map((media, index) => job.staged[index]?.name ?? (media.kind === 'image' ? '图片' : '文件'));
@@ -91,8 +126,16 @@ export class WecomBridge {
   }
   pump() {
     if (this.closing) return;
+    const controls = new Map();
+    for (const job of this.store.data.jobs) if (job.control && live(job) && !controls.has(job.key)) controls.set(job.key, job);
+    for (const job of controls.values()) {
+      if (this.controlActive.size >= 8) break;
+      if (this.controlActive.has(job.key) || !this.connected.has(job.botId) || (job.retryAt ?? 0) > Date.now()) continue;
+      const task = processControl(this, job).catch(error => this.log.error('WeCom command:', this.safeError(error))).finally(() => { this.controlActive.delete(job.key); this.pump(); });
+      this.controlActive.set(job.key, task);
+    }
     const heads = new Map();
-    for (const job of this.store.data.jobs) if (live(job) && !heads.has(job.key)) heads.set(job.key, job);
+    for (const job of this.store.data.jobs) if (live(job) && !job.control && !controls.has(job.key) && !heads.has(job.key)) heads.set(job.key, job);
     for (const job of heads.values()) {
       if (this.active.size >= this.config.concurrency) break;
       if (this.active.has(job.key) || job.state === 'receiving' || !this.connected.has(job.botId) || (job.retryAt ?? 0) > Date.now()) continue;
@@ -101,25 +144,30 @@ export class WecomBridge {
     }
   }
   async conversation(job, signal) {
+    this.assertCurrent(job);
     let conversation = this.store.data.conversations[job.key];
     if (conversation) {
       try { await this.api.json(`/sessions/${conversation.sessionId}`, 'GET', undefined, signal); }
-      catch (error) { if (error.status !== 404) throw error; delete this.store.data.conversations[job.key]; conversation = undefined; }
+      catch (error) { this.assertCurrent(job); if (error.status !== 404) throw error; delete this.store.data.conversations[job.key]; conversation = undefined; }
     }
     if (!conversation) {
       const { id } = await this.api.json('/sessions', 'POST', {}, signal);
       await this.api.json(`/sessions/${id}`, 'PATCH', { title: `企微 · ${job.key.includes('"group"') ? `群 ${job.target}` : job.userId}`.slice(0,80) }, signal);
+      this.assertCurrent(job);
       conversation = this.store.data.conversations[job.key] = { sessionId: id, updated: Date.now(), pending: {} };
     }
+    this.assertCurrent(job);
     conversation.updated = Date.now(); job.sessionId = conversation.sessionId; await this.store.save(); return conversation;
   }
   async process(job) {
-    const controller = new AbortController(); this.controllers.add(controller);
+    const controller = new AbortController(); this.controllers.add(controller); this.jobControllers.set(job.id, controller);
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(this.config.timeoutMs)]);
     try {
+      this.assertCurrent(job);
       if (job.state === 'delivering') { await this.deliver(job, signal); return; }
       if (job.state === 'recovering') { await this.recover(job, signal); return; }
       const conversation = await this.conversation(job, signal);
+      this.assertCurrent(job);
       const id = conversation.sessionId;
       // A file-only message waits for its sender's instruction, including in shared groups.
       // This prevents another group member's next question from consuming pending uploads.
@@ -127,13 +175,10 @@ export class WecomBridge {
         if (staged.fileId) continue;
         const buffer = await fs.readFile(path.join(this.store.jobDirectory(job.id), String(staged.index)));
         const file = await this.api.upload(id, staged.name, buffer, signal);
+        this.assertCurrent(job);
         staged.fileId = file.id; job.attachmentIds.push(file.id); await this.store.save();
       }
-      if (job.text === '/new' || job.text === '新建对话') {
-        if (job.attachmentIds.length) throw new Error('请单独发送“新建对话”，再上传新文件。');
-        delete this.store.data.conversations[job.key];
-        job.result = { text: '已切换到新对话。下一条问题将使用新的上下文。群聊中的所有成员一起切换。', files: [] };
-      } else if (!job.text) {
+      if (!job.text) {
         const prior = conversation.pending[job.userId];
         const pending = prior?.expires > Date.now() ? prior.files : [];
         const files = [...pending, ...job.staged.map(file => ({ id: file.fileId, name: file.name }))];
@@ -152,9 +197,10 @@ export class WecomBridge {
           pending.files = pending.files.filter(file => !selected.some(item => item.id === file.id));
           if (!pending.files.length) delete conversation.pending[job.userId];
         }
-        job.state = 'running'; await this.store.save();
+        this.assertCurrent(job); job.state = 'running'; await this.store.save();
         let lastProgress = 0; let partial = ''; const outputs = [];
         const done = await this.api.run(id, job.text, [...new Set(job.attachmentIds)], async (event, value) => {
+          this.assertCurrent(job);
           if (event === 'start') { job.runId = value.run.id; await this.store.save(); }
           if (event === 'output') { outputs.push(value.file); job.outputs = outputs; await this.store.save(); }
           if (event === 'error') job.runError = value.message;
@@ -163,15 +209,17 @@ export class WecomBridge {
             lastProgress = Date.now();
             const preview = splitUtf8(partial)[0] || 'AI Thinking...';
             // Non-blocking SDK path avoids a slow WeCom connection holding Agent SSE open.
-            void this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {});
+            const progress = this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {});
+            this.trackProgress(job, progress);
           }
         }, signal, { botId: job.botId, userId: job.userId, chatType: JSON.parse(job.key)[1], ...(JSON.parse(job.key)[1] === 'group' ? { chatId: job.target } : {}), at: job.created });
+        this.assertCurrent(job);
         job.result = resultFromDone(done, job.runId, outputs);
         if (done.failed && job.runError) job.result.text += `\n\n本轮未完整完成：${job.runError}`;
       }
-      job.state = 'delivering'; await this.store.save(); await this.deliver(job, signal);
+      this.assertCurrent(job); job.state = 'delivering'; await this.store.save(); await this.deliver(job, signal);
     } catch (error) {
-      if (this.closing) return; // Keep the durable running state; never replay unknown side effects.
+      if (!this.isCurrent(job) || this.closing) return; // Keep the durable running state; never replay unknown side effects.
       if (job.state === 'delivering') { job.retryAt = Date.now() + 15000; await this.store.save(); this.log.warn('WeCom delivery deferred:', this.safeError(error)); }
       else if (job.state === 'running' && !job.runId && [409, 429, 503].includes(error.status)) { job.state = 'queued'; job.retryAt = Date.now() + 3000; await this.store.save(); }
       else if (job.state === 'running' || job.state === 'recovering') {
@@ -185,13 +233,17 @@ export class WecomBridge {
         job.state = 'recovering'; job.retryAt = Date.now() + 5000; await this.store.save();
       } else if ([409, 429, 503].includes(error.status)) { job.retryAt = Date.now() + 3000; await this.store.save(); }
       else { job.result = { text: this.safeError(error), files: [] }; job.state = 'delivering'; await this.store.save(); }
-    } finally { this.controllers.delete(controller); }
+    } finally {
+      await Promise.allSettled([...(this.progress.get(job.id) ?? [])]); this.progress.delete(job.id);
+      this.controllers.delete(controller); this.jobControllers.delete(job.id);
+    }
   }
   async recover(job, signal) {
     if (!job.sessionId) { job.result = { text: '服务中断，未能确认上次执行结果，请重新发送问题。', files: [] }; job.state = 'delivering'; await this.store.save(); await this.deliver(job, signal); return; }
     let snapshot;
     try { snapshot = await this.api.json(`/sessions/${job.sessionId}`, 'GET', undefined, signal); }
     catch (error) { if (error.status !== 404) throw error; snapshot = { running: false, messages: [] }; }
+    this.assertCurrent(job);
     if (snapshot.running) { job.retryAt = Date.now() + 5000; await this.store.save(); return; }
     const run = (snapshot.runs ?? []).find(item => item.id === job.runId);
     job.result = run ? resultFromDone({ ...snapshot, failed: run.status !== 'completed' }, job.runId, job.outputs ?? []) : { text: '上次运行连接中断，无法确认执行结果。为避免重复写记忆或重复填表，没有自动重跑；请查看 Web 记录后重新提问。', files: job.outputs ?? [] };
@@ -199,11 +251,13 @@ export class WecomBridge {
     job.state = 'delivering'; await this.store.save(); await this.deliver(job, signal);
   }
   async deliver(job, signal) {
+    this.assertCurrent(job); signal.throwIfAborted();
     const chunks = splitUtf8(job.result.text);
     for (let index = job.sentParts ?? 0; index < chunks.length; index++) {
+      this.assertCurrent(job); signal.throwIfAborted();
       if (!index) {
         try { await this.client(job.botId).replyStream(job.frame, job.streamId, chunks[index], true); }
-        catch { await this.send(job, chunks[index]); }
+        catch { this.assertCurrent(job); signal.throwIfAborted(); await this.send(job, chunks[index]); }
       } else await this.send(job, chunks[index]);
       job.sentParts = index + 1; await this.store.save();
     }
@@ -215,15 +269,17 @@ export class WecomBridge {
         if (error.status !== 404) throw error;
         await this.send(job, `文件“${file.name}”已随会话删除或过期，无法发送。`); job.sentFiles.push(file.id); await this.store.save(); continue;
       }
+      this.assertCurrent(job); signal.throwIfAborted();
       const type = /\.(png|jpe?g|webp)$/i.test(file.name) ? 'image' : 'file';
       const uploaded = await this.client(job.botId).uploadMedia(buffer, { type, filename: file.name });
+      this.assertCurrent(job); signal.throwIfAborted();
       if (!uploaded.media_id) throw new Error('企微未返回文件 media_id。');
       try { await this.client(job.botId).replyMedia(job.frame, type, uploaded.media_id); }
-      catch { await this.client(job.botId).sendMediaMessage(job.target, type, uploaded.media_id); }
+      catch { this.assertCurrent(job); signal.throwIfAborted(); await this.client(job.botId).sendMediaMessage(job.target, type, uploaded.media_id); }
       job.sentFiles.push(file.id); await this.store.save();
     }
     job.state = 'done'; job.finished = Date.now();
-    for (const key of ['text', 'staged', 'attachmentIds', 'result', 'outputs', 'runError', 'upgradeNotified']) delete job[key];
+    for (const key of ['text', 'staged', 'attachmentIds', 'result', 'outputs', 'runError', 'upgradeNotified', 'control']) delete job[key];
     await this.store.save(); await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true });
   }
   safeError(error) {
@@ -239,7 +295,7 @@ export class WecomBridge {
     }
     for (const job of this.store.data.jobs) {
       if (live(job) && job.created < now - 30 * DAY && !this.active.has(job.key)) { job.state = 'done'; delete job.result; delete job.text; delete job.outputs; }
-      if (job.state === 'done') await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true });
+      if (job.state === 'done' && !this.receiving.size) await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true });
     }
     const completed = new Set(this.store.data.jobs.filter(job => !live(job) && (job.finished ?? job.created) >= now - 7 * DAY).slice(-10000).map(job => job.id));
     this.store.data.jobs = this.store.data.jobs.filter(job => live(job) || completed.has(job.id));
@@ -247,7 +303,7 @@ export class WecomBridge {
   }
   async idle(timeout = 10000) {
     const until = Date.now() + timeout;
-    while (this.active.size || this.receiving.size || this.store.data.jobs.some(job => live(job) && !job.retryAt)) { if (Date.now() > until) throw new Error('Bridge idle timeout'); await pause(10); }
+    while (this.active.size || this.controlActive.size || this.receiving.size || this.store.data.jobs.some(job => live(job) && !job.retryAt && (job.control || !this.store.data.jobs.some(control => control.control && live(control) && control.key === job.key)))) { if (Date.now() > until) throw new Error('Bridge idle timeout'); await pause(10); }
   }
   close() {
     return this.closePromise ??= this.shutdown();
@@ -255,7 +311,7 @@ export class WecomBridge {
   async shutdown() {
     this.closing = true; clearInterval(this.timer); clearInterval(this.retryTimer);
     for (const controller of this.controllers) controller.abort();
-    await Promise.allSettled([...this.active.values(), ...this.receiving]);
+    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving]);
     for (const client of this.clients.values()) client.disconnect();
     await this.observer?.close();
     await this.store.save(); await this.store.close();

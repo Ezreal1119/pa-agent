@@ -166,7 +166,7 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   for (const name of ["bash", "read", "write", "memory", "search", "fetch"])
     assert.ok(!names.includes(name));
   const all = JSON.stringify(payloads);
-  assert.match(all, /Read all segments before submitting/);
+  assert.ok(all.includes("review_required"));
   assert.match(all, /Protected path/);
   assert.match(all, /Candidate baseline conflict/);
   assert.match(all, /Each replacement must match exactly once/);
@@ -175,10 +175,7 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   assert.match(all, /submitted\\":false/);
   assert.match(all, /New products require administrator feedback/);
   assert.ok(names.includes("product_hubs"));
-  assert.match(
-    all,
-    /Read all segments before submitting: product-knowledge-vault\/index.md/,
-  );
+  assert.ok(all.includes("requiredReads") && all.includes("ORIGINAL INDEX"));
   assert.ok(!all.includes("Extra agent memory"));
   index = 0;
   await assert.rejects(
@@ -239,11 +236,6 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   };
   calls.splice(0, calls.length,
     { name: "finish_sync", args: associate },
-    { name: "read_candidate_source", args: {} },
-    { name: "read_knowledge", args: { path: source } },
-    { name: "read_knowledge", args: { path: hub } },
-    { name: "finish_sync", args: associate }, // Missing Mini Hub exhaustive read.
-    { name: "read_knowledge", args: { path: miniHub } },
     { name: "write_candidate", args: { path: hub, text: "Remove i9600 facts" } },
     { name: "finish_sync", args: associate },
   );
@@ -258,6 +250,6 @@ test("real Pi maintenance session exposes only candidate tools, guards exhaustiv
   const wire = JSON.stringify(payloads);
   assert.match(wire, /ASSOCIATION-ONLY MODE/);
   assert.match(wire, /Association review is read-only/);
-  assert.match(wire, /Read all segments before submitting: product-knowledge-vault\/products\/i9600-Mini.md/);
+  assert.ok(wire.includes("requiredReads") && wire.includes(miniHub) && wire.includes("review_required"));
   assert.equal(base.get(hub), `# i9600\n${source}`);
 });

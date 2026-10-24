@@ -137,7 +137,7 @@ export class AgentRuntime {
       this.config.cwd,
       this.config.sessionsDir,
     ),
-    options: { textOnly?: boolean } = {},
+    options: { textOnly?: boolean; userRoleStyle?: () => string | undefined } = {},
   ): Promise<AgentSession> {
     const files = options.textOnly ? undefined : this.files;
     const sessionFile = sessionManager.getSessionFile();
@@ -247,6 +247,7 @@ export class AgentRuntime {
     try {
       await installSessionPolicy(session, this.config.dataDir, this.retention, {
         sections: await staticPromptSections(this.config, !!options.textOnly),
+        userRoleStyle: options.textOnly ? undefined : options.userRoleStyle,
         attachments: files ? async () => {
           await files.store.touch(session.sessionId);
           const boundIds = new Set(messageAttachments(session).flatMap(record => record.files.map(file => file.id)));

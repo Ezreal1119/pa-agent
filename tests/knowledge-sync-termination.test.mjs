@@ -362,7 +362,7 @@ test("three distinct invalid submissions stop; a valid correction before the lim
   assert.equal(f.requests.length, 2);
 });
 
-test("exhaustive-read and schema failures are bounded; repeated tool errors cannot burn the entire request budget", async (t) => {
+test("automatic original reads still lead to bounded business/schema failures and repeated tool errors", async (t) => {
   const f = await setup(t);
   f.set((res) =>
     reply(
@@ -372,9 +372,9 @@ test("exhaustive-read and schema failures are bounded; repeated tool errors cann
   );
   await assert.rejects(
     f.run(),
-    /Read all segments before submitting: @candidate/,
+    /New products require administrator feedback/,
   );
-  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests.length, 3); // Read phase, then two actual validation rejections.
   f.set((res) => reply(res, tool("finish_sync", {})));
   await assert.rejects(f.run(), /arguments|validation|required/i);
   assert.equal(f.requests.length, 2);
@@ -674,14 +674,14 @@ test("normal SYNC lists every missing original segment and bounded batches recov
     if (n === script.length) {
       const checklist = latestToolValue(f);
       assert.equal(checklist.submitted, false);
-      assert.equal(checklist.repairsLeft, 2); // This rejection still counts.
+      assert.equal(checklist.phase, "reading");
+      assert.equal(checklist.repairsLeft, undefined); // Reading precedes validation.
       assert.equal(checklist.nextTool, "read_next_sync_batch");
-      const missing = Object.fromEntries(checklist.missingReads.map(m => [m.path, m.offsets]));
+      const missing = Object.fromEntries(checklist.requiredReads.map(m => [m.path, m.offsets]));
       assert.deepEqual(missing, {
         "@candidate": [20000, 40000], [rtHub]: [20000],
         [hub]: [0, 20000], [index]: [0, 20000, 40000],
       });
-      return reply(res, tool(checklist.nextTool));
     }
     const batch = latestToolValue(f);
     if (emptyChecked) {
@@ -714,7 +714,7 @@ test("normal SYNC lists every missing original segment and bounded batches recov
   assert.equal(report.items[0].status, "published", report.items[0].reason);
   assert.ok(emptyChecked && batches >= 3);
   assert.equal(seen.size, 10);
-  assert.equal(f.requests.length, script.length + batches + 2);
+  assert.equal(f.requests.length, script.length + batches + 1);
   assert.equal(await fs.readFile(path.join(root, added), "utf8"), markdown);
   assert.equal(await fs.readFile(path.join(root, rtHub), "utf8"), nextRt);
   assert.equal(await fs.readFile(path.join(root, hub), "utf8"), nextHub);
@@ -722,23 +722,29 @@ test("normal SYNC lists every missing original segment and bounded batches recov
     assert.equal(await fs.readFile(path.join(root, p), "utf8"), base.get(p));
 });
 
-test("normal SYNC missing-read batches preserve repeated and total rejection limits and model budget", async (t) => {
-  const f = await setup(t), text = "原".repeat(27777);
+test("backend advances multiple batches even if the model keeps submitting; overall budget remains enforced", async (t) => {
+  const f = await setup(t), text = `# DT610\n${existing}\n` + "原".repeat(27777);
   const plan = { ...decision, action: "add", newPath: source, reviewedPaths: [hub] };
-  f.set(res => reply(res, tool("finish_sync", plan)));
-  await assert.rejects(f.run({ base: new Map([[hub, text]]) }), e =>
-    e instanceof PlanError && e.problems.length === 2 && e.problems.some(p => p.includes(hub)));
-  assert.equal(f.requests.length, 2); // Identical missing list still stops on the second submission.
-  const progress = [
-    tool("finish_sync", plan),
-    tool("read_candidate_source"),
-    tool("finish_sync", plan),
-    tool("read_knowledge", { path: hub }),
-    tool("finish_sync", plan),
-  ];
-  f.set((res, n) => reply(res, progress[n]));
-  await assert.rejects(f.run({ base: new Map([[hub, text]]) }), /missing offsets: 20000/);
-  assert.equal(f.requests.length, 5); // Three distinct rejections still stop even after partial progress.
+  let validated = 0, batches = 0;
+  f.set((res, n) => {
+    if (n > 1) {
+      const batch = latestToolValue(f);
+      assert.equal(batch.submitted, false);
+      assert.equal(batch.requestedToolExecuted, false);
+      assert.ok(batch.segments.length > 0);
+      assert.ok(batch.segments.reduce((sum, s) => sum + s.text.length, 0) <= 40000);
+      batches++;
+    }
+    reply(res, n ? tool("finish_sync", plan) : tool("write_candidate", { path: hub, text: text + "\n" + source }));
+  });
+  const result = await f.run({
+    markdown: "x".repeat(200001), base: new Map([[hub, text], [existing, "# Specs"]]),
+    validate: async () => { validated++; },
+  });
+  assert.equal(result.decision.action, "add");
+  assert.equal(validated, 1);
+  assert.ok(batches > 3);
+  assert.equal(f.requests.length, batches + 2);
   f.set((res, n) => reply(res, n ? tool("read_next_sync_batch") : tool("finish_sync", plan)));
   await assert.rejects(f.run({ markdown: "x".repeat(200001) }, 3), /budget exceeded \(3\/3 request attempts\)/);
   assert.equal(f.requests.length, 3);
@@ -755,9 +761,11 @@ test("normal SYNC batch registration follows the latest declared scope, preserve
     tool("finish_sync", decision),
   ];
   f.set((res, n) => {
+    if (n === 1) assert.deepEqual(latestToolValue(f).segments.map(s => s.path), ["@candidate", a]);
+    if (n === 2) assert.deepEqual(latestToolValue(f).segments.map(s => s.path), [b]);
     if (n === 3) {
       const batch = latestToolValue(f);
-      assert.deepEqual(batch.segments.map(s => s.path), ["@candidate", b]);
+      assert.deepEqual(batch.segments, []);
       assert.equal(batch.complete, true);
     }
     reply(res, script[n]);
@@ -771,7 +779,7 @@ test("normal SYNC batch registration follows the latest declared scope, preserve
     if (n) controller.abort(new Error("Fixture sync batch cancellation"));
     reply(res, n ? tool("read_next_sync_batch") : tool("finish_sync", plan));
   });
-  await assert.rejects(f.run({ base: new Map([[a, "# A"]]), signal: controller.signal }), /sync batch cancellation/);
+  await assert.rejects(f.run({ base: new Map([[a, "x".repeat(100001)]]), signal: controller.signal }), /sync batch cancellation/);
   assert.equal(f.requests.length, 2);
 });
 
@@ -791,14 +799,14 @@ test("normal SYNC batches read replaced sources but do not bypass dependency val
   ];
   f.set((res, n) => {
     if (n === 2) {
-      const missing = latestToolValue(f).missingReads.map(m => m.path);
+      const missing = latestToolValue(f).requiredReads.map(m => m.path);
       assert.deepEqual(missing, ["@candidate", existing, hub, dependent]);
     }
     if (n === 3) assert.equal(latestToolValue(f).complete, true);
     if (n === 4) {
       const rejected = latestToolValue(f);
       assert.equal(rejected.submitted, false);
-      assert.equal(rejected.repairsLeft, 1);
+      assert.equal(rejected.repairsLeft, 2);
       assert.ok(rejected.problems.includes(`Old source reference remains: ${dependent}`));
     }
     reply(res, script[n]);
@@ -810,6 +818,93 @@ test("normal SYNC batches read replaced sources but do not bypass dependency val
   assert.equal(result.decision.action, "update");
   assert.equal(result.staged.get(dependent), `# Current source\n${source}`);
   assert.equal(f.requests.length, script.length);
+});
+
+test("UPad tail is supplied automatically and same-turn writes or submissions wait for fresh model review", async (t) => {
+  const f = await setup(t);
+  const page = "product-knowledge-vault/products/UPad.md";
+  const spec = "UPad/specs/current_202601010000/spec.md";
+  const added = "UPad/others/fixture_202610240001/updates.md";
+  const original = `# UPad\n${spec}\n` + "原".repeat(22000) + "ORIGINAL_TAIL_SENTINEL";
+  const candidate = original + "\n" + added;
+  const plan = { ...decision, action: "add", products: ["UPad"], newPath: added, reviewedPaths: [page], reason: "Before reading the tail" };
+  const fresh = { ...plan, reason: "Revised after reviewing the supplied original tail" };
+  let validated = 0;
+  f.set((res, n) => {
+    if (n === 0) return reply(res, [
+      tool("read_candidate_source"), tool("read_knowledge", { path: page }),
+      tool("write_candidate", { path: page, text: candidate }),
+    ]);
+    if (n === 1) return reply(res, [
+      tool("finish_sync", plan),
+      tool("write_candidate", { path: page, text: "POISON_WRITE" }),
+      tool("patch_candidate", { path: page, expectedHash: hash(candidate), replacements: [{ before: "# UPad", after: "POISON_PATCH" }] }),
+      tool("finish_sync", plan),
+      tool("read_knowledge", { path: "MEMORY.md" }),
+    ]);
+    if (n === 2) {
+      const results = f.requests.at(-1).messages.filter(m => m.role === "tool").slice(-5)
+        .map(m => JSON.parse(m.content));
+      assert.equal(results[0].segments.length, 1);
+      assert.equal(results[0].segments[0].offset, 20000);
+      assert.equal(results[0].segments[0].text, original.slice(20000));
+      assert.equal(results[0].segments[0].hash, hash(original));
+      for (const r of results) {
+        assert.equal(r.phase, "review_required");
+        assert.equal(r.submitted, false);
+        assert.equal(r.requestedToolExecuted, false);
+      }
+      for (const r of results.slice(1)) assert.deepEqual(r.segments, []);
+      assert.equal(validated, 0);
+      return reply(res, tool("read_knowledge", { path: page, candidate: true }));
+    }
+    assert.equal(latestToolValue(f).text, candidate.slice(0, 20000));
+    reply(res, tool("finish_sync", fresh));
+  });
+  const result = await f.run({
+    base: new Map([[page, original], [spec, "# Independent specs"], ["MEMORY.md", "PRIVATE_PHASE_MEMORY"]]),
+    validate: async d => { validated++; assert.equal(d.reason, fresh.reason); },
+  });
+  assert.equal(validated, 1);
+  assert.equal(result.decision.reason, fresh.reason);
+  assert.equal(result.staged.get(page), candidate);
+  assert.equal(f.requests.length, 4);
+  assert.ok(!JSON.stringify(f.requests).includes("PRIVATE_PHASE_MEMORY"));
+});
+
+test("read phase cannot accept an old proposal after missing fresh submission or hide an upstream error", async (t) => {
+  const f = await setup(t);
+  const base = new Map([[hub, `# DT610\n${existing}`], [existing, "# Specs"]]);
+  const plan = { ...decision, action: "add", newPath: source, reviewedPaths: [hub] };
+  const initial = [
+    tool("write_candidate", { path: hub, text: `# DT610\n${existing}\n${source}` }),
+    tool("finish_sync", plan),
+  ];
+  f.set((res, n) => reply(res, n ? null : initial));
+  await assert.rejects(f.run({ base }), /without a structured decision/);
+  assert.equal(f.requests.length, 2);
+  f.set((res, n) => n ? httpError(res, 402) : reply(res, initial));
+  await assert.rejects(f.run({ base, markdown: "x".repeat(100001) }), /Fixture upstream HTTP 402/);
+  assert.equal(f.requests.length, 2);
+});
+
+test("automatic read progress does not reset genuine plan rejection counters", async (t) => {
+  const f = await setup(t);
+  const plan = { ...decision, action: "add", newPath: source, reviewedPaths: [hub] };
+  const script = [
+    tool("finish_sync", decision),
+    tool("write_candidate", { path: hub, text: `# DT610\n${existing}\n${source}` }),
+    tool("finish_sync", plan), // Original delivery, not plan acceptance or a counter reset.
+    tool("finish_sync", plan),
+  ];
+  let validated = 0;
+  f.set((res, n) => reply(res, script[n]));
+  await assert.rejects(f.run({
+    base: new Map([[hub, `# DT610\n${existing}`], [existing, "# Specs"]]),
+    validate: async () => { validated++; throw new PlanError(["Fixture unresolved business constraint"]); },
+  }), /Fixture unresolved business constraint/);
+  assert.equal(validated, 2);
+  assert.equal(f.requests.length, 4);
 });
 
 function latestToolValue(f) {
@@ -959,7 +1054,7 @@ test("distinct missing paths still hit the unchanged overall request budget", as
   assert.equal(f.requests.length, 4);
 });
 
-test("missing-read recovery does not grant original coverage or disclose protected-path availability", async (t) => {
+test("candidate reads still require backend original delivery and protected-path availability stays private", async (t) => {
   const f = await setup(t);
   const script = [
     tool("read_candidate_source"),
@@ -969,9 +1064,17 @@ test("missing-read recovery does not grant original coverage or disclose protect
     tool("finish_sync", { ...decision, action: "add", newPath: source, reviewedPaths: [hub] }),
     tool("finish_sync", { ...decision, action: "add", newPath: source, reviewedPaths: [hub] }),
   ];
-  f.set((res, n) => reply(res, script[n]));
-  await assert.rejects(f.run({ base: new Map([[hub, `# DT610\n${existing}`], [existing, "# Spec"]]) }),
-    /Read all segments before submitting: product-knowledge-vault\/products\/DT610\.md/);
+  f.set((res, n) => {
+    if (n === 5) {
+      const batch = latestToolValue(f);
+      assert.equal(batch.submitted, false);
+      assert.equal(batch.phase, "review_required");
+      assert.equal(batch.segments[0].path, hub);
+      assert.equal(batch.segments[0].text, `# DT610\n${existing}`);
+    }
+    reply(res, script[n]);
+  });
+  assert.equal((await f.run({ base: new Map([[hub, `# DT610\n${existing}`], [existing, "# Spec"]]) })).decision.action, "add");
   assert.equal(f.requests.length, script.length);
   const secret = "PRIVATE_READ_SENTINEL";
   for (const p of ["MEMORY.md", "product-knowledge-vault/MEMORY.md", "../private.md", "/tmp/private.md", "newly_added/private.md"]) {
@@ -1299,11 +1402,11 @@ test("WeCom receives allowed slots and can repair an invented project-matrix slo
   };
   const calls = [
     tool("read_candidate_source"),
-    tool("read_knowledge", { path: hub }),
     tool("write_candidate", {
       path: hub,
       text: `# DT610\n${existing}\n[[shared/project-fixture|Project contacts]]`,
     }),
+    tool("finish_sync", wrong), // Automatically deliver the missing Hub first.
     tool("finish_sync", wrong),
     tool("finish_sync", corrected),
   ];
@@ -1312,6 +1415,12 @@ test("WeCom receives allowed slots and can repair an invented project-matrix slo
       assert.ok(
         JSON.stringify(f.requests[0].messages).includes("allowedSlots"),
       );
+    if (n === 3) {
+      const reading = latestToolValue(f);
+      assert.equal(reading.phase, "review_required");
+      assert.equal(reading.submitted, false);
+      assert.deepEqual(reading.segments.map(s => s.path), [hub]);
+    }
     if (n === 4) {
       const e = latestToolValue(f);
       assert.equal(e.submitted, false);

@@ -7,12 +7,12 @@ import { composePrompt, type PromptSection } from "../prompts/composition.js";
 import type { SessionRetention } from "./retention.js";
 
 /** Enforce at the SDK boundary rather than depending on optional model tool calls. */
-export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention, promptOptions?: { sections: PromptSection[]; attachments?: () => Promise<PromptSection> }): Promise<void> {
-  type Snapshot = { knowledge: string[]; instructions: string[] };
+export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention, promptOptions?: { sections: PromptSection[]; attachments?: () => Promise<PromptSection>; userRoleStyle?: () => string | undefined }): Promise<void> {
+  type Snapshot = { knowledge: string[]; instructions: string[]; userRoleStyle?: string };
   const store = new PromptInstructionsStore(dataDir);
   const load = async (): Promise<Snapshot> => {
     const [knowledge, state] = await Promise.all([loadRunKnowledgeSections(dataDir), store.load()]);
-    return { knowledge, instructions: state.instructions };
+    return { knowledge, instructions: state.instructions, userRoleStyle: promptOptions?.userRoleStyle?.() };
   };
   let snapshot: Promise<Snapshot> | undefined;
   let nextSnapshot: Promise<Snapshot> | undefined;
@@ -36,7 +36,7 @@ export async function installSessionPolicy(session: AgentSession, dataDir: strin
     const state = await (snapshot ??= load());
     const composed = composePrompt(promptOptions?.sections ?? [{id:"base",title:"Base system prompt",content:context.systemPrompt ?? ""}],
       state.instructions, state.knowledge, await promptOptions?.attachments?.());
-    return stream(model, { ...context, systemPrompt: composed.system }, options);
+    return stream(model, { ...context, systemPrompt: composed.system + (state.userRoleStyle === undefined ? "" : `\n\n# User Role & Style\n${state.userRoleStyle}`) }, options);
   };
 
   const prompt = session.prompt.bind(session);
