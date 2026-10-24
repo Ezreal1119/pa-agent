@@ -114,6 +114,8 @@ export function createPlanner(options: {
       const deletion = input.deletion ?? input.prompt.startsWith("DELETE PREVIEW");
       // Read-only session-local queue. Registration never authorizes a deletion.
       const deletionReads = new Map<string, string>(deletion ? [["@candidate", input.markdown]] : []);
+      // Normal SYNC only queues missing originals identified by finish_sync.
+      const syncReads = new Map<string, string>();
       const missingReads = (files: Map<string, string>) => [...files].flatMap(([key, text]) => {
         const offsets: number[] = [];
         for (let offset = 0; offset < text.length; offset += 20000)
@@ -261,6 +263,27 @@ export function createPlanner(options: {
               if (segments.length >= 4 || characters >= 40000) break;
             }
             const remaining = missingReads(deletionReads);
+            return { segments, complete: remaining.length === 0, missingReads: remaining };
+          },
+        )] : []),
+        ...(!deletion ? [tool(
+          "read_next_sync_batch",
+          "Read missing original segments registered by a rejected finish_sync. No offsets needed. Returns at most four segments and 40000 characters; repeat until complete=true before resubmitting. Never reads staged text, discovers unrelated pages, writes or publishes.",
+          Type.Object({}),
+          () => {
+            const segments = [];
+            let characters = 0;
+            for (const pending of missingReads(syncReads)) {
+              for (const offset of pending.offsets) {
+                const text = syncReads.get(pending.path)!;
+                const length = Math.min(20000, text.length - offset);
+                if (segments.length >= 4 || characters + length > 40000) break;
+                segments.push({ path: pending.path, ...read(pending.path, text, offset) });
+                characters += length;
+              }
+              if (segments.length >= 4 || characters >= 40000) break;
+            }
+            const remaining = missingReads(syncReads);
             return { segments, complete: remaining.length === 0, missingReads: remaining };
           },
         )] : []),
@@ -552,7 +575,21 @@ export function createPlanner(options: {
                     const rejected = rejectPlan(new PlanError(missing.map(m => `Read all segments before submitting: ${m.path}; missing offsets: ${m.offsets.join(", ")}`)));
                     return { ...rejected, missingReads: missing, nextTool: "read_next_deletion_batch" };
                   }
-                } else readFully("@candidate", input.markdown);
+                } else {
+                  const files = new Map<string, string>([["@candidate", input.markdown]]);
+                  for (const p of required) {
+                    if (p === "product-knowledge-vault/log.md" || excluded(p)) continue;
+                    const text = input.base.get(p);
+                    if (text !== undefined) files.set(p, text);
+                  }
+                  const missing = missingReads(files);
+                  if (missing.length) {
+                    syncReads.clear();
+                    for (const m of missing) syncReads.set(m.path, files.get(m.path)!);
+                    const rejected = rejectPlan(new PlanError(missing.map(m => `Read all segments before submitting: ${m.path}; missing offsets: ${m.offsets.join(", ")}`)));
+                    return { ...rejected, missingReads: missing, nextTool: "read_next_sync_batch" };
+                  }
+                }
                 for (const p of required) {
                   if (p === "product-knowledge-vault/log.md") continue;
                   const original = input.base.get(p);

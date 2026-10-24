@@ -474,6 +474,7 @@ test("deletion missing reads list every original segment; automatic batches repa
         .at(-1).content,
     );
   f.set((res, n) => {
+    assert.ok(!f.requests[n].tools.some(t => t.function.name === "read_next_sync_batch"));
     if (n < script.length) return reply(res, script[n]);
     if (n === script.length) {
       checklist = output();
@@ -623,6 +624,192 @@ test("normal SYNC does not expose automatic deletion reads or change source-depe
       [hub, `# DT610\n${source}`],
     ]),
   });
+});
+
+test("normal SYNC lists every missing original segment and bounded batches recover a multi-Hub publication", async (t) => {
+  const f = await setup(t), root = path.join(f.dataDir, "urovo-product-expert");
+  const rtHub = "product-knowledge-vault/products/RT40S.md";
+  const rtSpec = "RT40S/specs/current_202601010000/spec.md";
+  const index = "product-knowledge-vault/index.md";
+  const shared = "product-knowledge-vault/shared/screen-fixture.md";
+  const added = "_shared/others/fixture_202610240001/screen.md";
+  const unrelated = "product-knowledge-vault/products/UNRELATED.md";
+  const markdown = "输入".repeat(20001).slice(0, 40001);
+  const base = new Map([
+    [rtHub, `# RT40S\n${rtSpec}\n` + "原文".repeat(13889)],
+    [hub, `# DT610\n${existing}\n` + "资料".repeat(11000)],
+    [index, "[[products/RT40S]]\n[[products/DT610]]\n" + "目录".repeat(20500)],
+    [rtSpec, "# RT40S independent specs"],
+    [existing, "# DT610 independent specs"],
+    [unrelated, `# Unrelated\n${rtHub}`],
+  ]);
+  const nextRt = base.get(rtHub) + "\n[[shared/screen-fixture]]";
+  const nextHub = base.get(hub) + "\n[[shared/screen-fixture]]";
+  const nextIndex = base.get(index) + "\n[[shared/screen-fixture]]";
+  for (const [p, text] of base) {
+    await fs.mkdir(path.dirname(path.join(root, p)), { recursive: true });
+    await fs.writeFile(path.join(root, p), text);
+  }
+  const service = await f.service();
+  const plan = {
+    ...decision, action: "add", products: ["RT40S", "DT610"], newPath: added,
+    reviewedPaths: [rtHub, hub, index],
+  };
+  const script = [
+    tool("read_next_sync_batch"), // No speculative registration or full-library discovery.
+    tool("read_candidate_source"),
+    tool("read_knowledge", { path: rtHub }),
+    tool("write_candidate", { path: rtHub, text: nextRt }),
+    tool("read_knowledge", { path: rtHub, candidate: true, offset: 20000 }),
+    tool("write_candidate", { path: hub, text: nextHub }),
+    tool("write_candidate", { path: index, text: nextIndex }),
+    tool("write_candidate", { path: shared, text: `# Screens\n${added}\n[[products/RT40S]]\n[[products/DT610]]` }),
+    tool("finish_sync", plan),
+  ];
+  const seen = new Set(["@candidate:0", `${rtHub}:0`]);
+  let batches = 0, emptyChecked = false;
+  f.set(async (res, n) => {
+    if (n === 1) assert.deepEqual(latestToolValue(f), { segments: [], complete: true, missingReads: [] });
+    if (n < script.length) return reply(res, script[n]);
+    if (n === script.length) {
+      const checklist = latestToolValue(f);
+      assert.equal(checklist.submitted, false);
+      assert.equal(checklist.repairsLeft, 2); // This rejection still counts.
+      assert.equal(checklist.nextTool, "read_next_sync_batch");
+      const missing = Object.fromEntries(checklist.missingReads.map(m => [m.path, m.offsets]));
+      assert.deepEqual(missing, {
+        "@candidate": [20000, 40000], [rtHub]: [20000],
+        [hub]: [0, 20000], [index]: [0, 20000, 40000],
+      });
+      return reply(res, tool(checklist.nextTool));
+    }
+    const batch = latestToolValue(f);
+    if (emptyChecked) {
+      assert.deepEqual(batch, { segments: [], complete: true, missingReads: [] });
+      return reply(res, tool("finish_sync", plan));
+    }
+    batches++;
+    assert.ok(batch.segments.length <= 4);
+    assert.ok(batch.segments.reduce((sum, s) => sum + s.text.length, 0) <= 40000);
+    for (const segment of batch.segments) {
+      const key = `${segment.path}:${segment.offset}`;
+      assert.ok(!seen.has(key), `Duplicate segment ${key}`);
+      seen.add(key);
+      const original = segment.path === "@candidate" ? markdown : base.get(segment.path);
+      assert.notEqual(original, undefined);
+      assert.equal(segment.text, original.slice(segment.offset, segment.offset + 20000));
+      assert.equal(segment.hash, hash(original));
+      assert.ok(![unrelated, rtSpec, existing, shared].includes(segment.path));
+    }
+    if (batch.complete) {
+      assert.deepEqual(batch.missingReads, []);
+      assert.equal(await fs.readFile(path.join(root, rtHub), "utf8"), base.get(rtHub));
+      await assert.rejects(fs.stat(path.join(root, added)), { code: "ENOENT" });
+      emptyChecked = true;
+    }
+    reply(res, tool("read_next_sync_batch"));
+  });
+  const file = await service.upload("screen-fixture.md", (async function* () { yield Buffer.from(markdown); })());
+  const report = await done(service, (await service.start([file.id])).id);
+  assert.equal(report.items[0].status, "published", report.items[0].reason);
+  assert.ok(emptyChecked && batches >= 3);
+  assert.equal(seen.size, 10);
+  assert.equal(f.requests.length, script.length + batches + 2);
+  assert.equal(await fs.readFile(path.join(root, added), "utf8"), markdown);
+  assert.equal(await fs.readFile(path.join(root, rtHub), "utf8"), nextRt);
+  assert.equal(await fs.readFile(path.join(root, hub), "utf8"), nextHub);
+  for (const p of [unrelated, existing, rtSpec])
+    assert.equal(await fs.readFile(path.join(root, p), "utf8"), base.get(p));
+});
+
+test("normal SYNC missing-read batches preserve repeated and total rejection limits and model budget", async (t) => {
+  const f = await setup(t), text = "原".repeat(27777);
+  const plan = { ...decision, action: "add", newPath: source, reviewedPaths: [hub] };
+  f.set(res => reply(res, tool("finish_sync", plan)));
+  await assert.rejects(f.run({ base: new Map([[hub, text]]) }), e =>
+    e instanceof PlanError && e.problems.length === 2 && e.problems.some(p => p.includes(hub)));
+  assert.equal(f.requests.length, 2); // Identical missing list still stops on the second submission.
+  const progress = [
+    tool("finish_sync", plan),
+    tool("read_candidate_source"),
+    tool("finish_sync", plan),
+    tool("read_knowledge", { path: hub }),
+    tool("finish_sync", plan),
+  ];
+  f.set((res, n) => reply(res, progress[n]));
+  await assert.rejects(f.run({ base: new Map([[hub, text]]) }), /missing offsets: 20000/);
+  assert.equal(f.requests.length, 5); // Three distinct rejections still stop even after partial progress.
+  f.set((res, n) => reply(res, n ? tool("read_next_sync_batch") : tool("finish_sync", plan)));
+  await assert.rejects(f.run({ markdown: "x".repeat(200001) }, 3), /budget exceeded \(3\/3 request attempts\)/);
+  assert.equal(f.requests.length, 3);
+});
+
+test("normal SYNC batch registration follows the latest declared scope, preserves protection and cancellation", async (t) => {
+  const f = await setup(t);
+  const a = "product-knowledge-vault/shared/a.md", b = "product-knowledge-vault/shared/b.md";
+  const plan = { ...decision, action: "add", newPath: source, reviewedPaths: [a] };
+  const script = [
+    tool("finish_sync", plan),
+    tool("finish_sync", { ...plan, reviewedPaths: [b, "MEMORY.md", "product-knowledge-vault/log.md"] }),
+    tool("read_next_sync_batch"),
+    tool("finish_sync", decision),
+  ];
+  f.set((res, n) => {
+    if (n === 3) {
+      const batch = latestToolValue(f);
+      assert.deepEqual(batch.segments.map(s => s.path), ["@candidate", b]);
+      assert.equal(batch.complete, true);
+    }
+    reply(res, script[n]);
+  });
+  await f.run({ base: new Map([[a, "# A"], [b, "# B"], ["MEMORY.md", "PRIVATE_SYNC_BATCH"], ["product-knowledge-vault/log.md", "PRIVATE_LOG_BATCH"]]) });
+  const payload = JSON.stringify(f.requests);
+  assert.ok(!payload.includes("PRIVATE_SYNC_BATCH"));
+  assert.ok(!payload.includes("PRIVATE_LOG_BATCH"));
+  const controller = new AbortController();
+  f.set((res, n) => {
+    if (n) controller.abort(new Error("Fixture sync batch cancellation"));
+    reply(res, n ? tool("read_next_sync_batch") : tool("finish_sync", plan));
+  });
+  await assert.rejects(f.run({ base: new Map([[a, "# A"]]), signal: controller.signal }), /sync batch cancellation/);
+  assert.equal(f.requests.length, 2);
+});
+
+test("normal SYNC batches read replaced sources but do not bypass dependency validation", async (t) => {
+  const f = await setup(t), dependent = "product-knowledge-vault/shared/old-dependent.md";
+  const plan = {
+    ...decision, action: "update", oldPaths: [existing], newPath: source,
+    reviewedPaths: [hub, dependent],
+  };
+  const script = [
+    tool("write_candidate", { path: hub, text: `# DT610\n${source}` }),
+    tool("finish_sync", plan),
+    tool("read_next_sync_batch"),
+    tool("finish_sync", plan),
+    tool("write_candidate", { path: dependent, text: `# Current source\n${source}` }),
+    tool("finish_sync", plan),
+  ];
+  f.set((res, n) => {
+    if (n === 2) {
+      const missing = latestToolValue(f).missingReads.map(m => m.path);
+      assert.deepEqual(missing, ["@candidate", existing, hub, dependent]);
+    }
+    if (n === 3) assert.equal(latestToolValue(f).complete, true);
+    if (n === 4) {
+      const rejected = latestToolValue(f);
+      assert.equal(rejected.submitted, false);
+      assert.equal(rejected.repairsLeft, 1);
+      assert.ok(rejected.problems.includes(`Old source reference remains: ${dependent}`));
+    }
+    reply(res, script[n]);
+  });
+  const result = await f.run({ base: new Map([
+    [existing, "# Previous revision"], [hub, `# DT610\n${existing}`],
+    [dependent, `# Current source\n${existing}`],
+  ]) });
+  assert.equal(result.decision.action, "update");
+  assert.equal(result.staged.get(dependent), `# Current source\n${source}`);
+  assert.equal(f.requests.length, script.length);
 });
 
 function latestToolValue(f) {
