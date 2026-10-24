@@ -13,6 +13,20 @@ const row = (id = "w3_one") =>
 test("WeCom administrator routes, actual list saves/rechecks/conflicts, mock run/stop and schedule are isolated from machine access", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "wecom-import-web-")),
     dataDir = path.join(root, ".data");
+  // Production environment overrides otherwise win over this fixture's cwd
+  // and dataDir, including the JSONL file this test edits through the API.
+  const isolatedEnv = {
+    WECOM_IMPORT_DOCS_FILE: path.join(dataDir, "wecom_sync_docs.jsonl"),
+    WECOM_CLI_CONFIG_DIR: path.join(dataDir, "wecom-auth"),
+  };
+  const previousEnv = new Map(Object.keys(isolatedEnv).map(key => [key, process.env[key]]));
+  Object.assign(process.env, isolatedEnv);
+  t.after(() => {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
   let app;
   t.after(async () => {
     await app?.close();
@@ -120,6 +134,7 @@ test("WeCom administrator routes, actual list saves/rechecks/conflicts, mock run
     });
   const state = await (await api("status")).json();
   assert.equal(state.configured, true);
+  assert.equal(state.docsFile, isolatedEnv.WECOM_IMPORT_DOCS_FILE);
   assert.equal(state.documents, 1);
   assert(!JSON.stringify(state).includes("fixture-secret"));
   const list = await (await api("settings/docs")).json();

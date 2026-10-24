@@ -511,8 +511,18 @@ test('administrator credentials load from .env and survive saving Agent settings
 test('missing or partial administrator configuration fails closed with setup instructions', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'expert-login-missing-'));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const ambientData = path.join(root, 'ambient-data-is-not-a-test-directory');
+  await writeFile(ambientData, 'External data sentinel');
+  const previousDataDir = process.env.AGENT_DATA_DIR;
+  process.env.AGENT_DATA_DIR = ambientData;
+  t.after(() => {
+    if (previousDataDir === undefined) delete process.env.AGENT_DATA_DIR;
+    else process.env.AGENT_DATA_DIR = previousDataDir;
+  });
   for (const admin of [{ account: '', password: '' }, { account: 'admin', password: '' }, { account: '', password: 'secret' }]) {
-    const app = await createWebServer({ fileTools: { enabled: false }, cwd: root, admin, resourcesDir: path.resolve('resources') });
+    // This test intentionally omits administrator credentials, not storage or
+    // model configuration. Never inherit the VPS's live AGENT_DATA_DIR/model.
+    const app = await createWebServer({ fileTools: { enabled: false }, cwd: root, dataDir: path.join(root, '.data'), admin, resourcesDir: path.resolve('resources'), model: { apiKey: '', baseUrl: '', modelId: '' } });
     app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
     try {
       const url = `http://127.0.0.1:${app.server.address().port}`;
@@ -522,6 +532,7 @@ test('missing or partial administrator configuration fails closed with setup ins
       assert.equal(login.status, 503); assert.match((await login.json()).error, /ADMIN_ACCOUNT.*ADMIN_PASSWORD/);
     } finally { await app.close(); }
   }
+  assert.equal(await readFile(ambientData, 'utf8'), 'External data sentinel');
 });
 
 test('the single memory tool routes all three actions through the SDK, inject once next run, restore, and leave skill memories untouched', async t => {
