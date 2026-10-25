@@ -204,6 +204,36 @@ test(
     );
     assert.match(utf16.markdown, /COMMENT SENTINEL 123/);
     assert.ok(utf16.coverage.some((c) => c.includes("encoding normalized")));
+    // Exercise the actual DOCX -> LibreOffice PDF -> vision chain with an
+    // unavailable font confined to an unused style, not just the collector.
+    const styled = await JSZip.loadAsync(await fs.readFile(path.join(root, "sample.docx")));
+    const styleXml = '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:rPr><w:rFonts w:ascii="serif"/></w:rPr></w:style>' +
+      '<w:style w:type="paragraph" w:styleId="UnusedMissing"><w:rPr><w:rFonts w:ascii="DefinitelyMissingFont987654"/></w:rPr></w:style></w:styles>';
+    styled.file("word/styles.xml", styleXml);
+    styled.file("[Content_Types].xml", (await styled.file("[Content_Types].xml").async("string")).replace('</Types>', '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>'));
+    styled.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+    const originalText = await styled.file("word/document.xml").async("string");
+    const styledPath = path.join(root, "unused-style.docx");
+    await fs.writeFile(styledPath, await styled.generateAsync({ type: "nodebuffer" }));
+    const originalBytes = await fs.readFile(styledPath);
+    const noUnusedFontFailure = await convert(styledPath, path.join(root, "out-unused-style"), new AbortController().signal, emptyUsage(), async () => {});
+    assert.match(noUnusedFontFailure.markdown, /DOCX FILE TOOL TEST 42/);
+    assert(noUnusedFontFailure.coverage.some(c => /1 proven-unused styles excluded/.test(c)));
+    assert(noUnusedFontFailure.coverage.some(c => c.endsWith("inspected")));
+    assert(await fs.stat(path.join(root, "out-unused-style/rendered/source.pdf")));
+    assert.deepEqual(await fs.readFile(styledPath), originalBytes, "Uploaded DOCX bytes must never change");
+
+    // The same unavailable font, once referenced through a style, must fail
+    // before either rendering or a paid/mock vision request is started.
+    styled.file("word/styles.xml", styleXml.replace('</w:styles>', '<w:style w:type="paragraph" w:styleId="Inherited"><w:basedOn w:val="UnusedMissing"/></w:style></w:styles>'));
+    styled.file("word/document.xml", originalText.replace('<w:p>', '<w:p><w:pPr><w:pStyle w:val="Inherited"/></w:pPr>'));
+    const usedPath = path.join(root, "used-style.docx");
+    await fs.writeFile(usedPath, await styled.generateAsync({ type: "nodebuffer" }));
+    const beforeFontFailure = calls;
+    await assert.rejects(convert(usedPath, path.join(root, "out-used-style"), new AbortController().signal, emptyUsage(), async () => {}), /Missing source font: DefinitelyMissingFont987654/);
+    assert.equal(calls, beforeFontFailure);
+    assert.equal(await fs.stat(path.join(root, "out-used-style/rendered/source.pdf")).catch(() => null), null);
     doczip.file(
       "word/document.xml",
       docxml.replace(

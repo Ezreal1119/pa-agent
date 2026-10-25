@@ -1,0 +1,263 @@
+:root {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "PingFang SC",
+    sans-serif;
+  color: #263d30;
+  background: #f6f7f2;
+  font-synthesis: none;
+  line-height: 1.65;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 1360px;
+  margin: auto;
+  padding: 36px 36px 20px;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+h1 {
+  font-size: 38px;
+  letter-spacing: -1px;
+  line-height: 1.2;
+  margin: 8px 0;
+}
+h2 {
+  font-size: 19px;
+  margin: 0 0 14px;
+}
+h3 {
+  font-size: 18px;
+  margin: 8px 0;
+}
+h4 {
+  margin: 20px 0 5px;
+}
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  margin-top: 22px;
+}
+.muted,
+footer {
+  color: #718073;
+  font-size: 13px;
+}
+.back,
+a {
+  color: #375e46;
+  text-decoration: none;
+}
+.back:hover,
+a:hover {
+  text-decoration: underline;
+}
+.badge {
+  border: 1px solid #cbd6c8;
+  border-radius: 30px;
+  padding: 8px 18px;
+  font-size: 13px;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  background: white;
+  border: 1px solid #dce3d7;
+  border-radius: 14px;
+  padding: 20px;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 5px;
+}
+input,
+select,
+button,
+.button {
+  font: inherit;
+  border: 1px solid #cad5c6;
+  border-radius: 7px;
+  background: white;
+  padding: 9px 12px;
+  color: inherit;
+  font-size: 13px;
+}
+input {
+  max-width: 180px;
+}
+button,
+.button {
+  cursor: pointer;
+}
+button:hover,
+.button:hover {
+  background: #eef2e9;
+  text-decoration: none;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.primary {
+  background: #31553c;
+  color: white;
+}
+.primary:hover {
+  background: #24442f;
+}
+.panel,
+.card {
+  border: 1px solid #dce3d7;
+  border-radius: 12px;
+  background: #fff;
+  padding: 22px;
+}
+#notice {
+  color: #a74c29;
+  white-space: pre-wrap;
+}
+#progress {
+  margin-bottom: 24px;
+}
+.workspace {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 28px;
+}
+.workspace aside {
+  align-self: start;
+}
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.card {
+  margin-bottom: 16px;
+}
+.card p {
+  margin: 10px 0;
+  white-space: pre-wrap;
+}
+.meta {
+  font-size: 12px;
+  color: #748270;
+}
+.sales {
+  background: #f4f6ee;
+  border-left: 3px solid #9bae83;
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.card button {
+  margin-top: 8px;
+}
+.coverage-day {
+  margin: 8px 0 16px;
+}
+.coverage-day summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+}
+.coverage-row {
+  font-size: 11px;
+  color: #718073;
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+.run {
+  display: block;
+  text-align: left;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 11px;
+}
+dialog {
+  border: 1px solid #dce3d7;
+  border-radius: 14px;
+  max-width: 920px;
+  width: 94vw;
+  max-height: 90vh;
+  padding: 28px;
+  color: inherit;
+}
+dialog::backdrop {
+  background: #152b1d77;
+}
+#detail-close {
+  float: right;
+}
+#detail-body {
+  clear: both;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+#detail-body p {
+  white-space: pre-wrap;
+}
+pre {
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: #f4f6f0;
+  padding: 15px;
+  border-radius: 8px;
+}
+footer {
+  margin-top: 36px;
+  border-top: 1px solid #dce3d7;
+  padding-top: 20px;
+}
+.pills {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.pills span {
+  background: #f1f4ea;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+@media (max-width: 800px) {
+  main {
+    padding: 20px 16px;
+  }
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  header {
+    align-items: start;
+  }
+  .badge {
+    display: none;
+  }
+  .controls {
+    padding: 14px;
+    gap: 10px;
+  }
+  h1 {
+    font-size: 30px;
+  }
+  .workspace aside {
+    order: 2;
+  }
+}

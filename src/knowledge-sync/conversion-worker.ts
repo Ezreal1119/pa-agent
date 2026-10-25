@@ -14,6 +14,7 @@ import {
   hasSpreadsheetVisuals,
 } from "./office-embeddings.js";
 import { tileOffsets } from "./visual-tiles.js";
+import { docxFonts } from "./docx-fonts.js";
 const request = JSON.parse(
   await new Promise<string>((resolve) => {
     let s = "";
@@ -326,6 +327,7 @@ async function tiles(
 async function inspectOffice() {
   const zip = await JSZip.loadAsync(await fs.readFile(input));
   const fonts = new Set<string>();
+  const wordParts = new Map<string, string>();
   for (const [name, part] of Object.entries(zip.files)) {
     if (
       /(?:vbaProject|activeX|externalLinks)/i.test(name) ||
@@ -336,6 +338,7 @@ async function inspectOffice() {
       );
     if (!/\.(?:xml|rels)$/.test(name)) continue;
     const xml = await part.async("string");
+    if (ext === ".docx" && /^word\/.+\.xml$/.test(name)) wordParts.set(name, xml);
     if (/\b(?:DDEAUTO|DDE|INCLUDEPICTURE|INCLUDETEXT)\b/i.test(xml))
       throw new Error("External Office field detected.");
     if (name.endsWith(".rels")) {
@@ -354,11 +357,16 @@ async function inspectOffice() {
           );
     }
     // Theme fonts are templates, not necessarily used. Check explicit content fonts.
-    if (/(?:document|styles|sheet\d+|slide\d+|notesSlide\d+)\.xml$/.test(name))
+    if (ext !== ".docx" && /(?:document|styles|sheet\d+|slide\d+|notesSlide\d+)\.xml$/.test(name))
       for (const m of xml.matchAll(
         /(?:typeface|w:ascii|w:hAnsi|w:eastAsia)=["']([^"']+)["']/g,
       ))
         if (m[1] && !m[1].startsWith("+")) fonts.add(m[1]);
+  }
+  if (ext === ".docx") {
+    const result = docxFonts(wordParts);
+    for (const font of result.fonts) fonts.add(font);
+    coverage.push(`DOCX font preflight: ${result.ignoredStyles} proven-unused styles excluded; active/default/inherited style declarations retained${result.conservativeFallback ? "; ambiguous style references: full style font check retained" : ""}.`);
   }
   for (const font of fonts) {
     if (/^(?:serif|sans-serif|monospace)$/i.test(font)) continue;

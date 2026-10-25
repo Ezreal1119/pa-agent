@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>行业研究 · UROVO</title>
+    <link rel="icon" href="/favicon.png" />
+    <link rel="stylesheet" href="/research.css" />
+    <script src="/research.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <a class="back" href="/">← 返回产品助手</a>
+          <p class="eyebrow">UROVO · MARKET INTELLIGENCE</p>
+          <h1>行业研究</h1>
+          <p class="muted">从客户的作业现场，看见产品的机会。</p>
+        </div>
+        <span class="badge">每日情报库</span>
+      </header>
+      <section class="controls" aria-label="研究与查询">
+        <label>截止日期<input type="date" id="end-date" required /></label
+        ><label
+          >浏览范围<select id="days">
+            <option value="14">十四天</option>
+            <option value="7">七天</option>
+            <option value="1">单日</option>
+          </select></label
+        ><label
+          >场景<select id="scene">
+            <option value="">全部场景</option>
+          </select></label
+        ><label
+          >标签<input id="tag" placeholder="如 RFID" maxlength="100" /></label
+        ><button id="browse">查询</button
+        ><button id="start" class="primary">开始十四天研究</button
+        ><button id="stop" disabled>提前收尾</button
+        ><a id="export" class="button" href="#">导出 Markdown</a>
+      </section>
+      <p id="range" class="muted"></p>
+      <p id="notice" role="status" aria-live="polite"></p>
+      <section id="progress" class="panel" aria-label="研究进度">
+        <h2>研究进度</h2>
+        <p class="muted">尚未运行</p>
+      </section>
+      <div class="workspace">
+        <aside class="panel">
+          <h2>每日覆盖</h2>
+          <p class="muted">空白日期不代表没有行业活动。</p>
+          <div id="coverage"></div>
+          <h2>运行记录</h2>
+          <div id="runs"></div>
+        </aside>
+        <section aria-label="行业资讯">
+          <div class="section-title">
+            <h2>资讯与销售参考</h2>
+            <span id="count" class="muted"></span>
+          </div>
+          <div id="items"></div>
+        </section>
+      </div>
+      <dialog id="detail">
+        <button id="detail-close" aria-label="关闭详情">关闭</button>
+        <div id="detail-body"></div>
+      </dialog>
+      <footer>
+        仅收录通过证据核对与独立审核的资讯。销售参考中的适用性与集成条件仍需结合客户现场验证。
+      </footer>
+    </main>
+  </body>
+</html>

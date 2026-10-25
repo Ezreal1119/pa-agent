@@ -51,6 +51,10 @@ import { SftpSyncService } from "../sftp-sync/service.js";
 import { sftpConfig } from "../sftp-sync/config.js";
 import { MAX_PATHS_BYTES } from "../sftp-sync/paths-editor.js";
 import { ScheduleError, SftpScheduleClient } from "../sftp-sync/schedule.js";
+import { ResearchService } from "../research/service.js";
+import { createResearchEngine, type ResearchEngine } from "../research/agent.js";
+import { researchRoute } from "../research/routes.js";
+import { ResearchError, config as researchConfig, type ResearchConfig } from "../research/domain.js";
 import { SyncService } from "../knowledge-sync/service.js";
 import { KnowledgeLibrary, LIBRARY_MAX_EDIT_BYTES } from "../knowledge-sync/library.js";
 import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
@@ -66,7 +70,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -160,6 +164,12 @@ export async function createWebServer(options: WebOptions = {}) {
   const memoryInjection = new MemoryInjectionService({dataDir, attachments: new MemoryAttachments(dataDir, () => fileConfig), modelId: () => settings.modelId, redact,
     planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
   await memoryInjection.init();
+  const research = new ResearchService({dataDir, resourcesDir, settings: options.research?.settings ?? researchConfig(syncEnv), redact,
+    engine: options.research?.engine ?? (() => {
+      const model = {...settings}; const web = {apiKey: webConfig.apiKey};
+      return createResearchEngine({dataDir, resourcesDir, model: () => model, web: () => web});
+    })});
+  await research.init();
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
@@ -462,12 +472,16 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       const publicAsset = ["/login", "/login.js", "/style.css", "/favicon.png", "/favicon.ico"].includes(url.pathname) && (method === "GET" || method === "HEAD");
       if (!authenticated && !publicAsset) {
-        if (["/", "/wecom-contacts", "/mcp-usage", "/synchronize"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
+        if (["/", "/wecom-contacts", "/mcp-usage", "/synchronize", "/research"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
         throw new HttpError(401, "Please sign in first.");
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
         await auth.signOut(req, res, secureCookies); return json(res, 200, { ok: true });
+      }
+      if (url.pathname.startsWith("/api/research/")) {
+        if (machine) throw new HttpError(403, "Research requires administrator login.");
+        return await researchRoute(req, res, url, research, readBody);
       }
       if (url.pathname === "/api/prompt" || url.pathname === "/api/prompt/preview") {
         if (machine) throw new HttpError(403, "Prompt management requires administrator login.");
@@ -982,6 +996,9 @@ export async function createWebServer(options: WebOptions = {}) {
         }
       }
       const assets: Record<string, [string, string]> = {
+        "/research": [path.join(resourcesDir, "web/research.html"), "text/html; charset=utf-8"],
+        "/research.js": [path.join(resourcesDir, "web/research.js"), "text/javascript; charset=utf-8"],
+        "/research.css": [path.join(resourcesDir, "web/research.css"), "text/css; charset=utf-8"],
         "/favicon.png": [path.join(resourcesDir, "web/favicon.png"), "image/png"],
         "/favicon.ico": [path.join(resourcesDir, "web/favicon.png"), "image/png"],
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
@@ -1016,11 +1033,12 @@ export async function createWebServer(options: WebOptions = {}) {
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
-      json(res, error instanceof HttpError || error instanceof SyncError || error instanceof ScheduleError ? error.status : 500, { error: redact(error) });
+      json(res, error instanceof HttpError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;
   async function close() {
+    await research.close();
     const wecomClosing = wecomImports.close();
     const libraryClosing = libraryImports.close();
     const sftpClosing = sftpSync.close();
