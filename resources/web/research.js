@@ -134,7 +134,10 @@ async function browse() {
 function progress(r) {
   const box = $("progress");
   box.replaceChildren(
-    el("h2", r ? "Research progress · " + states[r.state] : "Research progress"),
+    el(
+      "h2",
+      r ? "Research progress · " + states[r.state] : "Research progress",
+    ),
   );
   if (!r) {
     box.append(el("p", "No runs yet", "muted"));
@@ -147,12 +150,23 @@ function progress(r) {
       "meta",
     ),
   );
+  if (r.phase) box.append(el("p", `Phase: ${{ discovery: "Low-cost discovery", research: "Focused verification", review: "Independent review", done: "Finished" }[r.phase]}${r.batch ? " · Batch " + r.batch : ""}`, "meta"));
+  if (r.budget) {
+    const money = n => Number(n).toFixed(3);
+    box.append(el("p", `Estimated cost ¥${money(r.budget.spentCny)} · Reserved / uncertain ¥${money(r.budget.reservedCny)} · Available ¥${money(r.budget.availableCny)} · Budget ¥${money(r.budget.limitCny)}. Estimate, not the provider bill.`, "meta"));
+    box.append(el("p", `Input tokens: cache hit ${r.budget.cacheHitTokens.toLocaleString()} / miss ${r.budget.cacheMissTokens.toLocaleString()} · Output ${r.budget.outputTokens.toLocaleString()} · ${r.budget.pricingVersion}`, "meta"));
+  } else box.append(el("p", "Legacy run: cost was not metered.", "meta"));
   const pills = el("div", undefined, "pills");
   for (const text of [
     `Searches ${r.metrics.search}`,
-    `Pages read ${r.metrics.fetch}`,
+    `Fetch attempts ${r.metrics.fetch}`,
+    ...(r.metrics.readableBodies === undefined
+      ? []
+      : [`Readable bodies ${r.metrics.readableBodies}`]),
     `Pending review ${r.pending}`,
-    `Added or updated this run ${r.checkpoints.reduce((n, p) => n + p.changes.length, 0)}`,
+    `New ${r.checkpoints.flatMap(p => p.changes).filter(c => c.kind === "new").length}`,
+    `Important updates ${r.checkpoints.flatMap(p => p.changes).filter(c => c.kind === "update").length}`,
+    ...(r.reuse ? [`Bodies reused ${r.reuse.bodies}`, `Duplicates ${r.reuse.duplicates}`, `Known leads in cooldown ${r.reuse.cooldown}`] : []),
   ])
     pills.append(el("span", text));
   box.append(pills);
@@ -160,18 +174,47 @@ function progress(r) {
     box.append(
       el(
         "p",
-        `${(p.elapsedMs / 60000).toFixed(1)} min${p.final ? " · Final review" : ""}: +${p.points} points; ${p.continued ? "continuing research" : "wrapping up"}. ${p.error ?? p.review?.summary ?? "No candidates pending review."}`,
+        `${(p.elapsedMs / 60000).toFixed(1)} min${p.final ? " · Final review" : ""}: +${p.points} points; ${p.continued ? "continuing research" : "wrapping up"}. ${p.resultSummary ?? "Legacy checkpoint; see candidate results."}${p.error ? " " + p.error : ""}`,
         "meta",
       ),
     );
+    if (p.review?.summary) {
+      const notes = el("details");
+      notes.append(
+        el("summary", "Reviewer notes (evidence assessment)"),
+        el("p", p.review.summary, "meta"),
+      );
+      box.append(notes);
+    }
+  }
+  if (r.leads?.length) {
+    const notes = el("details");
+    notes.append(
+      el(
+        "summary",
+        `Discovered leads · ${r.leadStats?.total ?? r.leads.length} (showing ${r.leads.length})`,
+      ),
+    );
+    for (const l of r.leads)
+      notes.append(
+        el("p", `${l.state} · ${l.title} · ${l.reason ?? l.url}`, "meta"),
+      );
+    box.append(notes);
   }
   if (r.stopReason) box.append(el("p", r.stopReason));
-  if (r.errors.length) box.append(el("p", r.errors.join("\n"), "meta"));
+  if (r.errors.length) {
+    const issues = el("details");
+    issues.append(
+      el("summary", `Source / tool issues · ${r.errors.length}`),
+      el("p", r.errors.join("\n"), "meta"),
+    );
+    box.append(issues);
+  }
   if (r.candidates.length) {
     const more = el("details");
     more.append(el("summary", "Candidate results"));
     for (const c of r.candidates)
-      more.append(el("p", c.title + ": " + c.outcome, "meta"));
+      more.append(el("p", (c.repairOf ? "Revised · " : "") + c.title + ": " + c.outcome, "meta"));
     box.append(more);
   }
 }
@@ -239,9 +282,11 @@ async function showItem(id) {
   line(
     b,
     "Competitive intelligence · " +
-      { confirmed: "Confirmed", inferred: "Inferred", undisclosed: "Undisclosed" }[
-        i.article.competition.status
-      ],
+      {
+        confirmed: "Confirmed",
+        inferred: "Inferred",
+        undisclosed: "Undisclosed",
+      }[i.article.competition.status],
     i.article.competition.detail,
   );
   line(b, "UROVO business relevance", i.article.urovo.relevance);
@@ -362,7 +407,7 @@ $("start").onclick = async () => {
     $("start").disabled = true;
     const r = await api("/api/research/runs", {
       method: "POST",
-      body: JSON.stringify({ endDate: $("end-date").value }),
+      body: JSON.stringify({ endDate: $("end-date").value, budgetCny: Number($("budget").value) }),
     });
     selectedRun = null;
     activeId = r.id;
@@ -404,6 +449,8 @@ $("stop").onclick = async () => {
     location.href = "/login";
     return;
   }
+  const researchDefaults = await api("/api/research/runs");
+  $("budget").value = researchDefaults.defaults?.budgetCny ?? 3;
   await browse();
   await poll();
   setInterval(poll, 3000);

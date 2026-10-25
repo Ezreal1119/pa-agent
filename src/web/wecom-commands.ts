@@ -24,7 +24,7 @@ export function formatLibraryResult(data: Record<string, unknown>): string {
   });
   const heading = data.outcome === "no_match" ? "未找到精确匹配。以下如有链接，仅为相关候选："
     : data.outcome === "matched" ? "资料库返回的文件：" : "资料库返回的候选文件：";
-  return links.length ? `${heading}\n\n${links.join("\n\n")}` : "资料库未返回可用的文件链接，请补充型号或文件名称后重新查询。";
+  return links.length ? `${heading}\n\n${links.map((item, index) => `${index + 1}. ${item}`).join("\n\n")}` : "资料库未返回可用的文件链接，请补充型号或文件名称后重新查询。";
 }
 
 interface BalanceOptions { request?: typeof fetch; timeoutMs?: number }

@@ -29,7 +29,7 @@ test('balance missing key, upstream errors, malformed/oversize data, timeout and
 test('library rendering preserves every usable returned URL, labels alternatives and treats metadata only as text',()=>{
  const url='https://files.example/a(b).zip?token=a%2Bb&x=1';
  const text=formatLibraryResult({outcome:'matched',matches:[{name:'<@all> [evil](https://evil.example)',url,comment:'SDK'},{name:'manual.pdf',url:'https://files.example/manual.pdf'}, {url:'javascript:alert(1)'},{url:'https://user:pass@files.example/x'},{url:'https://files.example/<@all>'}]});
- assert.ok(text.includes(url));assert.match(text,/manual.pdf/);assert.ok(!text.includes('<@all>'));assert.ok(!text.includes('javascript:'));assert.ok(!text.includes('user:pass'));
+ assert.ok(text.includes(url));assert.match(text,/manual.pdf/);assert.match(text,/^1\. /m);assert.match(text,/^2\. manual.pdf$/m);assert.doesNotMatch(text,/^3\. /m);assert.ok(!text.includes('<@all>'));assert.ok(!text.includes('javascript:'));assert.ok(!text.includes('user:pass'));
  assert.match(formatLibraryResult({outcome:'no_match',matches:[{name:'candidate',url}]}),/仅为相关候选/);
  assert.match(formatLibraryResult({outcome:'no_match',matches:[]}),/未返回可用/);
  assert.match(formatLibraryResult({matches:[{url}]}),/候选文件/);

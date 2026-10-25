@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { publicationDates } from "./dates.js";
+import type { BudgetState } from "./budget.js";
+import type { Lead } from "./leads.js";
 
 export class ResearchError extends Error {
   constructor(
@@ -129,6 +132,7 @@ export const candidateSchema = z
 export type Candidate = z.infer<typeof candidateSchema> & {
   id: string;
   submittedAt: string;
+  repairOf?: string;
   outcome?: string;
 };
 export const scoreSchema = z
@@ -193,15 +197,19 @@ export interface ResearchConfig {
   wrapMs: number;
   reviewMs: number;
   threshold: number;
+  fetchTimeoutMs?: number;
   weights: Scores;
+  budgetCny?: number;
 }
 export const defaults: ResearchConfig = {
+  budgetCny: 3,
   initialMs: 300000,
   checkpointMs: 300000,
   maxMs: 1200000,
   wrapMs: 120000,
   reviewMs: 60000,
   threshold: 70,
+  fetchTimeoutMs: 18000,
   weights,
 };
 export function config(
@@ -209,12 +217,12 @@ export function config(
 ): ResearchConfig {
   const out = { ...defaults, weights: { ...weights } };
   for (const [key, name] of Object.entries({
-    initialMs: "RESEARCH_INITIAL_MS",
-    checkpointMs: "RESEARCH_CHECKPOINT_MS",
+    budgetCny: "RESEARCH_BUDGET_CNY",
     maxMs: "RESEARCH_MAX_MS",
     wrapMs: "RESEARCH_WRAP_MS",
     reviewMs: "RESEARCH_REVIEW_MS",
     threshold: "RESEARCH_THRESHOLD",
+    fetchTimeoutMs: "RESEARCH_FETCH_TIMEOUT_MS",
   }))
     if (env[name] !== undefined) (out as any)[key] = Number(env[name]);
   if (env.RESEARCH_WEIGHTS)
@@ -223,7 +231,7 @@ export function config(
     Object.values(out).some(
       (v) => typeof v === "number" && (!Number.isFinite(v) || v <= 0),
     ) ||
-    out.maxMs <= out.initialMs + out.wrapMs ||
+    out.maxMs <= out.wrapMs ||
     out.reviewMs > out.wrapMs ||
     out.threshold > 100
   )
@@ -308,6 +316,14 @@ export interface Checkpoint {
   continued: boolean;
   review?: Review;
   error?: string;
+  resultSummary?: string;
+  decisions?: {
+    candidateId: string;
+    title: string;
+    status: "saved" | "below_threshold" | "rejected" | "pending";
+    score?: number;
+    reason: string;
+  }[];
   changes: { id: string; kind: string; score: number; progressKey?: string }[];
 }
 export interface Run {
@@ -326,15 +342,26 @@ export interface Run {
   finishedAt?: string;
   stopReason?: string;
   config: ResearchConfig;
+  phase?: "discovery" | "research" | "review" | "done";
+  rulesHash?: string;
+  instructions?: Record<string,string>;
+  budget?: BudgetState;
+  reuse?: { bodies: number; duplicates: number; cooldown: number; importedLeads: number; fullSweepDue: boolean; dueScenes: string[]; lastFullSweepAt?: string; gaps?: {scene: string; days: string[]}[]; priorCoverage: Coverage[] };
+  batch?: number;
   backgroundHash: string;
   background: string;
   candidates: Candidate[];
   coverage: Coverage[];
+  leads?: Lead[];
   checkpoints: Checkpoint[];
   metrics: {
     modelCalls: number;
     search: number;
     fetch: number;
+    fetchCalls?: number;
+    readableBodies?: number;
+    unreadablePages?: number;
+    fetchFailures?: number;
     inputTokens: number;
     outputTokens: number;
   };
@@ -366,6 +393,18 @@ export function evidenceCheck(c: Candidate, evidence: Evidence[]) {
   const d = map.get(c.article.dateEvidence.evidenceId);
   if (d?.kind !== "web" || !d.readable)
     throw new ResearchError(400, "日期必须有可读网页正文依据");
+  const published = publicationDates(d.content);
+  if (
+    published.length &&
+    !published.some((p) => p.day === c.article.disclosureDate) &&
+    !/(?:首次(?:公开|披露|发布|公告)|first (?:announced|published|disclosed))/i.test(
+      c.article.dateEvidence.quote,
+    )
+  )
+    throw new ResearchError(
+      400,
+      `归档日期与正文明确发布日期冲突：${JSON.stringify(published)}。签发/实施/事件日不能代替公开披露日，请核对后重新提交。`,
+    );
   for (const fact of c.article.facts)
     if (
       !fact.citations.some((ref) => {
@@ -376,11 +415,20 @@ export function evidenceCheck(c: Candidate, evidence: Evidence[]) {
       throw new ResearchError(400, "新闻事实缺少可读网页正文");
   for (const claim of c.article.urovo.productClaims)
     if (
-      !claim.citations.some(
-        (ref) => map.get(ref.evidenceId)?.kind === "knowledge",
-      )
+      !claim.citations.some((ref) => {
+        const e = map.get(ref.evidenceId);
+        return (
+          e?.kind === "knowledge" &&
+          !/^products:product-knowledge-vault\/(?:index\.md|overview\.md|categories\/)/i.test(
+            e.locator,
+          )
+        );
+      })
     )
-      throw new ResearchError(400, "产品主张缺少内部资料依据");
+      throw new ResearchError(
+        400,
+        "产品主张缺少正式内部资料依据；目录/overview/分类导航不能替代型号源文件",
+      );
   if (
     c.article.competition.status === "confirmed" &&
     !c.article.competition.citations.length

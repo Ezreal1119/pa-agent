@@ -26,9 +26,9 @@ export async function researchRoute(
     return json(200, await service.status());
   if (pathname === "/runs" && method === "POST") {
     const body = await input(
-      z.object({ endDate: z.string().optional() }).strict(),
+      z.object({ endDate: z.string().optional(), budgetCny: z.number().min(.05).max(100).optional() }).strict(),
     );
-    return json(202, await service.start(body.endDate ?? today()));
+    return json(202, await service.start(body.endDate ?? today(), body.budgetCny));
   }
   const run = pathname.match(/^\/runs\/([a-f0-9-]{36})(\/stop)?$/);
   if (run && method === "GET" && !run[2])

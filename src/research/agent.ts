@@ -15,9 +15,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ModelConfig } from "../config.js";
 import { applyDeepSeekReasoning, isDeepSeekModel } from "../agent/reasoning.js";
+import { ResearchBudget, pricingFor, type Pricing, type CostPhase } from "./budget.js";
+import type { ResearchLedger } from "./ledger.js";
 import { sdkTokens } from "../web/run-metrics.js";
 import { requestWebTool, type WebClientOptions } from "../web-tools/client.js";
 import { publicWebUrl } from "../web-tools/tools.js";
+import { publicationDates } from "./dates.js";
+import { pendingLeads, registerLeads } from "./leads.js";
+import { canonicalUrl } from "./store.js";
 import { ResearchKnowledge } from "./knowledge.js";
 import { ResearchStore, hash, manifest } from "./store.js";
 import {
@@ -37,6 +42,10 @@ export interface AgentContext {
   store: ResearchStore;
   evidence: Map<string, Evidence>;
   signal: AbortSignal;
+  budget?: ResearchBudget;
+  ledger?: ResearchLedger;
+  batchLeadIds?: string[];
+  repairCandidateIds?: string[];
   boundary: () => boolean;
   wrapping: () => boolean;
   save: () => Promise<void>;
@@ -47,6 +56,9 @@ export interface Worker {
 }
 export interface ResearchEngine {
   ready(): void;
+  pricing?(): Pricing;
+  select?(ctx: AgentContext, eligibleIds: string[]): Promise<string[]>;
+  discover?(ctx: AgentContext, prompt: string): Promise<void>;
   worker(ctx: AgentContext): Promise<Worker>;
   review(
     ctx: AgentContext,
@@ -59,6 +71,7 @@ export interface EngineOptions {
   web: () => WebClientOptions;
   dataDir: string;
   resourcesDir: string;
+  pricing?: Pricing;
 }
 const obj = (v: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(v) }],
@@ -66,6 +79,7 @@ const obj = (v: unknown) => ({
 });
 export function createResearchEngine(options: EngineOptions): ResearchEngine {
   const knowledge = new ResearchKnowledge(options.dataDir);
+  const resource = (ctx: AgentContext, name: string) => ctx.run.instructions?.[name] !== undefined ? Promise.resolve(ctx.run.instructions[name]!) : fs.readFile(path.join(options.resourcesDir,"research",name),"utf8");
   function ready() {
     const m = options.model();
     if (!m.apiKey || !m.baseUrl || !m.modelId || !options.web().apiKey)
@@ -118,7 +132,7 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
     await runtime.setRuntimeApiKey("research", model.apiKey);
     const settingsManager = SettingsManager.inMemory({
       compaction: {
-        enabled: true,
+        enabled: false,
         reserveTokens: 18000,
         keepRecentTokens: 12000,
       },
@@ -150,36 +164,35 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
     });
     s.agent.toolExecution = "sequential";
     s.agent.shouldStopAfterTurn = () => exhausted || stop();
-    s.agent.onPayload = (payload) => {
+    const phase: CostPhase = system.includes("独立 UROVO") ? "review" : ctx.run.phase === "discovery" ? "discovery" : "research";
+    // SDK provider retries happen below onPayload: disable them so every attempt needs a reservation.
+    const stream = s.agent.streamFunction;
+    s.agent.streamFunction = (m, c, o) => stream(m, c, { ...o, maxRetries: 0 });
+    let requestCharge: string | undefined;
+    let localCalls = 0;
+    let settlements = Promise.resolve();
+    s.agent.onPayload = async (payload) => {
       signal.throwIfAborted();
-      if (++ctx.run.metrics.modelCalls > 300)
-        throw new Error("研究模型请求预算已用尽");
-      const elapsed = Date.now() - Date.parse(ctx.run.startedAt);
-      const cfg = ctx.run.config;
-      const next =
-        elapsed < cfg.initialMs
-          ? cfg.initialMs
-          : cfg.initialMs +
-            (Math.floor((elapsed - cfg.initialMs) / cfg.checkpointMs) + 1) *
-              cfg.checkpointMs;
-      const control = `\n\n[Harness runtime status] Elapsed ${Math.round(elapsed / 1000)}s; total remaining ${Math.max(0, Math.round((cfg.maxMs - elapsed) / 1000))}s; phase ${ctx.wrapping() ? "WRAP UP: no new network work, submit evidence-backed candidates and finish" : "RESEARCH"}; next scheduled checkpoint in ${Math.max(0, Math.round((next - elapsed) / 1000))}s. Submit validated candidates incrementally, not only at the end. ${next - elapsed < 60000 ? "Checkpoint approaching: prioritize submitting already supported candidates now." : ""}`;
-      const value = deep
-        ? applyDeepSeekReasoning(
-            payload,
-            system.includes("独立 UROVO") ? "low" : "high",
-          )
-        : { ...(payload as Record<string, unknown>) };
-      if (Array.isArray(value.messages))
-        value.messages = value.messages.map((m: Record<string, unknown>) =>
-          m.role === "system" && typeof m.content === "string"
-            ? { ...m, content: m.content + control }
-            : m,
-        );
+      await settlements;
+      if (ctx.run.metrics.modelCalls >= 300) throw new Error("研究模型请求次数已用尽");
+      const value = deep ? applyDeepSeekReasoning(payload, phase === "research" ? "high" : "low") : { ...(payload as Record<string, unknown>) };
+      // System and prior messages stay byte-stable. Dynamic control is provided at batch boundaries.
+      if (ctx.budget) {
+        const reserved = await ctx.budget.model(value, phase, Math.min(model.maxTokens, phase === "research" ? 12288 : phase === "review" ? 6144 : 4096));
+        requestCharge = reserved.id;
+        signal.throwIfAborted();
+        ctx.run.metrics.modelCalls++; localCalls++;
+        return reserved.payload;
+      }
+      ctx.run.metrics.modelCalls++; localCalls++;
       return value;
     };
+    s.agent.shouldStopAfterTurn = () => exhausted || stop() || localCalls >= (ctx.repairCandidateIds ? 6 : phase === "discovery" ? 24 : 14);
     let failure: string | undefined;
     let audit = Promise.resolve();
     let reviewErrors = 0;
+    let submissionErrors = 0;
+    let exhaustedReason: string | undefined;
     let exhausted = false;
     const unsub = s.subscribe((e) => {
       if (
@@ -194,7 +207,7 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
             path.join(ctx.store.root, "runs", ctx.run.id, "audit.jsonl"),
             JSON.stringify({
               at: new Date().toISOString(),
-              role: system.includes("独立 UROVO") ? "reviewer" : "researcher",
+              role: phase === "review" ? "reviewer" : phase === "discovery" ? "discovery" : "researcher",
               event: JSON.parse(safe),
             }) + "\n",
             { mode: 0o600 },
@@ -209,10 +222,17 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
           .slice(0, 1000);
         ctx.run.errors.push(e.toolName + ": " + msg);
         if (ctx.run.errors.length > 40) ctx.run.errors.shift();
-        if (e.toolName === "submit_review" && ++reviewErrors >= 2)
-          exhausted = true;
+        if (e.toolName === "submit_review" && ++reviewErrors >= 2) exhausted = true;
+        if (e.toolName === "submit_candidate" && ++submissionErrors >= 2) {
+          exhausted = true; exhaustedReason = "候选提交连续两次无效，暂缓本批并保留线索";
+        }
       }
+      if (e.type === "tool_execution_end" && e.toolName === "submit_candidate" && !e.isError) submissionErrors = 0;
       if (e.type === "message_end" && e.message.role === "assistant") {
+        const usage = e.message.usage;
+        const charge = requestCharge;
+        requestCharge = undefined;
+        if (charge && ctx.budget) settlements = settlements.then(() => ctx.budget!.usage(charge, usage));
         const u = sdkTokens(e.message.usage);
         if (u) {
           ctx.run.metrics.inputTokens += u.input;
@@ -241,18 +261,23 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
           await s.prompt(prompt);
         } finally {
           if (phaseTimer) clearTimeout(phaseTimer);
+          await settlements;
         }
         signal.throwIfAborted();
         if (failure) throw new Error(failure);
-        if (exhausted) throw new Error("审核结构化输出两次无效");
+        if (exhausted) throw new Error(exhaustedReason ?? "审核结构化输出两次无效");
       },
       async close() {
         signal.removeEventListener("abort", abort);
         unsub();
-        await s.abort();
-        await audit;
-        s.dispose();
-        await fs.rm(workDir, { recursive: true, force: true });
+        try {
+          await s.abort();
+          await audit;
+          await settlements;
+        } finally {
+          s.dispose();
+          await fs.rm(workDir, { recursive: true, force: true });
+        }
       },
     };
   }
@@ -291,6 +316,7 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
     await ctx.store.evidence(ctx.run.id, value);
     ctx.signal.throwIfAborted();
     ctx.evidence.set(value.id, value);
+    await ctx.ledger?.capture(value);
     return value;
   }
   function readTools(
@@ -316,6 +342,8 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
             ]);
           return {
             ...e,
+            publicationDates:
+              e.kind === "web" ? publicationDates(e.content) : undefined,
             content: e.content.slice(offset, offset + 20000),
             nextOffset:
               offset + 20000 < e.content.length ? offset + 20000 : null,
@@ -369,26 +397,61 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
   }
   return {
     ready,
+    pricing: () => pricingFor(options.model(), options.pricing),
+    async discover(ctx, prompt) {
+      const worker = await this.worker(ctx);
+      try { await worker.step(prompt); } finally { await worker.close(); }
+    },
+    async select(ctx, eligibleIds) {
+      let selected: string[] | undefined;
+      const choose = tool("select_batch", "Choose at most three highest-value eligible lead IDs for this verification batch. Return [] only if none merits verification. No facts are approved by selection.", z.object({ ids:z.array(z.string()).max(3), reason:z.string().min(1).max(600) }).strict(), async a => {
+        if (new Set(a.ids).size !== a.ids.length || a.ids.some((id:string) => !eligibleIds.includes(id))) throw new Error("Choose unique eligible IDs only");
+        selected = a.ids; return {selected};
+      },ctx.signal);
+      const guidance = await resource(ctx,"selector.md");
+      const picker = await session(ctx, guidance + "\n\n# Frozen business background\n" + ctx.run.background, [choose, ...readTools(ctx,ctx.signal).filter(t => t.name === "find_library")],ctx.signal,()=>selected !== undefined);
+      try {
+        await picker.step(JSON.stringify({ days:ctx.run.days, instruction:"产品销售页和旧型号参数页不是本期新品新闻，搜索索引日期不等于首次披露日。只有存在本窗口明确变化或具体部署线索才值得核实。",
+          leads:(ctx.run.leads ?? []).filter(l=>eligibleIds.includes(l.id)).map(l=>({id:l.id,title:l.title,url:l.url,publishedAt:l.publishedAt,summary:l.summary.slice(0,240),priority:l.priority,classification:l.classification,lastOutcome:l.lastOutcome?.slice(0,250)})),
+          existingItems:(await ctx.store.summaries()).filter(i=>ctx.run.days.includes(i.date) && !i.archived).slice(0,50),
+          priorResults:ctx.run.checkpoints.slice(-2).map(p=>p.decisions),
+        }));
+        if (selected === undefined) throw new Error("未返回有效批次选择");
+        return selected;
+      } finally { await picker.close(); }
+    },
     async worker(ctx) {
       let complete = false;
       const remote = async (name: "search" | "fetch", body: object) => {
         if (ctx.wrapping())
           throw new Error("已进入收尾，禁止继续联网；请提交已有候选");
         let failure: unknown;
-        for (let n = 0; n < 3; n++) {
+        for (let n = 0; n < (name === "fetch" ? 1 : 3); n++) {
           ctx.signal.throwIfAborted();
+          const phase: CostPhase = ctx.run.phase === "discovery" ? "discovery" : "research";
+          const charge = ctx.budget ? await ctx.budget.reserve(name, phase, ctx.budget.state.pricing[name]) : undefined;
           ctx.run.metrics[name]++;
           try {
             const result = await requestWebTool(
               name,
               body,
-              options.web(),
+              name === "fetch"
+                ? {
+                    ...options.web(),
+                    timeoutMs: ctx.run.config.fetchTimeoutMs ?? 18000,
+                  }
+                : options.web(),
               ctx.signal,
             );
+            if (charge && ctx.budget) {
+              const billable = name === "search" ? Array.isArray(result.results) && result.results.length > 0 : typeof result.content === "string" && result.content.trim().length > 0;
+              await ctx.budget.settle(charge, billable ? ctx.budget.state.pricing[name] : 0);
+            }
             await ctx.save();
             return result;
           } catch (e) {
             failure = e;
+            if (charge && ctx.budget && /HTTP (4\d\d|5\d\d)/.test(String(e))) await ctx.budget.settle(charge, 0);
             if (!/HTTP (429|5\d\d)|超时|无法连接/.test(String(e)) || n === 2)
               break;
             await new Promise<void>((resolve, reject) => {
@@ -406,6 +469,78 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
           }
         }
         throw failure;
+      };
+      const fetching = new Map<string, Promise<unknown>>();
+      const fetchSource = async (input: string): Promise<any> => {
+        const url = canonicalUrl(publicWebUrl(input));
+        if (fetching.has(url)) return fetching.get(url);
+        const task = (async () => {
+          const lead = ctx.run.leads?.find((l) => l.url === url);
+          const shared = await ctx.ledger?.cached(url, lead);
+          if (shared) {
+            ctx.evidence.set(shared.id, shared);
+            await ctx.store.evidence(ctx.run.id, shared);
+            if (ctx.run.reuse) ctx.run.reuse.bodies++;
+          }
+          const old = shared ?? [...ctx.evidence.values()].find(
+            (e) => e.kind === "web" && canonicalUrl(e.locator) === url,
+          );
+          if (old) {
+            if (lead) { lead.state = "read"; lead.evidenceId = old.id; lead.attemptedAt = new Date().toISOString(); }
+            return {
+              ...old,
+              publicationDates: publicationDates(old.content),
+              content: old.content.slice(0, 16000),
+              cached: true,
+              nextOffset: old.content.length > 16000 ? 16000 : null,
+            };
+          }
+          if (lead) lead.attemptedAt = new Date().toISOString();
+          ctx.run.metrics.fetchCalls = (ctx.run.metrics.fetchCalls ?? 0) + 1;
+          try {
+            const data = await remote("fetch", { url });
+            const content =
+              typeof data.content === "string"
+                ? data.content.slice(0, 100000)
+                : "";
+            const title = typeof data.title === "string" ? data.title : "";
+            const readable = content.replace(title, "").trim().length >= 200;
+            const e = await add(ctx, {
+              kind: "web",
+              locator: url,
+              title,
+              content,
+              readable,
+            });
+            const metric = readable ? "readableBodies" : "unreadablePages";
+            ctx.run.metrics[metric] = (ctx.run.metrics[metric] ?? 0) + 1;
+            if (lead) {
+              lead.state = readable ? "read" : "unavailable";
+              lead.evidenceId = e.id;
+              lead.reason = readable ? undefined : "没有可用正文，请换来源";
+            }
+            await ctx.save();
+            return {
+              ...e,
+              publicationDates: publicationDates(content),
+              content: content.slice(0, 16000),
+              nextOffset: content.length > 16000 ? 16000 : null,
+            };
+          } catch (error) {
+            ctx.signal.throwIfAborted();
+            ctx.run.metrics.fetchFailures =
+              (ctx.run.metrics.fetchFailures ?? 0) + 1;
+            if (lead) {
+              lead.state = "unavailable";
+              lead.reason = String(error).slice(0, 300);
+            }
+            await ctx.save();
+            throw error;
+          }
+        })();
+        // Cache failed as well as successful attempts; a new source is preferable to repeated waits.
+        fetching.set(url, task);
+        return task;
       };
       const tools = [
         ...readTools(ctx, ctx.signal),
@@ -440,9 +575,13 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
             const query = a.query + ` after:${after} before:${before}`;
             const result = await remote("search", {
               query,
-              count: 5,
+              count: 8,
               need_content: false,
             });
+            if (!a.background) {
+              registerLeads(ctx.run, result.results, a.scene);
+              for (const lead of ctx.run.leads ?? []) ctx.ledger?.refresh(lead, ctx.run.rulesHash ?? "legacy-unknown");
+            }
             if (!a.background)
               ctx.run.coverage.push({
                 scene: a.scene,
@@ -455,7 +594,12 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
                   : 0,
               });
             await ctx.save();
-            return result;
+            return { results: Array.isArray(result.results) ? result.results.map((value: any) => {
+              const lead = ctx.run.leads?.find(l => l.url === canonicalUrl(String(value.url ?? "")));
+              return { title: String(value.title ?? "").slice(0,400), url: value.url, date: value.date,
+                summary: String(value.summary ?? value.snippet ?? "").slice(0,800),
+                leadId: lead?.id, state: lead?.state, cooldown: lead?.cooldown, classification: lead?.classification };
+            }) : [] };
           },
           ctx.signal,
         ),
@@ -463,27 +607,59 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
           "fetch_source",
           "Fetch actual public article body; search summaries are insufficient. Returns captured evidence ID. Title-only/blocked responses are not usable.",
           z.object({ url: z.string() }),
-          async ({ url }) => {
-            url = publicWebUrl(url);
-            const data = await remote("fetch", { url });
-            const content =
-              typeof data.content === "string"
-                ? data.content.slice(0, 100000)
-                : "";
-            const title = typeof data.title === "string" ? data.title : "";
-            const readable = content.replace(title, "").trim().length >= 200;
-            const e = await add(ctx, {
-              kind: "web",
-              locator: url,
-              title,
-              content,
-              readable,
-            });
-            return {
-              ...e,
-              content: e.content.slice(0, 16000),
-              nextOffset: e.content.length > 16000 ? 16000 : null,
-            };
+          ({ url }) => fetchSource(url),
+          ctx.signal,
+        ),
+        tool(
+          "fetch_sources",
+          "Read 1 to 3 independent article URLs concurrently within the same per-source deadline. Each result is captured evidence or an explicit failure; use read_evidence for more text. Prefer this for independent leads.",
+          z.object({ urls: z.array(z.string()).min(1).max(3) }),
+          async ({ urls }) =>
+            Promise.all(
+              [...new Set<string>(urls)].map(async (url) => {
+                try {
+                  return await fetchSource(url);
+                } catch (error) {
+                  ctx.signal.throwIfAborted();
+                  return { url, error: String(error), readable: false };
+                }
+              }),
+            ),
+          ctx.signal,
+        ),
+        tool(
+          "triage_leads",
+          "Prioritize or defer discovered leads with a concrete business reason. Read snippets only to select leads, never as news evidence. Never silently drop a high-relevance competitor or deployment.",
+          z.object({
+            decisions: z
+              .array(
+                z.object({
+                  id: z.string(),
+                  priority: z.enum(["high", "normal", "low"]),
+                  defer: z.boolean().default(false),
+                  reason: z.string().min(1).max(500),
+                  classification: z.enum(["new", "update", "duplicate", "irrelevant", "pending"]).optional(),
+                }),
+              )
+              .min(1)
+              .max(8),
+          }),
+          async ({ decisions }) => {
+            for (const decision of decisions) {
+              const lead = ctx.run.leads?.find((l) => l.id === decision.id);
+              if (!lead) throw new Error("Unknown lead ID");
+              lead.priority = decision.priority;
+              lead.reason = decision.reason;
+              if (decision.classification) lead.classification = decision.classification;
+              if (decision.classification === "duplicate" && ctx.run.reuse) ctx.run.reuse.duplicates++;
+              if (["duplicate", "irrelevant"].includes(decision.classification)) lead.attemptedAt = new Date().toISOString();
+              if (decision.defer && lead.state !== "submitted")
+                lead.state = "deferred";
+              else if (lead.state === "deferred")
+                lead.state = lead.evidenceId ? "read" : "unread";
+            }
+            await ctx.save();
+            return { pending: pendingLeads(ctx.run, 16).map(l => ({...l, summary: l.summary.slice(0,300)})) };
           },
           ctx.signal,
         ),
@@ -537,20 +713,28 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
         ),
         tool(
           "submit_candidate",
-          "Stage a candidate for independent review, never directly publish. All citations must quote captured evidence exactly. For updates read existing item/version first. A failed or rejected candidate can be corrected and submitted again.",
+          "Stage ONE concise candidate per model response for independent review, never directly publish. All citations must quote captured evidence exactly. For updates read existing item/version first. A failed or rejected candidate can be corrected and submitted again.",
           candidateSchema,
           async (a) => {
-            if (ctx.run.candidates.filter((c) => !c.outcome).length >= 24)
+            if (ctx.run.candidates.filter((c) => !c.outcome).length >= (ctx.run.phase ? 3 : 24))
               throw new Error(
-                "24 candidates await review; focus on evidence and coverage",
+                "本批等待审核候选已达上限，请finish_phase交还控制权",
               );
+            if (ctx.repairCandidateIds && !ctx.run.candidates.some(c => ctx.repairCandidateIds!.includes(c.id) && c.article.eventKey === a.article.eventKey)) throw new Error("只允许修正本批明确指定的候选，不得新增事件");
+            const repairOf = ctx.repairCandidateIds?.find(id => ctx.run.candidates.find(c => c.id === id)?.article.eventKey === a.article.eventKey);
+            if (repairOf && ctx.run.candidates.some(c=>c.repairOf===repairOf)) throw new Error("该候选的一次修正已提交，请finish_phase交还控制权");
             const c = {
               ...a,
+              repairOf,
               id: randomUUID(),
               submittedAt: new Date().toISOString(),
             };
             evidenceCheck(c, [...ctx.evidence.values()]);
             ctx.run.candidates.push(c);
+            const refs = new Set(citations(c.article).map((r) => r.evidenceId));
+            for (const lead of ctx.run.leads ?? [])
+              if (lead.evidenceId && refs.has(lead.evidenceId))
+                lead.state = "submitted";
             await ctx.save();
             return { candidateId: c.id, status: "pending_review" };
           },
@@ -567,24 +751,22 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
           ctx.signal,
         ),
       ];
-      const workflow = await fs.readFile(
-        path.join(options.resourcesDir, "research/SKILL.md"),
-        "utf8",
-      );
-      const system = await fs.readFile(
-        path.join(options.resourcesDir, "research/system.md"),
-        "utf8",
-      );
+      const workflow = await resource(ctx,"SKILL.md");
+      const system = await resource(ctx,"system.md");
+      const discovery = ctx.run.phase === "discovery";
+      const discoverySystem = discovery ? await resource(ctx,"discovery.md") : undefined;
       const worker = await session(
         ctx,
-        system +
+        discoverySystem ? discoverySystem + "\n\n# Frozen business background\n" + ctx.run.background : system +
           "\n\n" +
           workflow +
+          "\n\n" +
+          (await resource(ctx,"rubric.md")) +
           "\n\n# Frozen business background\n" +
           ctx.run.background,
-        tools,
+        discovery ? tools.filter(t => ["search_news", "find_library", "triage_leads", "finish_phase"].includes(t.name)) : ctx.repairCandidateIds ? tools.filter(t => ["read_evidence", "read_item", "submit_candidate", "finish_phase"].includes(t.name)) : tools,
         ctx.signal,
-        () => complete || (!ctx.wrapping() && ctx.boundary()),
+        () => complete || ctx.boundary(),
       );
       return {
         async step(prompt, budgetMs) {
@@ -696,6 +878,8 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
           readable: e.readable,
           fetchedAt: e.fetchedAt,
           totalCharacters: e.content.length,
+          publicationDates:
+            e.kind === "web" ? publicationDates(e.content) : undefined,
           excerpts: chunks,
         };
       });
@@ -711,13 +895,14 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
             article: item.article,
           });
       }
-      const rubric = await fs.readFile(
-        path.join(options.resourcesDir, "research/reviewer.md"),
-        "utf8",
-      );
+      const rubric = await resource(ctx,"reviewer.md");
       const reviewer = await session(
         ctx,
-        rubric + "\n\n# Frozen background\n" + ctx.run.background,
+        rubric +
+          "\n\n" +
+          (await resource(ctx,"rubric.md")) +
+          "\n\n# Frozen background\n" +
+          ctx.run.background,
         [...readTools(ctx, signal, reads), submit],
         signal,
         () => result?.verdicts.length === ids.length,
@@ -729,6 +914,8 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
             candidates: selected,
             evidencePacket,
             priorItems,
+            priorOutcomeRule: "历史拒绝中的日期、事实和归因疑点必须明确解决才能批准；同一份正文不能因换一次运行就忽略此前日期疑点。确有新日期依据时重新选择dateEvidence并说明。",
+            priorOutcomes: ctx.ledger?.priorOutcomes(evidencePacket.filter(e=>e.kind === "web").map(e=>e.locator)),
             libraryIndex: (await ctx.store.summaries())
               .filter((i) =>
                 selected.some(
@@ -741,6 +928,7 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
                 ),
               )
               .slice(0, 100),
+            outstandingLeads: pendingLeads(ctx.run, 16),
             coverage: ctx.run.coverage,
             metrics: ctx.run.metrics,
             priorCheckpoints: ctx.run.checkpoints.map((p) => ({

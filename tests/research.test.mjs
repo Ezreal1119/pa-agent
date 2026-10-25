@@ -330,6 +330,8 @@ test("checkpoint control, once-only credit, snapshot and latest enriched history
   await s.wait();
   const r = (await s.store.runs())[0];
   assert.equal(r.checkpoints[0].points, 2);
+  assert.equal(r.checkpoints[0].decisions[0].status, "saved");
+  assert.match(r.checkpoints[0].resultSummary, /Saved 1/);
   assert.equal(r.checkpoints[0].continued, true);
   assert.equal(r.checkpoints[1].continued, false);
   assert.equal((await s.store.items()).length, 1);
@@ -602,6 +604,7 @@ test(
     const store = new ResearchStore(dir);
     await store.init();
     const r = run();
+    r.config = { ...defaults, fetchTimeoutMs: 250 };
     await store.saveRun(r);
     const f = fixture();
     const controller = new AbortController();
@@ -651,6 +654,18 @@ test(
       } else if (phase === 2) {
         name = "fetch_source";
         args = { url: f.e.locator };
+      } else if (phase === 4 || phase === 5) {
+        name = "fetch_sources";
+        args = {
+          urls:
+            phase === 4
+              ? [
+                  f.e.locator,
+                  "https://example.com/slow",
+                  "https://example.com/fast",
+                ]
+              : ["https://example.com/slow"],
+        };
       } else {
         name = "submit_candidate";
         const evidence = [...ctx.evidence.values()][0];
@@ -690,6 +705,8 @@ test(
     });
     let attempts = 0;
     const outbound = [];
+    let activeFetches = 0,
+      maxFetches = 0;
     const engine = createResearchEngine({
       dataDir: dir,
       resourcesDir,
@@ -708,9 +725,45 @@ test(
             attempts++;
             return attempts < 3
               ? new Response("", { status: 503 })
-              : Response.json({ results: [] });
+              : Response.json({
+                  results: [
+                    {
+                      url: f.e.locator,
+                      title: f.e.title,
+                      summary: "Warehouse deployment",
+                      date: "2026-10-23",
+                    },
+                    {
+                      url: "https://example.com/slow",
+                      title: "Slow source",
+                      summary: "Competitor deployment",
+                    },
+                    {
+                      url: "https://example.com/fast",
+                      title: "Fast source",
+                      summary: "Retail endpoint deployment",
+                    },
+                  ],
+                });
           }
-          return Response.json({ title: f.e.title, content: f.e.content });
+          const target = JSON.parse(init.body).url;
+          activeFetches++;
+          maxFetches = Math.max(maxFetches, activeFetches);
+          try {
+            if (target.endsWith("/slow"))
+              await new Promise((resolve, reject) =>
+                init.signal.addEventListener(
+                  "abort",
+                  () => reject(init.signal.reason),
+                  { once: true },
+                ),
+              );
+            else if (target.endsWith("/fast"))
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            return Response.json({ title: f.e.title, content: f.e.content });
+          } finally {
+            activeFetches--;
+          }
         },
       }),
     });
@@ -720,6 +773,21 @@ test(
       await worker.step("fetch source");
       await worker.step("submit");
       assert.equal(r.candidates.length, 1);
+      await worker.step("Read independent leads concurrently");
+      await worker.step("Reuse failed result without another network attempt");
+      assert.equal(maxFetches, 2);
+      assert.equal(r.metrics.readableBodies, 2);
+      assert.equal(r.metrics.fetchFailures, 1);
+      assert.equal(r.metrics.fetchCalls, 3);
+      assert.equal(
+        r.leads.find((l) => l.url === f.e.locator).state,
+        "submitted",
+      );
+      assert.equal(
+        r.leads.find((l) => l.url.endsWith("/slow")).state,
+        "unavailable",
+      );
+      assert.equal(r.leads.find((l) => l.url.endsWith("/fast")).state, "read");
       const result = await engine.review(
         ctx,
         [r.candidates[0].id],
@@ -733,12 +801,14 @@ test(
     assert.equal(reviewerCalls, 1);
     assert.match(outbound[0].query, /after:2026-10-10 before:2026-10-25/);
     assert.equal(r.metrics.search, 3);
-    assert.equal(r.metrics.fetch, 1);
+    assert.equal(r.metrics.fetch, 3);
     const reviewPayload = payloads.at(-1);
     assert.ok(
       !JSON.stringify(reviewPayload).includes("RESEARCH_ONLY_SENTINEL"),
     );
     assert.ok(JSON.stringify(reviewPayload).includes("evidencePacket"));
+    assert.ok(JSON.stringify(reviewPayload).includes("行业情报价值标尺"));
+    assert.ok(JSON.stringify(reviewPayload).includes("outstandingLeads"));
     for (const p of payloads) {
       const system = p.messages
         .filter((m) => m.role === "system")
@@ -926,5 +996,209 @@ test("partial review timeout commits completed verdicts and retries pending cand
   assert.equal(r.checkpoints[0].continued, true);
   assert.match(r.checkpoints[0].error, /保留已完成判定/);
   assert.equal(r.checkpoints[1].points, 2);
+  await service.close();
+});
+
+test("lead ledger deduplicates URLs, retains unpursued results and ranks researcher choices", async () => {
+  const { registerLeads, pendingLeads } = await import(
+    "../dist/research/leads.js"
+  );
+  const r = run();
+  registerLeads(
+    r,
+    [
+      {
+        url: "https://example.com/a?utm_source=search",
+        title: "Competitor handheld release",
+        summary: "Android 16",
+      },
+      { url: "https://example.com/b", title: "Cold warehouse" },
+      { url: "javascript:alert(1)", title: "Invalid" },
+    ],
+    "retail",
+  );
+  registerLeads(
+    r,
+    [{ url: "https://example.com/a", title: "Syndicated headline" }],
+    "logistics",
+  );
+  assert.equal(r.leads.length, 2);
+  assert.deepEqual(r.leads[0].scenes, ["retail", "logistics"]);
+  r.leads[1].priority = "high";
+  assert.equal(pendingLeads(r)[0].title, "Cold warehouse");
+  r.leads[1].state = "deferred";
+  r.leads[1].reason = "No endpoint link after reading";
+  assert.equal(pendingLeads(r).length, 1);
+  assert.equal(r.leads[0].state, "unread");
+  assert.equal(r.leads[0].summary, "Android 16");
+});
+
+test("evidence approval below threshold cannot masquerade as a saved checkpoint result", async (t) => {
+  const dir = await temp(t);
+  const f = fixture();
+  let now = Date.parse("2026-10-24T01:00:00Z"),
+    first = true;
+  const service = new ResearchService({
+    dataDir: dir,
+    resourcesDir,
+    now: () => now,
+    engine: () => ({
+      ready() {},
+      async worker(ctx) {
+        return {
+          async step() {
+            if (first) {
+              ctx.run.candidates.push(f.c);
+              ctx.evidence.set(f.e.id, f.e);
+              first = false;
+            }
+            now += 300000;
+          },
+          async close() {},
+        };
+      },
+      async review() {
+        return {
+          verdicts: [
+            {
+              ...f.v,
+              scores: {
+                relevance: 3,
+                commercial: 3,
+                evidence: 4,
+                importance: 3,
+                novelty: 3,
+              },
+            },
+          ],
+          nextDirections: [],
+          summary: "通过1条行业进展",
+        };
+      },
+    }),
+  });
+  await service.init();
+  await service.start("2026-10-24");
+  await service.wait();
+  const r = (await service.store.runs())[0];
+  assert.equal((await service.store.items()).length, 0);
+  assert.equal(r.checkpoints[0].decisions[0].status, "below_threshold");
+  assert.equal(r.checkpoints[0].decisions[0].score, 64);
+  assert.match(
+    r.checkpoints[0].resultSummary,
+    /Saved 0; below score threshold 1/,
+  );
+  await service.close();
+});
+
+test("navigation-only product citations cannot substitute for source evidence", () => {
+  const f = fixture();
+  const product = {
+    ...f.e,
+    id: randomUUID(),
+    kind: "knowledge",
+    locator: "products:product-knowledge-vault/index.md",
+  };
+  f.c.article.urovo.productClaims = [
+    {
+      claim: "Specific product capability",
+      citations: [
+        {
+          evidenceId: product.id,
+          quote: "Customer installed barcode devices.",
+        },
+      ],
+    },
+  ];
+  assert.throws(() => evidenceCheck(f.c, [f.e, product]), /正式内部资料/);
+  assert.doesNotThrow(() =>
+    evidenceCheck(f.c, [
+      f.e,
+      { ...product, locator: "products:DT50P/brochure/DT50P.md" },
+    ]),
+  );
+});
+
+test("run summaries bound the lead payload and omit raw search snippets", async () => {
+  const { runSummary } = await import("../dist/research/store.js");
+  const r = run();
+  r.leads = Array.from({ length: 100 }, (_, i) => ({
+    id: String(i),
+    url: "https://example.com/" + i,
+    title: "Item " + i,
+    summary: "RAW_SEARCH_SNIPPET",
+    publishedAt: "",
+    scenes: ["retail"],
+    state: "unread",
+    priority: i === 99 ? "high" : "normal",
+  }));
+  const summary = runSummary(r);
+  assert.equal(summary.leads.length, 30);
+  assert.equal(summary.leadStats.total, 100);
+  assert.equal(summary.leads[0].id, "99");
+  assert.ok(!JSON.stringify(summary).includes("RAW_SEARCH_SNIPPET"));
+  const legacy = runSummary(run());
+  assert.equal(legacy.leadStats, undefined);
+});
+
+test("publication labels override signature/event dates without inventing a date", async () => {
+  const { publicationDates } = await import("../dist/research/dates.js");
+  const f = fixture("2026-10-15");
+  f.e.content =
+    "发布日期：2026\\-10\\-23 10:40\n各企业请执行本方案。\n2026年10月15日\n" +
+    f.e.content;
+  f.c.article.dateEvidence = { evidenceId: f.e.id, quote: "2026年10月15日" };
+  assert.equal(publicationDates(f.e.content)[0].day, "2026-10-23");
+  assert.throws(() => evidenceCheck(f.c, [f.e]), /归档日期.*冲突/);
+  f.c.article.disclosureDate = "2026-10-23";
+  f.c.article.dateEvidence.quote = "发布日期：2026\\-10\\-23";
+  assert.doesNotThrow(() => evidenceCheck(f.c, [f.e]));
+  assert.deepEqual(
+    publicationDates("成文日期：2026-10-15\n项目将于2026-10-23启动"),
+    [],
+  );
+  assert.deepEqual(
+    publicationDates("Published on October 23, 2026").map((x) => x.day),
+    ["2026-10-23"],
+  );
+  assert.deepEqual(publicationDates("发布日期：2026-02-30"), []);
+});
+
+test("initial capture after end date is not mislabeled as a later enrichment", async (t) => {
+  const dir = await temp(t);
+  const service = new ResearchService({
+    dataDir: dir,
+    resourcesDir,
+    engine: () => ({ ready() {} }),
+  });
+  await service.init();
+  const f = fixture();
+  const created = await service.store.commit(run(), f.c, f.v, [f.e], () => {});
+  assert.equal(
+    (await service.browse("2026-10-24")).items[0].updatedAfterCutoff,
+    false,
+  );
+  assert.ok(!(await service.export("2026-10-24")).includes("后续补充"));
+  const old = await service.store.item(created.id);
+  const candidate = {
+    ...f.c,
+    id: randomUUID(),
+    action: "sources",
+    targetId: old.id,
+    expectedVersion: old.version,
+    reason: "追加来源审计",
+  };
+  await service.store.commit(
+    run(),
+    candidate,
+    { ...f.v, candidateId: candidate.id },
+    [f.e],
+    () => {},
+  );
+  assert.equal(
+    (await service.browse("2026-10-24")).items[0].updatedAfterCutoff,
+    true,
+  );
+  assert.ok((await service.export("2026-10-24")).includes("后续补充"));
   await service.close();
 });

@@ -176,7 +176,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const research = new ResearchService({dataDir, resourcesDir, settings: options.research?.settings ?? researchConfig(syncEnv), redact,
     engine: options.research?.engine ?? (() => {
       const model = {...settings}; const web = {apiKey: webConfig.apiKey};
-      return createResearchEngine({dataDir, resourcesDir, model: () => model, web: () => web});
+      return createResearchEngine({dataDir, resourcesDir, model: () => model, web: () => web, pricing: syncEnv.RESEARCH_PRICING_JSON ? JSON.parse(syncEnv.RESEARCH_PRICING_JSON) : undefined});
     })});
   await research.init();
   const getRuntime = async () => {

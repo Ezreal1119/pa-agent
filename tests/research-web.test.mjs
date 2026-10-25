@@ -124,8 +124,10 @@ test("research page and API require admin, preserve CSRF/origin, reject machine 
     ).status,
     400,
   );
+  for (const budgetCny of [0, -1, 101, "3"]) assert.equal((await req("/api/research/runs", "POST", {endDate:"2026-10-24",budgetCny})).status,400);
   const response = await req("/api/research/runs", "POST", {
     endDate: "2026-10-24",
+    budgetCny: 1.5,
   });
   assert.equal(response.status, 202);
   const run = await response.json();

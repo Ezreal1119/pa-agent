@@ -1,3 +1,4 @@
+import { budgetTotals } from "./budget.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
@@ -302,13 +303,14 @@ export class ResearchStore {
         guard,
       );
       await this.index();
+      const corrected = old && c.action === "correction" && JSON.stringify([old.article.facts, old.article.disclosureDate, old.article.status, old.article.competition, old.article.urovo]) !== JSON.stringify([item.article.facts, item.article.disclosureDate, item.article.status, item.article.competition, item.article.urovo]);
       return {
         id: item.id,
         kind: !old
           ? "new"
           : c.action === "sources"
             ? "sources"
-            : v.material
+            : v.material || corrected
               ? "update"
               : "sources",
         score,
@@ -375,7 +377,7 @@ export function digest(items: Item[], days: string[]) {
             .filter((e) => e.kind === "web")
             .map((e) => `- ${e.locator}`)
             .join("\n") + "\n\n";
-        if (localDay(i.updatedAt) > days.at(-1)!)
+        if (i.version > 1 && localDay(i.updatedAt) > days.at(-1)!)
           text += `后续补充：${i.updatedAt}\n\n`;
       }
     }
@@ -396,14 +398,36 @@ export function canonicalUrl(value: string) {
 }
 
 export function runSummary(r: Run) {
-  const { background, candidates, ...rest } = r;
+  const { background, instructions, candidates, leads, budget, reuse, ...rest } = r;
   return structuredClone({
     ...rest,
+    ...(budget ? { budget: budgetTotals(budget) } : {}),
+    ...(reuse ? { reuse: {...reuse, priorCoverage: undefined} } : {}),
+    ...(leads
+      ? {
+          leadStats: {
+            total: leads.length,
+            unread: leads.filter((l) => l.state === "unread").length,
+            read: leads.filter((l) => l.state === "read").length,
+            submitted: leads.filter((l) => l.state === "submitted").length,
+            unavailable: leads.filter((l) => l.state === "unavailable").length,
+            deferred: leads.filter((l) => l.state === "deferred").length,
+          },
+          leads: [...leads]
+            .sort(
+              (a, b) =>
+                Number(b.priority === "high") - Number(a.priority === "high"),
+            )
+            .slice(0, 30)
+            .map(({ summary, ...lead }) => lead),
+        }
+      : {}),
     pending: candidates.filter((c) => !c.outcome).length,
     candidates: candidates.map((c) => ({
       id: c.id,
       title: c.article.title,
       action: c.action,
+      repairOf: c.repairOf,
       outcome: c.outcome ?? "pending",
     })),
   });
