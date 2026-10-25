@@ -26,41 +26,47 @@ export function createLibraryLinkTool(options: LibraryLinkOptions = {}): ToolDef
       // Model arguments are visible in the normal tool trace, but the actual POST
       // is bound to the current user message so an invented query cannot replace it.
       const prompt = options.getPrompt ? options.getPrompt() : args.prompt;
-      if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 64000) throw new Error("无法取得当前用户原文，未请求资料库。");
-      const timeout = AbortSignal.timeout(options.timeoutMs ?? 60000);
-      const abort = AbortSignal.any([timeout, ...(signal ? [signal] : [])]);
-      try {
-        abort.throwIfAborted();
-        const response = await (options.request ?? fetch)(ENDPOINT, {
-          method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ prompt }), signal: abort, redirect: "error",
-        });
-        if (!response.ok) { await response.body?.cancel(); throw new Error(`资料库接口返回 HTTP ${response.status}，请稍后重试。`); }
-        if (Number(response.headers.get("content-length")) > RESPONSE_LIMIT) { await response.body?.cancel(); throw new Error("资料库返回内容超过大小限制。"); }
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("资料库返回了空响应。");
-        const chunks: Uint8Array[] = []; let size = 0;
-        try {
-          while (true) {
-            abort.throwIfAborted();
-            const { value, done } = await reader.read(); if (done) break;
-            size += value.length;
-            if (size > RESPONSE_LIMIT) throw new Error("资料库返回内容超过大小限制。");
-            chunks.push(value);
-          }
-        } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-        let responseData;
-        try { responseData = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
-        catch { throw new Error("资料库未返回有效 JSON，未获取到可用检索结果。"); }
-        if (!responseData || typeof responseData !== "object" || Array.isArray(responseData)) throw new Error("资料库检索结果格式不正确。");
-        const details = { ok: true, prompt, response: responseData };
-        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
-      } catch (error) {
-        if (signal?.aborted) throw new Error("资料库链接检索已取消。");
-        if (timeout.aborted) throw new Error("资料库链接检索超时，请稍后重试。");
-        if (error instanceof TypeError) throw new Error("无法连接资料库链接服务，请稍后重试。");
-        throw error;
-      }
+      const response = await requestLibraryLinks(prompt, options, signal);
+      const details = { ok: true, prompt, response };
+      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   });
+}
+
+/** Shared fixed-endpoint transport for the Agent tool and explicit WeCom command. */
+export async function requestLibraryLinks(prompt: unknown, options: LibraryLinkOptions = {}, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 64000) throw new Error("无法取得当前用户原文，未请求资料库。");
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? 60000);
+  const abort = AbortSignal.any([timeout, ...(signal ? [signal] : [])]);
+  try {
+    abort.throwIfAborted();
+    const response = await (options.request ?? fetch)(ENDPOINT, {
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ prompt }), signal: abort, redirect: "error",
+    });
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`资料库接口返回 HTTP ${response.status}，请稍后重试。`); }
+    if (Number(response.headers.get("content-length")) > RESPONSE_LIMIT) { await response.body?.cancel(); throw new Error("资料库返回内容超过大小限制。"); }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("资料库返回了空响应。");
+    const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      while (true) {
+        abort.throwIfAborted();
+        const { value, done } = await reader.read(); if (done) break;
+        size += value.length;
+        if (size > RESPONSE_LIMIT) throw new Error("资料库返回内容超过大小限制。");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    let responseData;
+    try { responseData = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+    catch { throw new Error("资料库未返回有效 JSON，未获取到可用检索结果。"); }
+    if (!responseData || typeof responseData !== "object" || Array.isArray(responseData)) throw new Error("资料库检索结果格式不正确。");
+    return responseData as Record<string, unknown>;
+  } catch (error) {
+    if (signal?.aborted) throw new Error("资料库链接检索已取消。");
+    if (timeout.aborted) throw new Error("资料库链接检索超时，请稍后重试。");
+    if (error instanceof TypeError) throw new Error("无法连接资料库链接服务，请稍后重试。");
+    throw error;
+  }
 }

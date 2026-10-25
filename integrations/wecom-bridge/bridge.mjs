@@ -66,17 +66,18 @@ export class WecomBridge {
         job.oldSessionIds = [...new Set([this.store.data.conversations[who.key]?.sessionId, ...this.store.data.jobs.filter(old => old.key === who.key && live(old)).flatMap(old => [old.sessionId, ...(old.oldSessionIds ?? []), old.newSessionId])].filter(Boolean))];
         job.cancelledJobIds = this.store.data.jobs.filter(old => old.key === who.key && live(old)).map(old => old.id);
         scope.generation++; job.generation = scope.generation;
-        delete scope.awaitingUser; delete this.store.data.conversations[who.key];
+        delete scope.awaitingUser; delete scope.awaitingMode; delete this.store.data.conversations[who.key];
         for (const old of this.store.data.jobs) if (old.key === who.key && live(old)) {
           old.state = 'done'; old.finished = Date.now();
           this.jobControllers.get(old.id)?.abort();
         }
-      } else if (control.kind === 'open') scope.awaitingUser = who.userId;
-      else if (!['notice', 'welcome'].includes(control.kind)) {
-        delete scope.awaitingUser;
-        // A completed/cancelled input must not wait behind an unavailable role
-        // preview, nor receive that stale preview after its confirmation.
-        for (const old of this.store.data.jobs) if (old.key === who.key && live(old) && ['open', 'notice'].includes(old.control?.kind)) {
+      } else if (!['notice', 'welcome', 'balance'].includes(control.kind)) {
+        if (['open', 'openFiles'].includes(control.kind)) {
+          scope.awaitingUser = who.userId;
+          scope.awaitingMode = control.kind === 'openFiles' ? 'files' : 'role';
+        } else { delete scope.awaitingUser; delete scope.awaitingMode; }
+        // Input completion, cancellation and mode switches supersede stale previews.
+        for (const old of this.store.data.jobs) if (old.key === who.key && live(old) && ['open', 'openFiles', 'notice'].includes(old.control?.kind)) {
           old.state = 'done'; old.finished = Date.now(); this.jobControllers.get(old.id)?.abort();
         }
       }

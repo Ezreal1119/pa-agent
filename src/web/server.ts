@@ -1,3 +1,4 @@
+import { balanceCommand, libraryCommand } from "./wecom-commands.js";
 import { WecomRoles, roleScope, senderScope } from "./wecom-roles.js";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
@@ -120,6 +121,8 @@ export async function createWebServer(options: WebOptions = {}) {
     boundedSetting(options.maxConcurrentRuns ?? process.env.AGENT_MAX_CONCURRENT_RUNS ?? diskEnv.AGENT_MAX_CONCURRENT_RUNS, 2, 1, 8, "AGENT_MAX_CONCURRENT_RUNS"),
     boundedSetting(options.runQueueLimit ?? process.env.AGENT_RUN_QUEUE_LIMIT ?? diskEnv.AGENT_RUN_QUEUE_LIMIT, 8, 0, 100, "AGENT_RUN_QUEUE_LIMIT")
   );
+  const commandGate = new RunGate(2, 8);
+  const commandControllers = new Set<AbortController>();
   const promptStore = new PromptInstructionsStore(dataDir);
   const records = new Map<string, RecordState>();
   const deletedIds = new Set<string>();
@@ -449,6 +452,26 @@ export async function createWebServer(options: WebOptions = {}) {
             await wecomRoles.set(scope, method === "DELETE" ? undefined : input.text);
           }
           return json(res, 200, { text: await wecomRoles.get(scope) ?? null });
+        }
+        if (route === "/files" && method === "POST" || route === "/balance" && method === "GET") {
+          if (url.search) throw new HttpError(400, "Command query parameters are not supported.");
+          let prompt: string | undefined;
+          if (route === "/files") {
+            const input = await readBody(req);
+            if (Object.keys(input).some(key => key !== "prompt") || typeof input.prompt !== "string" || !input.prompt.trim() || input.prompt.length > 12000 || input.prompt.includes("\0")) throw new HttpError(400, "请输入不超过 12000 个字符的非空纯文本文件需求。");
+            if (!agentSettings.libraryLinks.enabled) throw new HttpError(403, "资料库链接工具已关闭，请管理员在 Agent 设置中启用。");
+            prompt = input.prompt;
+          }
+          const controller = new AbortController(); commandControllers.add(controller);
+          const disconnect = () => controller.abort(); res.on("close", disconnect);
+          const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(65000)]);
+          let release: (() => void) | undefined;
+          try {
+            release = await commandGate.acquire(signal);
+            const text = prompt !== undefined ? await libraryCommand(prompt, signal) : await balanceCommand(webConfig.apiKey, signal);
+            return json(res, 200, { text });
+          } catch (error) { throw new HttpError(424, redact(error)); }
+          finally { release?.(); res.off("close", disconnect); commandControllers.delete(controller); }
         }
         const owned = route.match(/^\/sessions\/([\w-]+)(?:\/(run|stop|files)(?:\/([a-f0-9-]{36}))?)?$/);
         const allowed = route === "/contacts" && method === "POST" || route === "/status" && method === "GET" || route === "/sessions" && method === "POST" || owned && (
@@ -1056,6 +1079,7 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
+    for (const controller of commandControllers) controller.abort();
     await autoSync.close();
     await autoSyncSocket.close();
     await research.close();

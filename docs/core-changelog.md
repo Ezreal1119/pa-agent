@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- WeCom新增公开两步 `/files` 查询：欢迎菜单列出命令，下一条需求逐字复用资料库API，无模型改写；新增隐藏 `/patrick_balance` 调用DeepSeek官方余额接口。等待模式持久化并兼容旧角色状态，复用命令隔离/清空/投递恢复；接口仅Bridge认证，保持工具开关和固定目的地址，外部查询限并发且失败由用户重试。见2026-10-25文件与余额命令记录。
+
 - Sync reports新增Settings，每天按北京时间对当前Incoming快照自动执行现有Sync，默认关闭；失败/待决等同名同哈希版本留待人工，新版本可再运行，空/忙跳过、超过50份串行分批、停止不继续剩余批次。复用导入timer设置helper，新增固定Auto-sync timer与私有本地触发；安装与验证见2026-10-25 Daily Auto-sync记录及docs/auto-sync.md。
 
 - PDF整页视觉检查仅在明确的页尾截断问题上增加一次相邻页复核，并以后一页独立识别中的续文核对后才登记成功；普通通过路径、旧成功缓存、其他格式和切块页保持原流程。见2026-10-25 PDF跨页续表记录。
@@ -1125,3 +1127,17 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - VPS安装：新增固定service/timer及scripts/install-auto-sync.sh；脚本安装root-owned独立helper、新模板/目录及匹配实际Web账号的User/Group和helper socket组权限，保持现有导入units/overrides及Auto-sync原启停状态，新安装不启用、不启动Sync、不重启主服务。管理员在当前维护结束后执行build、安装脚本与主服务restart，再从Settings设时开启；AGENT_DATA_DIR若仅在systemd定制需给新服务相同override。说明见docs/auto-sync.md。未提交、推送、部署或操作VPS。
 - 验证：Node22.23.2构建通过；首轮24项服务/HTTP/helper定向、扩展30项（UI和旧Library/WeCom）通过；最终串行全量466/466通过、零跳过，日志.data/debug/auto-sync-targeted.log、auto-sync-expanded.log及auto-sync-full.log。覆盖同版本跨重启不重试、改内容后新版本、失败不阻塞其他项、51份50+1批处理、busy/空/重复触发、停止剩余批次、快照变更拒绝、手动Re-Sync兼容、无配置和last-run恢复、真实Unix权限/活跃归属/不安全路径拒绝、CLI到Web真实本地调度、管理员/Origin/CSRF/机器权限、daily字段限制、timer source隔离/失败回滚、UI草稿/冲突/旧响应等。模型/规划器为mock，没有付费模型、正式知识或实际Linux timer验证。
 - 界面验证：隔离临时Web应用经真实浏览器登录，检查Settings位置、默认关闭、北京时间输入、显式保存反馈及布局；helper为内存mock，未执行systemd或定时任务。截图.data/debug/auto-sync-settings-preview.png；已关闭页面/预览进程并清理临时应用数据。bash -n、前端JS语法及git diff --check通过。Linux安装和实际下一次触发须在VPS执行说明命令后核验，不能把本机模拟当作已部署。
+
+
+## 2026-10-25：WeCom 文件与余额命令
+
+原因：用户要求欢迎菜单加入 `/files 获取相关资料，文件或者工具`，先发命令再输入需求，完整原文直接交给云端Library；另加隐藏 `/patrick_balance` 获取DeepSeek账户余额，不经过模型。
+
+行为与兼容性：
+
+- `/files` 与现有命令一样按前缀触发，忽略命令尾随文字；下一条不超过12000字符的非空纯文本逐字提交，仅POST `{prompt}`。`src/tools/library-link.ts` 抽出原有固定API传输供命令/模型工具共用，原工具的提示、参数、结果结构、超时与大小限制保持；不附加历史、角色、技能、记忆或附件。不下载文件，只展示实际HTTP(S)链接、标明候选/无结果，外部元数据仅作文本。
+- `/patrick_balance` 不列入欢迎菜单，固定GET官方 `/user/balance`，返回币种、总/赠送/充值余额和可用状态。沿用 `DEEPSEEK_API_KEY` 或直连DeepSeek时 `API_KEY` 的密钥选择，不转发第三方模型密钥；不依赖联网工具开关。隐藏不新增用户ACL。
+- Bridge在原有scope增加可选 `awaitingMode`，兼容旧 `awaitingUser` 为角色设置，保持机器人/私聊/群隔离。发起人消费下一条输入，取消退出，角色/文件模式切换淘汰旧预览；文件模式的“清除”不删除角色。`/welcome`、余额查询保留待输入模式及附件；`/clear` 继续范围版本取消和迟到投递拦截。原普通聊天和角色持久化不变。
+- 两个新增机器接口只接受Bridge Bearer，拒绝额外参数/字段；文件接口继续遵守资料库链接工具开关，复用超时/响应上限。独立2并发8等待，不占模型队列，断连/服务关闭取消请求。查询失败一次明确回复，用户手动重试；保存结果后投递重试不重新查接口。无新依赖、systemd或数据迁移；更新代码并构建后重启主Agent与Bridge，缺官方密钥时配置已有 `DEEPSEEK_API_KEY`。
+
+验证：Node22.23.2构建通过；52项本机相关测试通过，包括现有模型资料库工具回归、两步原文/前缀/纯文本校验、隔离/接管/取消、旧状态与重启、保留角色/附件、失败单次回复、投递恢复和清空取消，以及真实本地HTTP接口的认证、固定云端payload、密钥选择、工具开关、并发取消、无模型/会话创建。完整回归477/477通过、零失败/跳过，Bridge语法检查及 `git diff --check` 通过。使用模拟DeepSeek/Library/企微传输，未调用真实余额或云端Library，未部署VPS；真实企微投递及服务商可用性留待部署后验收。

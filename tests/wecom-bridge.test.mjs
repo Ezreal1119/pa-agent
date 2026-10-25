@@ -198,3 +198,78 @@ test('welcome preserves the conversation, saved style, pending attachments and u
  assert.equal(f.client.texts.at(-1),WELCOME);assert.deepEqual(f.store.data.conversations[keyOf('a')],before);assert.equal(f.roles.get(keyOf('a')),'saved style');assert.equal(f.store.data.scopes[keyOf('a')].awaitingUser,'a');assert.equal(f.store.data.scopes[keyOf('a')].generation,generation);assert.equal(f.runs.length,1);
  await f.bridge.receive('bot',message('a','replacement style'));await f.bridge.idle();assert.equal(f.roles.get(keyOf('a')),'replacement style');assert.equal(f.runs.length,1);
 });
+
+function commandApi(f, handler = async () => ({text:'文件\nhttps://files.example/sdk.zip'})) {
+ const original = f.api.json; const calls=[];
+ f.api.json=async(route,method,body,signal)=>{
+  if (['/files','/balance'].includes(route)) {calls.push({route,method,body,signal});return handler(route,body,signal);}
+  return original(route,method,body,signal);
+ };
+ return calls;
+}
+
+test('files requires the command first, ignores suffix, preserves raw next input and leaves model/session untouched',async t=>{
+ const f=await setup(t);const calls=commandApi(f);
+ assert.ok(WELCOME.includes('/files 获取相关资料，文件或者工具'));assert.ok(!WELCOME.includes('/patrick_balance'));
+ await f.bridge.receive('bot',message('a','/files 给我 K388Pro 的 SDK'));await f.bridge.idle();
+ assert.equal(calls.length,0);assert.match(f.client.texts.at(-1),/下一条需求/);
+ const raw='  给我K388Pro的SDK\n保留这些空格。  ';const input=message('a',raw);
+ await f.bridge.receive('bot',input);await f.bridge.receive('bot',input);await f.bridge.idle();
+ assert.equal(calls.length,1);assert.equal(calls[0].route,'/files');assert.equal(calls[0].method,'POST');assert.deepEqual(calls[0].body,{prompt:raw});
+ assert.equal(f.runs.length,0);assert.equal(f.sessions.size,0);assert.equal(f.client.files.length,0);
+ assert.equal(f.store.data.scopes[keyOf('a')].awaitingUser,undefined);
+ await f.bridge.receive('bot',message('a','ordinary'));await f.bridge.idle();assert.equal(f.runs.length,1);
+});
+
+test('files mode survives restart, validates pure text, cancels and never clears saved role',async t=>{
+ const f=await setup(t);const calls=commandApi(f);f.roles.set(keyOf('a'),'销售');
+ await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();await f.restart();
+ let downloads=0;f.bridge.download=async()=>{downloads++;throw new Error('must not download');};
+ for(const text of ['', 'x'.repeat(12001), 'bad\0input']) {await f.bridge.receive('bot',message('a',text));await f.bridge.idle();assert.match(f.client.texts.at(-1),/非空纯文本文件需求/);}
+ const quote=message('a','query');quote.body.quote={msgtype:'file',file:{url:'https://files.example/x'}};
+ const mixed=message('a','query');mixed.body.msgtype='mixed';mixed.body.mixed={msg_item:[{msgtype:'text',text:{content:'q'}},{msgtype:'file',file:{url:'https://files.example/x'}}]};
+ for(const input of [quote,mixed]) {await f.bridge.receive('bot',input);await f.bridge.idle();assert.equal(f.store.data.scopes[keyOf('a')].awaitingMode,'files');}
+ assert.equal(downloads,0);assert.equal(calls.length,0);
+ await f.bridge.receive('bot',message('a','清除'));await f.bridge.idle();assert.equal(calls[0].body.prompt,'清除');assert.equal(f.roles.get(keyOf('a')),'销售');
+ await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();await f.bridge.receive('bot',message('a','取消'));await f.bridge.idle();assert.equal(calls.length,1);assert.match(f.client.texts.at(-1),/已取消文件查询/);
+});
+
+test('files ownership is isolated by bot/private/group; mode switches supersede failed role previews',async t=>{
+ const f=await setup(t);const calls=commandApi(f);
+ await f.bridge.receive('bot',message('a','/files','g'));await f.bridge.idle();
+ await f.bridge.receive('bot',message('b','ordinary','g'));await f.bridge.idle();assert.equal(f.runs.length,1);assert.equal(calls.length,0);
+ await f.bridge.receive('other',message('a','ordinary','g'));await f.bridge.idle();
+ await f.bridge.receive('bot',message('a','ordinary'));await f.bridge.idle();assert.equal(f.runs.length,3);
+ await f.bridge.receive('bot',message('b','/files','g'));await f.bridge.idle();await f.bridge.receive('bot',message('b','group query','g'));await f.bridge.idle();assert.equal(calls[0].body.prompt,'group query');
+ const original=f.api.json;
+ f.api.json=async(route,...args)=>{if(route.startsWith('/role?'))throw new Error('preview offline');return original(route,...args);};
+ await f.bridge.receive('bot',message('a','/role'));await f.bridge.idle();assert.ok(f.store.data.jobs.some(job=>job.control?.kind==='open'&&job.state==='command'));
+ await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();assert.match(f.client.texts.at(-1),/下一条需求/);
+ await f.bridge.receive('bot',message('a','query'));await f.bridge.idle();assert.equal(calls.length,2);
+ f.api.json=original;await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();await f.bridge.receive('bot',message('a','/role'));await f.bridge.idle();await f.bridge.receive('bot',message('a','new role'));await f.bridge.idle();assert.equal(f.roles.get(keyOf('a')),'new role');
+});
+
+test('hidden balance preserves pending modes/uploads and legacy role state; lookups fail once without model or retry loops',async t=>{
+ const f=await setup(t);const calls=commandApi(f,async(route)=>{if(route==='/files')throw new ApiError(429,'请稍后重试');return{text:'CNY：12.34'};});
+ await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();await f.bridge.receive('bot',message('a','/patrick_balance'));await f.bridge.idle();
+ assert.equal(calls.length,1);assert.equal(calls[0].method,'GET');assert.equal(calls[0].body,undefined);assert.equal(f.store.data.scopes[keyOf('a')].awaitingMode,'files');
+ await f.bridge.receive('bot',message('a','query'));await f.bridge.idle();assert.match(f.client.texts.at(-1),/查询未完成/);assert.ok(f.store.data.jobs.every(job=>job.state==='done'));assert.equal(calls.length,2);assert.equal(f.runs.length,0);
+ f.store.data.scopes[keyOf('b')]={generation:0,awaitingUser:'b'};await f.store.save();await f.restart();
+ await f.bridge.receive('bot',message('b','/patrick_balance'));await f.bridge.idle();await f.bridge.receive('bot',message('b','legacy role'));await f.bridge.idle();assert.equal(f.roles.get(keyOf('b')),'legacy role');
+ const file=message('c','');file.body.msgtype='file';file.body.file={url:'https://files.example/pending'};await f.bridge.receive('bot',file);await f.bridge.idle();
+ const pending=JSON.stringify(f.store.data.conversations[keyOf('c')].pending);
+ await f.bridge.receive('bot',message('c','/patrick_balance'));await f.bridge.idle();assert.equal(JSON.stringify(f.store.data.conversations[keyOf('c')].pending),pending);
+});
+
+test('direct lookup result delivery survives restart without requery and reset cancels late results',async t=>{
+ const f=await setup(t);const calls=commandApi(f);await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();
+ const reply=f.client.replyStream;const send=f.client.sendMessage;
+ f.client.replyStream=async(...args)=>{if(args[3])throw new Error('delivery offline');return reply(...args);};f.client.sendMessage=async()=>{throw new Error('delivery offline');};
+ await f.bridge.receive('bot',message('a','SDK'));await f.bridge.idle();assert.equal(calls.length,1);
+ const job=f.store.data.jobs.find(job=>job.state==='delivering');assert.ok(job);job.retryAt=0;await f.store.save();f.client.replyStream=reply;f.client.sendMessage=send;
+ await f.restart();await f.bridge.idle();assert.equal(calls.length,1);assert.match(f.client.texts.at(-1),/sdk.zip/);
+ let aborted=false;let started=false;
+ f.api.json=async(route,method,body,signal)=>{if(route==='/files'){started=true;return new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>{aborted=true;reject(new Error('cancelled'));},{once:true});});}if(route==='/sessions')return{id:randomUUID()};return{};};
+ await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();await f.bridge.receive('bot',message('a','slow'));await until(()=>started);
+ const before=f.client.texts.length;await f.bridge.receive('bot',message('a','/clear'));await f.bridge.idle();assert.equal(aborted,true);assert.deepEqual(f.client.texts.slice(before),['已清除当前的会话历史。']);assert.equal(f.store.data.scopes[keyOf('a')].awaitingMode,undefined);
+});

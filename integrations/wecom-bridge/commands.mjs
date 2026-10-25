@@ -6,6 +6,7 @@ export const WELCOME = `Hi，我是 AI Patrick 🤖
 
 快捷命令：
 /role 设置我的角色和回答风格
+/files 获取相关资料，文件或者工具
 /clear 清空当前对话，保留角色设置
 
 直接发送问题即可，无需输入命令。`;
@@ -40,8 +41,15 @@ export function commandInput(body, scope, userId) {
   const text = parts.join('\n').trim();
   if (text.startsWith('/clear') || text === '/new' || text === '新建对话') return { kind: 'reset' };
   if (text.startsWith('/role')) return { kind: 'open' };
+  if (text.startsWith('/files')) return { kind: 'openFiles' };
+  if (text.startsWith('/patrick_balance')) return { kind: 'balance' };
   if (text.startsWith('/welcome')) return { kind: 'welcome' };
   if (scope.awaitingUser !== userId) return;
+  if (scope.awaitingMode === 'files') {
+    if (raw === undefined || body.quote || !text || raw.length > 12000 || raw.includes('\0')) return { kind: 'notice', text: '请发送不超过 12000 个字符的非空纯文本文件需求，或输入“取消”。' };
+    if (text === '取消') return { kind: 'cancelFiles' };
+    return { kind: 'filesQuery', text: raw };
+  }
   if (raw === undefined || body.quote || !text || raw.length > 12000 || raw.includes('\0')) return { kind: 'notice', text: '请发送不超过 12000 个字符的非空纯文本角色设置，或输入“取消”或“清除”。' };
   if (text === '取消') return { kind: 'cancel' };
   if (text === '清除') return { kind: 'clearRole' };
@@ -63,6 +71,21 @@ export async function processControl(bridge, job) {
     const route = `/role?scope=${encodeURIComponent(job.key)}`;
     let text;
     switch (job.control.kind) {
+      case 'openFiles': text = '请发送你需要的资料、文件或工具，例如“给我 K388Pro 的 SDK”。下一条需求会原样提交资料库；输入“取消”退出。'; break;
+      case 'cancelFiles': text = '已取消文件查询。'; break;
+      case 'filesQuery':
+      case 'balance': {
+        const files = job.control.kind === 'filesQuery';
+        await bridge.client(job.botId).replyStream(job.frame, job.streamId, files ? '正在查询资料库…' : '正在查询余额…', false).catch(() => {});
+        try {
+          text = (await bridge.api.json(files ? '/files' : '/balance', files ? 'POST' : 'GET', files ? { prompt: job.control.text } : undefined, signal)).text;
+          if (typeof text !== 'string' || !text.trim()) throw new Error('查询服务未返回有效结果。');
+        } catch (error) {
+          if (signal.aborted) throw error;
+          text = `查询未完成：${bridge.safeError(error)} 请重新发送 ${files ? '/files' : '/patrick_balance'} 重试。`;
+        }
+        break;
+      }
       case 'welcome': text = WELCOME; break;
       case 'open': text = rolePrompt((await bridge.api.json(route, 'GET', undefined, signal)).text); break;
       case 'set':
@@ -101,6 +124,9 @@ export async function processControl(bridge, job) {
     if (bridge.closing || !bridge.isCurrent(job)) return;
     // Idempotent role writes and persisted reset progress can safely retry. Do
     // not report success or allow later questions past a failed control.
+    if (job.state !== 'delivering' && ['filesQuery', 'balance'].includes(job.control?.kind)) {
+      job.result = { text: '查询未完成或已超时，请重新发送命令重试。', files: [] }; job.state = 'delivering';
+    }
     if (error.status >= 400 && error.status < 500 && ![409, 429].includes(error.status)) {
       job.result = { text: bridge.safeError(error), files: [] }; job.state = 'delivering';
     }

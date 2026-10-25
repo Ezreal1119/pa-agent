@@ -201,3 +201,59 @@ test('real Bridge clear archives old SDK history, resets actual model context an
  await send('/role');await send('清除');await send('/clear');await send('default fresh question');body=f.requests.at(-1);assert.ok(!systemOf(body).includes('User Role & Style'));assert.deepEqual(body.tools,tools);assert.deepEqual(body.messages.filter(message=>message.role==='user').map(message=>typeof message.content==='string'?message.content:message.content.filter(c=>c.type==='text').map(c=>c.text).join('')),['default fresh question']);
  assert.ok(replies.includes('已清除当前的会话历史。'));assert.ok((await f.api.json(`/sessions/${old}`)).messages.length>0);
 });
+
+test('explicit WeCom files/balance routes require bridge auth, use fixed upstreams without model/history and honor the library switch',async t=>{
+ const f=await setup(t,{webTools:{apiKey:'official-balance-secret',enabled:false}});const browser=await f.browser();
+ const original=globalThis.fetch;const outbound=[];let failure=false;
+ globalThis.fetch=async(url,init)=>{
+  if(String(url)==='https://tool-files.patrick-shenzhen.org/api/ai-search'){
+   outbound.push({url,init});if(failure)return new Response('private upstream detail',{status:503});
+   return Response.json({outcome:'matched',matches:[{name:'K388Pro SDK.zip',url:'https://files.example/sdk.zip?token=a%2Bb'}]});
+  }
+  if(String(url)==='https://api.deepseek.com/user/balance'){
+   outbound.push({url,init});assert.equal(init.headers.Authorization,'Bearer official-balance-secret');
+   return Response.json({is_available:true,balance_infos:[{currency:'CNY',total_balance:'12.34',granted_balance:'0.00',topped_up_balance:'12.34'}]});
+  }
+  return original(url,init);
+ };t.after(()=>{globalThis.fetch=original;});
+ const headers={Authorization:`Bearer ${TOKEN}`,'Content-Type':'application/json'};
+ assert.equal((await fetch(f.base+'/api/wecom/balance')).status,401);
+ assert.equal((await browser('/api/wecom/balance')).status,401);
+ assert.equal((await fetch(f.base+'/api/wecom/balance',{headers:{Authorization:'Bearer wrong'}})).status,401);
+ assert.equal((await fetch(f.base+'/api/wecom/balance',{headers:{...headers,Origin:'https://evil.example'}})).status,403);
+ assert.equal((await fetch(f.base+'/api/wecom/files',{method:'GET',headers})).status,403);
+ assert.equal((await fetch(f.base+'/api/wecom/balance',{method:'POST',headers,body:'{}'})).status,403);
+ assert.equal((await fetch(f.base+'/api/wecom/balance?apiKey=untrusted',{headers})).status,400);
+ for(const body of [{prompt:'x',history:'private'}, {prompt:''}, {prompt:'x\0'}, {prompt:'x'.repeat(12001)}, {prompt:7}])await assert.rejects(f.api.json('/files','POST',body),e=>e.status===400);
+ assert.equal(outbound.length,0);
+ const raw='  给我 K388Pro 的 SDK\n不要重写这条需求。  ';
+ const result=await f.api.json('/files','POST',{prompt:raw});assert.match(result.text,/sdk.zip\?token=a%2Bb/);
+ assert.equal(outbound.length,1);assert.deepEqual(JSON.parse(outbound[0].init.body),{prompt:raw});assert.equal(outbound[0].init.method,'POST');assert.equal(outbound[0].init.redirect,'error');assert.equal(outbound[0].init.headers.Authorization,undefined);
+ const info=await f.api.json('/balance');assert.match(info.text,/CNY：12.34/);assert.ok(!JSON.stringify(info).includes('secret'));assert.equal(outbound[1].init.body,undefined);
+ assert.equal(f.requestCount,0);assert.deepEqual((await(await browser('/api/sessions')).json()).sessions,[]);
+ failure=true;await assert.rejects(f.api.json('/files','POST',{prompt:'try once'}),e=>e.status===424&&/HTTP 503/.test(e.message)&&!e.message.includes('private upstream'));
+ assert.equal(outbound.length,3);
+ const preferences=(await(await browser('/api/agent-settings')).json()).settings;preferences.libraryLinks.enabled=false;
+ assert.equal((await browser('/api/agent-settings','PUT',preferences)).status,200);
+ await assert.rejects(f.api.json('/files','POST',{prompt:'disabled'}),e=>e.status===403&&/已关闭/.test(e.message));assert.equal(outbound.length,3);
+ await f.api.json('/balance');assert.equal(outbound.length,4);assert.equal(f.requestCount,0);
+});
+
+test('balance never forwards a third-party model key when no official key is selected',async t=>{
+ const f=await setup(t,{webTools:{apiKey:'',enabled:false}});const original=globalThis.fetch;let external=0;
+ globalThis.fetch=async(url,init)=>{if(String(url).startsWith('https://')){external++;throw new Error('must not request');}return original(url,init);};t.after(()=>{globalThis.fetch=original;});
+ await assert.rejects(f.api.json('/balance'),e=>e.status===424&&e.message.includes('DEEPSEEK_API_KEY')&&!e.message.includes('FAKE_TEST_KEY'));assert.equal(external,0);assert.equal(f.requestCount,0);
+});
+
+test('direct commands use separate bounded capacity and cancel disconnected queued queries',async t=>{
+ const f=await setup(t);const original=globalThis.fetch;const releases=[];let calls=0;
+ globalThis.fetch=async(url,init)=>{
+  if(String(url)==='https://tool-files.patrick-shenzhen.org/api/ai-search'){
+   calls++;return new Promise((resolve,reject)=>{releases.push(()=>resolve(Response.json({outcome:'no_match',matches:[]})));init.signal.addEventListener('abort',()=>reject(init.signal.reason),{once:true});});
+  }return original(url,init);
+ };t.after(()=>{globalThis.fetch=original;});
+ const a=f.api.json('/files','POST',{prompt:'a'}),b=f.api.json('/files','POST',{prompt:'b'});await waitFor(()=>calls===2);
+ const controller=new AbortController();const c=f.api.json('/files','POST',{prompt:'c'},controller.signal);const cancelled=c.catch(e=>e);
+ await new Promise(r=>setTimeout(r,30));assert.equal(calls,2);assert.equal((await f.api.json('/status')).queue.active,0);
+ controller.abort();await cancelled;await new Promise(r=>setTimeout(r,30));for(const release of releases)release();await Promise.all([a,b]);assert.equal(calls,2);
+});
