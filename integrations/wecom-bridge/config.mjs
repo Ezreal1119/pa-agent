@@ -16,7 +16,7 @@ export function bridgeConfig(env, cwd) {
   const notifyUserId = env.WECOM_NOTIFY_USER_ID?.trim() || '';
   for (const value of [notifyUserId, ...bots.map(bot => bot.notifyUserId ?? '')]) if (typeof value !== 'string' || value.length > 256 || /[\s\u0000-\u001f\u007f]/.test(value)) throw new Error('WECOM_NOTIFY_USER_ID / notifyUserId 必须是有效的企微用户标识。');
   const dataDir = path.resolve(cwd, env.AGENT_DATA_DIR || '.data');
-  return { enabled, bots, notifyUserId, dataDir, directory: path.join(dataDir, 'wecom'), apiUrl: env.WECOM_AGENT_URL || `http://127.0.0.1:${env.WEB_PORT || 4321}`, token: env.WECOM_API_TOKEN,
+  return { enabled, bots, notifyUserId, balanceNotifications: Boolean(notifyUserId), dataDir, directory: path.join(dataDir, 'wecom'), apiUrl: env.WECOM_AGENT_URL || `http://127.0.0.1:${env.WEB_PORT || 4321}`, token: env.WECOM_API_TOKEN,
     concurrency: number(env.WECOM_MAX_CONCURRENT_RUNS, 2, 1, 8, 'WECOM_MAX_CONCURRENT_RUNS'),
     queueLimit: number(env.WECOM_QUEUE_LIMIT, 8, 1, 100, 'WECOM_QUEUE_LIMIT'),
     maxFileBytes: Math.min(number(env.FILE_MAX_BYTES, 30 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER, 'FILE_MAX_BYTES'), 30 * 1024 * 1024),

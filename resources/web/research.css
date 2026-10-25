@@ -182,7 +182,12 @@ button:disabled {
   color: #718073;
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   padding: 3px 0;
+}
+.coverage-row > span:last-child {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .run {
   display: block;

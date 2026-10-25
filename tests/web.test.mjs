@@ -676,7 +676,7 @@ test('master-free preferences preserve legacy effective states and enable a sing
 
 test('all Web pages and fixed scripts use English and settings contain only individual tool switches', async t=>{
  const f=await fixture(t,false);
- for(const route of ['/','/login','/wecom-contacts','/app.js','/login.js','/contacts.js']){
+ for(const route of ['/','/login','/wecom-contacts','/synchronize','/research','/app.js','/login.js','/contacts.js','/research.js']){
   const response=await f.request(route,'GET',undefined,route==='/login'?{Cookie:''}:{});assert.equal(response.status,200,route);const body=await response.text();assert.doesNotMatch(body,/\p{Script=Han}/u,route);
   if(route.endsWith('.js'))continue;assert.match(body,/<html lang="en-US">/);
   if(route==='/'){assert.ok(!body.includes('id="web-tools-enabled"'));assert.ok(!body.includes('id="file-tools-enabled"'));assert.match(body,/Enable web search/);assert.match(body,/Enable page fetching/);}

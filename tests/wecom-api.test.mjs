@@ -257,3 +257,29 @@ test('direct commands use separate bounded capacity and cancel disconnected queu
  await new Promise(r=>setTimeout(r,30));assert.equal(calls,2);assert.equal((await f.api.json('/status')).queue.active,0);
  controller.abort();await cancelled;await new Promise(r=>setTimeout(r,30));for(const release of releases)release();await Promise.all([a,b]);assert.equal(calls,2);
 });
+
+test('scheduled balance reaches only the global recipient through the real machine balance API without model work',async t=>{
+ const {BridgeStore}=await import('../integrations/wecom-bridge/store.mjs');
+ const {WecomBridge}=await import('../integrations/wecom-bridge/bridge.mjs');
+ const {bridgeConfig}=await import('../integrations/wecom-bridge/config.mjs');
+ const f=await setup(t,{webTools:{apiKey:'scheduled-official-key',enabled:false}});
+ const original=globalThis.fetch;let queries=0;let releaseQuery;
+ globalThis.fetch=async(url,init)=>{
+  if(String(url)==='https://api.deepseek.com/user/balance'){
+   queries++;assert.equal(init.headers.Authorization,'Bearer scheduled-official-key');assert.equal(init.method,'GET');
+   await new Promise(resolve=>{releaseQuery=resolve;});
+   return Response.json({is_available:true,balance_infos:[{currency:'CNY',total_balance:'123.45',granted_balance:'0.00',topped_up_balance:'123.45'}]});
+  }return original(url,init);
+ };
+ const sent=[];const client={async sendMessage(target,body){sent.push({target,body});},disconnect(){}};
+ const store=await new BridgeStore(path.join(f.dataDir,'scheduled-bridge')).open();let now=Date.parse('2026-10-25T14:59:00+08:00');
+ const config=bridgeConfig({WECOM_ENABLED:'true',WECOM_BOTS:'[{"botId":"bot","secret":"s","notifyUserId":"wrong-person"}]',WECOM_NOTIFY_USER_ID:'owner',WECOM_API_TOKEN:TOKEN},f.root);
+ const bridge=new WecomBridge({config,store,api:f.api,clients:new Map([['bot',client]]),balanceNow:()=>now,log:{warn(){},error(){}}});await bridge.start();bridge.authenticated('bot');
+ f.beforeCleanup(async()=>{releaseQuery?.();await bridge.close();globalThis.fetch=original;});
+ now=Date.parse('2026-10-25T15:00:00+08:00');const pending=bridge.balanceNotifier.pump();await waitFor(()=>queries===1);
+ assert.deepEqual((await f.api.json('/status')).queue.active,0);
+ assert.deepEqual((await f.api.json('/sessions','POST',{})).id.length,36,'ordinary backend access remains responsive during the lookup');
+ releaseQuery();await pending;
+ assert.equal(sent.length,1);assert.equal(sent[0].target,'owner');assert.match(sent[0].body.markdown.content,/CNY：123.45/);assert.match(sent[0].body.markdown.content,/北京时间 2026-10-25 15:00/);
+ await bridge.balanceNotifier.pump();assert.equal(queries,1);assert.equal(f.requestCount,0);assert.deepEqual(store.data.jobs,[]);
+});

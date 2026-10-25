@@ -140,6 +140,18 @@ Bridge 固定命令优先于模型队列和附件下载，不显示“AI Thinkin
 
 升级无新增依赖或systemd修改；更新代码、`npm run build` 后，先重启 `product-expert.service`，再重启 `wecom-bridge.service`。余额缺少官方密钥时在VPS `.env` 配置已有 `DEEPSEEK_API_KEY` 后重启主服务即可。完成后发送 `/welcome` 查看新菜单，再分别测试两步 `/files` 与隐藏余额命令。
 
+## 定时余额私聊通知
+
+Bridge 每天按**北京时间10、11、12、15、16、17、18、20、22点**，通过现有 `/balance` 接口查询DeepSeek官方余额并主动发送私聊，不调用模型，不需要电脑或网页在线。每15秒检查一次当前整点分钟，系统时区不影响计算；VPS、主Agent、Bridge及机器人长连接需正常运行。
+
+**收件人只取全局 `WECOM_NOTIFY_USER_ID`**。为空则完全关闭，绝不回退到群、历史对话、其他联系人或 `WECOM_BOTS[].notifyUserId`。多机器人时只由配置列表的第一个机器人发送一份；该机器人离线不会切换其他机器人。更改环境变量需重启Bridge。不要将群chatid填进此用户ID字段。
+
+每个时点在现有0600权限的 `.data/wecom/bridge-state.json` 中先保存 `balanceSchedule` 检查点，再查询/发送；重复检查、重连或同分钟重启不重复发，也不因系统时钟回拨补发。只记录最近时点和claimed/sent/failed/skipped状态，不保存余额正文、密钥或旧收件人。检查点无效时仅停用此项通知并记日志，保留聊天状态。服务关闭取消尚未完成的查询，断线后不发送迟到结果。
+
+错过整点分钟不补发；查询失败会向同一指定用户发送一次明确的失败提示，可手动用 `/patrick_balance` 查询。发送异常或崩溃后的不确定投递不自动重试，因此可能漏掉当次报送；下一个时点照常运行，避免重启后重复刷屏。正常发送确认后保存sent状态。通知独立于聊天任务，不改变 `/files`、`/role`、`/clear`、消息转发或模型队列。
+
+本次无新依赖、环境变量或systemd安装。如果上次余额命令已经部署，更新代码后只需 `systemctl restart wecom-bridge.service`。沿用已有 `WECOM_NOTIFY_USER_ID` 和DeepSeek官方密钥；不需要再配置timer或手动触发发送。如果上次新增 `/balance` 的后端尚未更新，先构建并重启 `product-expert.service`，再重启Bridge。真实企微收发需部署后在下一个时点验收。
+
 ## 重启与投递恢复
 
 运行数据使用权限 600 的原子 JSON 文件，放在 Git 忽略的 `.data/wecom/`：

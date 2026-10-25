@@ -88,7 +88,7 @@ test("research page and API require admin, preserve CSRF/origin, reject machine 
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  assert.match(await (await req("/research")).text(), /行业研究/);
+  assert.match(await (await req("/research")).text(), /Industry research/);
   assert.equal(
     (
       await req(

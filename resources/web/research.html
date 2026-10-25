@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en-US">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>行业研究 · UROVO</title>
+    <title>Industry research · UROVO</title>
     <link rel="icon" href="/favicon.png" />
     <link rel="stylesheet" href="/research.css" />
     <script src="/research.js" defer></script>
@@ -12,60 +12,60 @@
     <main>
       <header>
         <div>
-          <a class="back" href="/">← 返回产品助手</a>
+          <a class="back" href="/">← Back to Product Expert</a>
           <p class="eyebrow">UROVO · MARKET INTELLIGENCE</p>
-          <h1>行业研究</h1>
-          <p class="muted">从客户的作业现场，看见产品的机会。</p>
+          <h1>Industry research</h1>
+          <p class="muted">Discover product opportunities in real customer workflows.</p>
         </div>
-        <span class="badge">每日情报库</span>
+        <span class="badge">Daily intelligence library</span>
       </header>
-      <section class="controls" aria-label="研究与查询">
-        <label>截止日期<input type="date" id="end-date" required /></label
+      <section class="controls" aria-label="Research and browsing">
+        <label>End date<input type="date" id="end-date" required /></label
         ><label
-          >浏览范围<select id="days">
-            <option value="14">十四天</option>
-            <option value="7">七天</option>
-            <option value="1">单日</option>
+          >Browse range<select id="days">
+            <option value="14">14 days</option>
+            <option value="7">7 days</option>
+            <option value="1">Single day</option>
           </select></label
         ><label
-          >场景<select id="scene">
-            <option value="">全部场景</option>
+          >Scenario<select id="scene">
+            <option value="">All scenarios</option>
           </select></label
         ><label
-          >标签<input id="tag" placeholder="如 RFID" maxlength="100" /></label
-        ><button id="browse">查询</button
-        ><button id="start" class="primary">开始十四天研究</button
-        ><button id="stop" disabled>提前收尾</button
-        ><a id="export" class="button" href="#">导出 Markdown</a>
+          >Tag<input id="tag" placeholder="e.g. RFID" maxlength="100" /></label
+        ><button id="browse">Browse</button
+        ><button id="start" class="primary">Start 14-day research</button
+        ><button id="stop" disabled>Wrap up early</button
+        ><a id="export" class="button" href="#">Export Markdown</a>
       </section>
       <p id="range" class="muted"></p>
       <p id="notice" role="status" aria-live="polite"></p>
-      <section id="progress" class="panel" aria-label="研究进度">
-        <h2>研究进度</h2>
-        <p class="muted">尚未运行</p>
+      <section id="progress" class="panel" aria-label="Research progress">
+        <h2>Research progress</h2>
+        <p class="muted">No runs yet</p>
       </section>
       <div class="workspace">
         <aside class="panel">
-          <h2>每日覆盖</h2>
-          <p class="muted">空白日期不代表没有行业活动。</p>
+          <h2>Daily coverage</h2>
+          <p class="muted">Blank dates do not mean there was no industry activity.</p>
           <div id="coverage"></div>
-          <h2>运行记录</h2>
+          <h2>Run history</h2>
           <div id="runs"></div>
         </aside>
-        <section aria-label="行业资讯">
+        <section aria-label="Industry news">
           <div class="section-title">
-            <h2>资讯与销售参考</h2>
+            <h2>News and sales insights</h2>
             <span id="count" class="muted"></span>
           </div>
           <div id="items"></div>
         </section>
       </div>
       <dialog id="detail">
-        <button id="detail-close" aria-label="关闭详情">关闭</button>
+        <button id="detail-close" aria-label="Close details">Close</button>
         <div id="detail-body"></div>
       </dialog>
       <footer>
-        仅收录通过证据核对与独立审核的资讯。销售参考中的适用性与集成条件仍需结合客户现场验证。
+        Only news that passes evidence checks and independent review is included. Validate applicability and integration requirements against the customer’s actual workflow.
       </footer>
     </main>
   </body>

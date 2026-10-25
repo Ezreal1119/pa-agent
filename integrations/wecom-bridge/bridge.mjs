@@ -6,14 +6,15 @@ import { AgentUnavailableError, AGENT_UNAVAILABLE_MESSAGE } from './api.mjs';
 import { downloadMedia } from './media.mjs';
 import { MessageObserver, notificationInput } from './notifications.mjs';
 import { commandInput, processControl } from './commands.mjs';
+import { BalanceNotifier } from './balance-notifications.mjs';
 
 const live = job => !['done', 'interrupted'].includes(job.state);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /** Transport and Agent API are injectable: tests never connect real bots or models. */
 export class WecomBridge {
-  constructor({ config, store, api, clients, download = downloadMedia, log = console }) {
-    Object.assign(this, { config, store, api, clients, download, log });
+  constructor({ config, store, api, clients, download = downloadMedia, log = console, balanceNow = Date.now }) {
+    Object.assign(this, { config, store, api, clients, download, log, balanceNow });
     this.active = new Map(); this.controlActive = new Map(); this.jobControllers = new Map(); this.progress = new Map(); this.connected = new Set(); this.mediaTail = Promise.resolve(); this.controllers = new Set(); this.receiving = new Set(); this.closing = false;
   }
   scope(key) { this.store.data.scopes ??= {}; return this.store.data.scopes[key] ??= { generation: 0 }; }
@@ -38,9 +39,14 @@ export class WecomBridge {
     await this.maintenance();
     this.timer = setInterval(() => { void this.maintenance().catch(error => this.log.error('WeCom maintenance:', error.message)); }, 60 * 60000);
     this.timer.unref?.();
+    if (this.config.balanceNotifications) {
+      this.balanceNotifier = new BalanceNotifier({ store: this.store, api: this.api, clients: this.clients,
+        botId: this.config.bots[0]?.botId, recipient: this.config.notifyUserId,
+        isConnected: botId => this.connected.has(botId), now: this.balanceNow, log: this.log }).start();
+    }
     this.retryTimer = setInterval(() => this.pump(), 1000); this.retryTimer.unref?.();
   }
-  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); }
+  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); }
   disconnected(botId) { this.connected.delete(botId); }
   client(botId) { const client = this.clients.get(botId); if (!client) throw new Error('机器人配置不存在。'); return client; }
   async send(job, text) {
@@ -312,7 +318,7 @@ export class WecomBridge {
   async shutdown() {
     this.closing = true; clearInterval(this.timer); clearInterval(this.retryTimer);
     for (const controller of this.controllers) controller.abort();
-    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving]);
+    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close()]);
     for (const client of this.clients.values()) client.disconnect();
     await this.observer?.close();
     await this.store.save(); await this.store.close();

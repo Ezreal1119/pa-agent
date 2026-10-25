@@ -1,21 +1,21 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const sceneNames = {
-  retail: "零售门店",
-  logistics: "仓储物流",
-  coldChain: "冷链",
-  manufacturing: "工业制造",
-  field: "医疗与现场服务",
-  payment: "支付与移动收款",
-  management: "跨行业设备管理",
+  retail: "Retail stores",
+  logistics: "Warehousing and logistics",
+  coldChain: "Cold chain",
+  manufacturing: "Manufacturing",
+  field: "Healthcare and field services",
+  payment: "Payments and mobile checkout",
+  management: "Cross-industry device management",
 };
 const states = {
-  running: "研究中",
-  reviewing: "独立审核中",
-  wrapping: "正在收尾",
-  completed: "已完成",
-  failed: "运行失败",
-  interrupted: "已中断",
+  running: "Researching",
+  reviewing: "Independent review",
+  wrapping: "Wrapping up",
+  completed: "Completed",
+  failed: "Failed",
+  interrupted: "Interrupted",
 };
 let token = "",
   activeId = null,
@@ -45,10 +45,10 @@ async function api(url, options = {}) {
   });
   if (r.status === 401) {
     location.href = "/login";
-    throw new Error("请重新登录");
+    throw new Error("Please sign in again.");
   }
   const data = await r.json();
-  if (!r.ok) throw new Error(data.error ?? "请求失败");
+  if (!r.ok) throw new Error(data.error ?? "Request failed.");
   return data;
 }
 function params() {
@@ -63,40 +63,40 @@ async function browse() {
   const p = params();
   const data = await api("/api/research/items?" + p);
   $("range").textContent =
-    `浏览 ${data.days[0]} 至 ${data.days.at(-1)}；新研究始终覆盖截止日期在内的十四天。`;
+    `Browsing ${data.days[0]} to ${data.days.at(-1)}. New research always covers the 14 days ending on the selected date.`;
   $("export").href =
     "/api/research/export?" +
     new URLSearchParams({
       endDate: $("end-date").value,
       days: $("days").value,
     });
-  $("count").textContent = data.items.length + " 条资讯";
+  $("count").textContent = data.items.length + " news items";
   $("items").replaceChildren();
   for (const i of data.items) {
     const card = el("article", undefined, "card");
     card.append(
       el(
         "div",
-        `${i.date} · ${sceneNames[i.scene]} · ${i.score} 分${i.status !== "active" ? " · " + i.status : ""}`,
+        `${i.date} · ${sceneNames[i.scene]} · ${i.score} points${i.status !== "active" ? " · " + i.status : ""}`,
         "meta",
       ),
       el("h3", i.title),
       el("p", i.brief.news),
-      el("p", "销售参考：" + i.brief.sales, "sales"),
+      el("p", "Sales insights: " + i.brief.sales, "sales"),
     );
     if (i.tags.length) card.append(el("p", i.tags.join(" / "), "meta"));
     if (i.updatedAfterCutoff)
       card.append(
         el(
           "p",
-          "含截止日之后的补充：" +
-            new Date(i.updatedAt).toLocaleString("zh-CN", {
+          "Includes updates after the end date: " +
+            new Date(i.updatedAt).toLocaleString("en-US", {
               timeZone: "Asia/Shanghai",
             }),
           "meta",
         ),
       );
-    const b = el("button", "查看详情与依据 →");
+    const b = el("button", "View details and evidence →");
     b.onclick = () => showItem(i.id).catch(notice);
     card.append(b);
     $("items").append(card);
@@ -105,7 +105,7 @@ async function browse() {
     $("items").append(
       el(
         "div",
-        "这个范围暂无合格资讯。可查看每日覆盖，或运行一次研究。",
+        "No qualifying news in this range. Check daily coverage or start a research run.",
         "panel",
       ),
     );
@@ -120,10 +120,10 @@ async function browse() {
         el(
           "span",
           s.status === "found"
-            ? `${s.count} 条`
+            ? `${s.count} items`
             : s.status === "not_searched"
-              ? "未检索"
-              : "已检索无合格发现",
+              ? "Not searched"
+              : "Searched; no qualifying results",
         ),
       );
       box.append(row);
@@ -134,25 +134,25 @@ async function browse() {
 function progress(r) {
   const box = $("progress");
   box.replaceChildren(
-    el("h2", r ? "研究进度 · " + states[r.state] : "研究进度"),
+    el("h2", r ? "Research progress · " + states[r.state] : "Research progress"),
   );
   if (!r) {
-    box.append(el("p", "尚未运行", "muted"));
+    box.append(el("p", "No runs yet", "muted"));
     return;
   }
   box.append(
     el(
       "p",
-      `${r.days[0]} — ${r.endDate} · ${new Date(r.startedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
+      `${r.days[0]} — ${r.endDate} · ${new Date(r.startedAt).toLocaleString("en-US", { timeZone: "Asia/Shanghai" })}`,
       "meta",
     ),
   );
   const pills = el("div", undefined, "pills");
   for (const text of [
-    `搜索 ${r.metrics.search}`,
-    `网页读取 ${r.metrics.fetch}`,
-    `待审核 ${r.pending}`,
-    `本次入库/补充 ${r.checkpoints.reduce((n, p) => n + p.changes.length, 0)}`,
+    `Searches ${r.metrics.search}`,
+    `Pages read ${r.metrics.fetch}`,
+    `Pending review ${r.pending}`,
+    `Added or updated this run ${r.checkpoints.reduce((n, p) => n + p.changes.length, 0)}`,
   ])
     pills.append(el("span", text));
   box.append(pills);
@@ -160,7 +160,7 @@ function progress(r) {
     box.append(
       el(
         "p",
-        `${(p.elapsedMs / 60000).toFixed(1)} 分钟${p.final ? " · 最终审核" : ""}：增量 ${p.points} 分，${p.continued ? "继续研究" : "收尾"}。${p.error ?? p.review?.summary ?? "没有待审核候选。"}`,
+        `${(p.elapsedMs / 60000).toFixed(1)} min${p.final ? " · Final review" : ""}: +${p.points} points; ${p.continued ? "continuing research" : "wrapping up"}. ${p.error ?? p.review?.summary ?? "No candidates pending review."}`,
         "meta",
       ),
     );
@@ -169,9 +169,9 @@ function progress(r) {
   if (r.errors.length) box.append(el("p", r.errors.join("\n"), "meta"));
   if (r.candidates.length) {
     const more = el("details");
-    more.append(el("summary", "候选处理结果"));
+    more.append(el("summary", "Candidate results"));
     for (const c of r.candidates)
-      more.append(el("p", c.title + "：" + c.outcome, "meta"));
+      more.append(el("p", c.title + ": " + c.outcome, "meta"));
     box.append(more);
   }
 }
@@ -191,7 +191,7 @@ async function poll() {
     for (const r of state.runs) {
       const b = el(
         "button",
-        `${r.endDate} · ${states[r.state]}\n${new Date(r.startedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
+        `${r.endDate} · ${states[r.state]}\n${new Date(r.startedAt).toLocaleString("en-US", { timeZone: "Asia/Shanghai" })}`,
         "run",
       );
       b.onclick = () => {
@@ -218,14 +218,14 @@ async function showItem(id) {
     el("h2", i.article.title),
     el(
       "p",
-      `${i.article.disclosureDate} · ${sceneNames[i.article.scene]} · 版本 ${i.version} · ${i.score} 分`,
+      `${i.article.disclosureDate} · ${sceneNames[i.article.scene]} · Version ${i.version} · ${i.score} points`,
       "meta",
     ),
   );
-  line(b, "新闻摘要", i.article.brief.news);
+  line(b, "News summary", i.article.brief.news);
   line(
     b,
-    "事实与证据",
+    "Facts and evidence",
     i.article.facts
       .map(
         (f) =>
@@ -235,20 +235,20 @@ async function showItem(id) {
       )
       .join("\n\n"),
   );
-  line(b, "部署情况", i.article.deployment);
+  line(b, "Deployment", i.article.deployment);
   line(
     b,
-    "竞争信息 · " +
-      { confirmed: "已证实", inferred: "推断", undisclosed: "未披露" }[
+    "Competitive intelligence · " +
+      { confirmed: "Confirmed", inferred: "Inferred", undisclosed: "Undisclosed" }[
         i.article.competition.status
       ],
     i.article.competition.detail,
   );
-  line(b, "UROVO 业务关联", i.article.urovo.relevance);
+  line(b, "UROVO business relevance", i.article.urovo.relevance);
   if (i.article.urovo.productClaims.length)
     line(
       b,
-      "产品依据",
+      "Product evidence",
       i.article.urovo.productClaims
         .map(
           (p) =>
@@ -258,33 +258,33 @@ async function showItem(id) {
         )
         .join("\n\n"),
     );
-  line(b, "详细分析", i.article.detail.analysis);
-  line(b, "销售建议", i.article.detail.sales);
-  line(b, "待确认问题", i.article.detail.questions.join("\n") || "无");
-  line(b, "限制", i.article.detail.limitations.join("\n") || "无");
+  line(b, "Detailed analysis", i.article.detail.analysis);
+  line(b, "Sales recommendations", i.article.detail.sales);
+  line(b, "Open questions", i.article.detail.questions.join("\n") || "None");
+  line(b, "Limitations", i.article.detail.limitations.join("\n") || "None");
   const dimensions = {
-    relevance: "业务相关",
-    commercial: "商业参考",
-    evidence: "证据有效性",
-    importance: "行业重要度",
-    novelty: "新增信息",
+    relevance: "Business relevance",
+    commercial: "Commercial value",
+    evidence: "Evidence quality",
+    importance: "Industry significance",
+    novelty: "Novelty",
   };
   line(
     b,
-    "审核依据",
+    "Review rationale",
     i.review.reason +
       "\n" +
       Object.entries(i.review.scores)
-        .map(([k, v]) => dimensions[k] + "：" + v + " / 5")
+        .map(([k, v]) => dimensions[k] + ": " + v + " / 5")
         .join("\n"),
   );
-  b.append(el("h4", "来源与产品依据"));
+  b.append(el("h4", "Sources and product evidence"));
   for (const e of i.evidence) {
     const details = el("details");
     details.append(
       el(
         "summary",
-        `${e.kind === "web" ? "网页" : "内部产品资料"} · ${e.title}`,
+        `${e.kind === "web" ? "Web page" : "Internal product documents"} · ${e.title}`,
       ),
     );
     if (e.kind === "web") {
@@ -300,44 +300,44 @@ async function showItem(id) {
       } catch {}
     } else details.append(el("p", e.locator));
     details.append(
-      el("p", "读取时间：" + e.fetchedAt, "meta"),
+      el("p", "Retrieved at: " + e.fetchedAt, "meta"),
       el("pre", e.content),
     );
     b.append(details);
   }
-  b.append(el("h4", "修订记录"));
+  b.append(el("h4", "Revision history"));
   i.history.forEach((h, index) => {
     const version = el("details");
     version.append(
       el(
         "summary",
-        `版本 ${index + 1} · ${new Date(h.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} · ${h.reason}`,
+        `Version ${index + 1} · ${new Date(h.at).toLocaleString("en-US", { timeZone: "Asia/Shanghai" })} · ${h.reason}`,
       ),
     );
-    line(version, "当时的资讯", h.article.brief.news);
-    line(version, "当时的详细分析", h.article.detail.analysis);
-    line(version, "当时的销售建议", h.article.detail.sales);
+    line(version, "Previous news summary", h.article.brief.news);
+    line(version, "Previous detailed analysis", h.article.detail.analysis);
+    line(version, "Previous sales recommendations", h.article.detail.sales);
     line(
       version,
-      "当时的限制",
-      h.article.detail.limitations.join("\n") || "无",
+      "Previous limitations",
+      h.article.detail.limitations.join("\n") || "None",
     );
     b.append(version);
   });
   if (i.article.relatedIds.length) {
-    b.append(el("h4", "关联进展"));
+    b.append(el("h4", "Related developments"));
     for (const relatedId of i.article.relatedIds) {
-      const related = el("button", "查看关联事件 →");
+      const related = el("button", "View related event →");
       related.onclick = () => showItem(relatedId).catch(notice);
       b.append(related);
     }
   }
   if (!i.archived) {
-    const label = el("label", "归档原因");
+    const label = el("label", "Archive reason");
     const reason = el("input");
     reason.maxLength = 2000;
     label.append(reason);
-    const archive = el("button", "归档此条目");
+    const archive = el("button", "Archive this item");
     archive.onclick = async () => {
       try {
         await api("/api/research/items/" + id + "/archive", {
