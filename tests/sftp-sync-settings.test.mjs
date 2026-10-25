@@ -18,6 +18,7 @@ import {
   SFTP_TIMER,
   LIBRARY_TIMER,
   WECOM_TIMER,
+  SYNC_TIMER,
   scheduleSource,
   validateSchedule,
 } from "../dist/sftp-sync/schedule.js";
@@ -42,7 +43,7 @@ async function fakeTimer(t, source = "sftp") {
       ? LIBRARY_TIMER
       : source === "wecom"
         ? WECOM_TIMER
-        : SFTP_TIMER;
+        : source === "sync" ? SYNC_TIMER : SFTP_TIMER;
   const calendar =
     source === "library"
       ? "Mon *-*-* 06:00:00 Asia/Shanghai"
@@ -70,7 +71,7 @@ async function fakeTimer(t, source = "sftp") {
       throw Error(`fixture ${args[0]} failed`);
     }
     if (args[0] === "show")
-      return `LoadState=loaded\nActiveState=${active ? "active" : "inactive"}\nUnitFileState=${enabled ? "enabled" : "disabled"}\nTimersCalendar={ OnCalendar=${loaded} ; next_elapse=n/a }\nTimersMonotonic=${monotonic}\nNextElapseUSecRealtime=${active ? "@1792706400" : "n/a"}\nTriggers=${trigger}\n`;
+      return `LoadState=loaded\nActiveState=${active ? "active" : "inactive"}\nUnitFileState=${enabled ? "enabled" : "disabled"}\nTimersCalendar={ OnCalendar=${loaded} ; next_elapse=n/a }\nTimersMonotonic=${monotonic}\nNextElapseUSecRealtime=${active ? "@1792706400" : "n/a"}\nTriggers=${trigger}\nPersistent=${source === "sync" ? "no" : "yes"}\n`;
     if (args[0] === "cat")
       return `[Timer]\nOnCalendar=${calendar}\n${external}\n${await fs
         .readFile(file, "utf8")
@@ -267,6 +268,19 @@ test("timer writes only a reset OnCalendar drop-in, applies weekly/paused settin
     ["show", "cat"],
     "unchanged schedule does not restart the timer",
   );
+});
+
+test("Auto-sync reuses the fixed timer helper, enforces daily time and disables catch-up without changing import timers", async t => {
+  const f = await fakeTimer(t, "sync");
+  const before = await f.manager.read();
+  assert.equal(before.unit, SYNC_TIMER);
+  assert.equal(before.editable, true);
+  const after = await f.manager.save({ enabled: false, frequency: "daily", time: "08:30" }, before.revision);
+  assert.equal(after.enabled, false);
+  assert.match(await fs.readFile(f.file, "utf8"), /Persistent=false/);
+  assert.match(await fs.readFile(f.file, "utf8"), /08:30:00 Asia\/Shanghai/);
+  await assert.rejects(f.manager.save(weekly, after.revision), /daily Beijing/);
+  assert(f.calls.every(args => !args.some(a => [SFTP_TIMER,LIBRARY_TIMER,WECOM_TIMER].includes(a))));
 });
 
 test("timer rejects injection, stale revisions, unknown operations and unsupported timer configuration", async (t) => {

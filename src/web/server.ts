@@ -50,12 +50,14 @@ import { createClassifier } from "../library-import/classifier.js";
 import { SftpSyncService } from "../sftp-sync/service.js";
 import { sftpConfig } from "../sftp-sync/config.js";
 import { MAX_PATHS_BYTES } from "../sftp-sync/paths-editor.js";
-import { ScheduleError, SftpScheduleClient } from "../sftp-sync/schedule.js";
+import { ScheduleError, SftpScheduleClient, validateSchedule } from "../sftp-sync/schedule.js";
 import { ResearchService } from "../research/service.js";
 import { createResearchEngine, type ResearchEngine } from "../research/agent.js";
 import { researchRoute } from "../research/routes.js";
 import { ResearchError, config as researchConfig, type ResearchConfig } from "../research/domain.js";
 import { SyncService } from "../knowledge-sync/service.js";
+import { AutoSync } from "../knowledge-sync/auto-sync.js";
+import { AutoSyncSocket, autoSyncSocketPath } from "../knowledge-sync/auto-sync-socket.js";
 import { KnowledgeLibrary, LIBRARY_MAX_EDIT_BYTES } from "../knowledge-sync/library.js";
 import { SYNC_MAX_FILE_BYTES } from "../knowledge-sync/config.js";
 import { createPlanner, type Planner } from "../knowledge-sync/agent.js";
@@ -70,7 +72,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -150,6 +152,10 @@ export async function createWebServer(options: WebOptions = {}) {
       vision: { ...fileConfig.vision, timeoutMs: Math.max(fileConfig.vision.timeoutMs, 180_000) },
     }, syncEnv.SYNC_SOFFICE_COMMAND || "soffice", syncVision, signal => runGate.acquire(signal))) });
   await synchronize.init();
+  const autoSync = new AutoSync(synchronize, () => configured() && auth.configured, redact);
+  await autoSync.init();
+  const autoSyncSocket = new AutoSyncSocket(autoSyncSocketPath(dataDir), () => autoSync.trigger());
+  const autoSyncSchedule = options.autoSyncSchedule ?? new SftpScheduleClient(undefined, "sync");
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
   const sftpSync = new SftpSyncService({dataDir, config:sftpOptions});
   await sftpSync.init();
@@ -643,6 +649,17 @@ export async function createWebServer(options: WebOptions = {}) {
       if (url.pathname.startsWith("/api/sync/")) {
         if (machine) throw new HttpError(403, "Maintenance requires administrator login.");
         const route = url.pathname.slice("/api/sync/".length);
+        if (route === "settings/schedule" && method === "GET") return json(res, 200, {
+          ...await autoSyncSchedule.status(), ...autoSync.status(), trigger: autoSyncSocket.status(),
+        });
+        if (route === "settings/schedule" && method === "PUT") {
+          const body = await readBody(req);
+          if (Object.keys(body).length !== 2 || !Object.hasOwn(body, "schedule") || !Object.hasOwn(body, "revision")) throw new HttpError(400, "Save accepts only schedule and its opened revision.");
+          const schedule = validateSchedule(body.schedule);
+          if (schedule.frequency !== "daily") throw new HttpError(400, "Auto-sync uses a daily Beijing-time schedule.");
+          if (schedule.enabled && (!configured() || !autoSyncSocket.status().available)) throw new HttpError(409, "Configure the model and make the private Auto-sync trigger available before enabling it.");
+          return json(res, 200, { ...await autoSyncSchedule.save(schedule, body.revision), ...autoSync.status(), trigger: autoSyncSocket.status() });
+        }
         if (route === "library" && method === "GET") return json(res, 200, { files: await library.tree(), maxEditBytes: LIBRARY_MAX_EDIT_BYTES });
         if (route === "library/file" && method === "GET") return json(res, 200, await library.read(url.searchParams.get("path") ?? ""));
         if (route === "library/file" && method === "PUT") {
@@ -1010,6 +1027,7 @@ export async function createWebServer(options: WebOptions = {}) {
         "/synchronize-wecom-imports.js": [path.join(resourcesDir, "web/synchronize-wecom-imports.js"), "text/javascript; charset=utf-8"],
         "/synchronize-wecom-settings.js": [path.join(resourcesDir, "web/synchronize-wecom-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize-library-settings.js": [path.join(resourcesDir, "web/synchronize-library-settings.js"), "text/javascript; charset=utf-8"],
+        "/synchronize-auto-settings.js": [path.join(resourcesDir, "web/synchronize-auto-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize-sftp-settings.js": [path.join(resourcesDir, "web/synchronize-sftp-settings.js"), "text/javascript; charset=utf-8"],
         "/synchronize.css": [path.join(resourcesDir, "web/synchronize.css"), "text/css; charset=utf-8"],
         "/contacts.js": [path.join(resourcesDir, "web/contacts.js"), "text/javascript; charset=utf-8"],
@@ -1038,6 +1056,8 @@ export async function createWebServer(options: WebOptions = {}) {
   });
   server.requestTimeout = 60000;
   async function close() {
+    await autoSync.close();
+    await autoSyncSocket.close();
     await research.close();
     const wecomClosing = wecomImports.close();
     const libraryClosing = libraryImports.close();
@@ -1050,6 +1070,7 @@ export async function createWebServer(options: WebOptions = {}) {
     await libraryClosing;
     await sftpClosing;
     await syncClosing;
+    await autoSync.wait();
     await memoryClosing;
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
@@ -1057,5 +1078,6 @@ export async function createWebServer(options: WebOptions = {}) {
     server.closeAllConnections();
     if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
+  await autoSyncSocket.listen();
   return { server, close };
 }

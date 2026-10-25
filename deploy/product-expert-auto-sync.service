@@ -1,0 +1,30 @@
+[Unit]
+Description=Dispatch one snapshot of Incoming files to Product Expert Sync
+Requires=product-expert.service
+After=product-expert.service
+
+[Service]
+Type=oneshot
+# The installer adds the actual Web service User/Group in a drop-in.
+User=productexpert
+Group=productexpert
+WorkingDirectory=/opt/ProductExpertCloud
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --max-old-space-size=128 /opt/ProductExpertCloud/dist/knowledge-sync/auto-sync-cli.js
+TimeoutStartSec=150
+Restart=no
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+

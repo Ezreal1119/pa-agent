@@ -4,6 +4,8 @@
 
 基线：`170fa45c2bf00a00c3a9f904b6ebfc49b65754af`。
 
+- Sync reports新增Settings，每天按北京时间对当前Incoming快照自动执行现有Sync，默认关闭；失败/待决等同名同哈希版本留待人工，新版本可再运行，空/忙跳过、超过50份串行分批、停止不继续剩余批次。复用导入timer设置helper，新增固定Auto-sync timer与私有本地触发；安装与验证见2026-10-25 Daily Auto-sync记录及docs/auto-sync.md。
+
 - PDF整页视觉检查仅在明确的页尾截断问题上增加一次相邻页复核，并以后一页独立识别中的续文核对后才登记成功；普通通过路径、旧成功缓存、其他格式和切块页保持原流程。见2026-10-25 PDF跨页续表记录。
 
 - DOCX转换前字体检查仅排除可确认未使用的样式库条目，保留默认/继承/引用样式与正文、页眉页脚等实际部位的字体检查；引用不明确时保守回退完整样式检查。继续复用DOCX→PDF→识别链路，不替换缺失字体。见2026-10-25 DOCX字体预检记录。
@@ -1112,3 +1114,14 @@ Core：新增共享提示词分区/组装模块和共享工具工厂，实际请
 - 兼容与交付：仅独立研究模块、测试、规则和文档；保留并行的SYNC/DOCX工作树修改。没有部署、重启VPS或导入验证数据；完整记录见 `dev-history/2026-10-25-industry-research.md`。
 
 - 收尾验证补记：类型检查、构建、19项研究定向与432项全量回归全部通过，零失败/跳过；页面JS语法与git diff --check通过。真实模型结果与本机模拟分开记录，不将隔离证据回放等同于完整重跑。
+
+
+## 2026-10-25 Daily Auto-sync
+
+- 原因与授权：管理员希望每天定时等同全选当前Incoming files启动现有Sync，失败/Needs your decision留待人工，浏览器无需开着；授权复用既有定时逻辑并提供VPS命令。本次在当前ProductExpertCloud实施，不改参考项目。
+- 调度与UI：Sync reports右上Settings提供每日北京时间、默认关闭开关、实际calendar/next trigger、最近运行结果；复用SftpScheduleClient/TimerManager的固定source白名单，新增sync→product-expert-auto-sync.timer，保留原revision、原子override、systemd核验/回滚及管理员Cookie/Origin/CSRF/machine隔离。仅Auto-sync要求daily和Persistent=false；原三种导入timer语义不变。新增drop-in路径为helper可选挂载，避免旧导入安装缺第四目录时失败。
+- 执行与恢复：oneshot CLI仅向现有Web进程的owner-only本地Unix socket提交固定run，不另建SyncService、不接收路径/IDs/决定/命令、不新增网络执行接口或凭据。后台按Incoming快照复用start，最多50份一批串行，普通手动50份限制不变；每批在原reservation内重核哈希和处理历史。迟到文件留待后续，空/忙/重复触发跳过；停止或关闭不再调度其余批次。依据全部现有Sync报告的文件名+sourceHash排除已处理版本，包括失败/待决/停止/中断/保留原件，避免原件留在Incoming后次日重试；新哈希仍可入选，人工Start/Re-Sync不受此排除。原转换、来源/版本/全文、入库、发布、旧整本删除及确认保护保持。
+- 持久化与边界：仅新增Git忽略auto-sync-last.json记录时间/选中/人工保留/无效数、report IDs、结果计数和脱敏错误，重启running记录标中断，不建持久重试队列。Socket位于私有knowledge-sync目录、0600；活跃socket不覆盖，同owner僵尸socket可恢复；不可用时普通Web/Sync仍启动，但设置禁止启用。未改env/依赖、普通聊天/Bridge/MCP或定时导入执行链。
+- VPS安装：新增固定service/timer及scripts/install-auto-sync.sh；脚本安装root-owned独立helper、新模板/目录及匹配实际Web账号的User/Group和helper socket组权限，保持现有导入units/overrides及Auto-sync原启停状态，新安装不启用、不启动Sync、不重启主服务。管理员在当前维护结束后执行build、安装脚本与主服务restart，再从Settings设时开启；AGENT_DATA_DIR若仅在systemd定制需给新服务相同override。说明见docs/auto-sync.md。未提交、推送、部署或操作VPS。
+- 验证：Node22.23.2构建通过；首轮24项服务/HTTP/helper定向、扩展30项（UI和旧Library/WeCom）通过；最终串行全量466/466通过、零跳过，日志.data/debug/auto-sync-targeted.log、auto-sync-expanded.log及auto-sync-full.log。覆盖同版本跨重启不重试、改内容后新版本、失败不阻塞其他项、51份50+1批处理、busy/空/重复触发、停止剩余批次、快照变更拒绝、手动Re-Sync兼容、无配置和last-run恢复、真实Unix权限/活跃归属/不安全路径拒绝、CLI到Web真实本地调度、管理员/Origin/CSRF/机器权限、daily字段限制、timer source隔离/失败回滚、UI草稿/冲突/旧响应等。模型/规划器为mock，没有付费模型、正式知识或实际Linux timer验证。
+- 界面验证：隔离临时Web应用经真实浏览器登录，检查Settings位置、默认关闭、北京时间输入、显式保存反馈及布局；helper为内存mock，未执行systemd或定时任务。截图.data/debug/auto-sync-settings-preview.png；已关闭页面/预览进程并清理临时应用数据。bash -n、前端JS语法及git diff --check通过。Linux安装和实际下一次触发须在VPS执行说明命令后核验，不能把本机模拟当作已部署。

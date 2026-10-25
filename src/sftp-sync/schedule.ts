@@ -11,12 +11,13 @@ export const SFTP_TIMER = "product-expert-sftp.timer";
 export const SFTP_SETTINGS_SOCKET = "/run/product-expert-sftp-settings.sock";
 export const LIBRARY_TIMER = "product-expert-library-import.timer";
 export const WECOM_TIMER = "product-expert-wecom-import.timer";
-export type ScheduleSource = "sftp" | "library" | "wecom";
+export const SYNC_TIMER = "product-expert-auto-sync.timer";
+export type ScheduleSource = "sftp" | "library" | "wecom" | "sync";
 export function scheduleSource(value: unknown): ScheduleSource {
   if (value === undefined || value === "sftp") return "sftp";
-  if (value === "library" || value === "wecom") return value;
+  if (value === "library" || value === "wecom" || value === "sync") return value;
   throw new ScheduleError(
-    "Only SFTP, Library and WeCom timer settings are supported.",
+    "Only SFTP, Library and WeCom import timers or Auto-sync timer settings are supported.",
   );
 }
 const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -135,7 +136,7 @@ export class SftpTimerManager {
         ? LIBRARY_TIMER
         : this.source === "wecom"
           ? WECOM_TIMER
-          : SFTP_TIMER;
+          : this.source === "sync" ? SYNC_TIMER : SFTP_TIMER;
     this.service = this.timer.replace(/\.timer$/, ".service");
     this.dropIn =
       dropIn ?? `/etc/systemd/system/${this.timer}.d/90-web-schedule.conf`;
@@ -144,7 +145,7 @@ export class SftpTimerManager {
     const properties = await this.command([
       "show",
       this.timer,
-      "--property=LoadState,ActiveState,UnitFileState,TimersCalendar,TimersMonotonic,NextElapseUSecRealtime,Triggers",
+      "--property=LoadState,ActiveState,UnitFileState,TimersCalendar,TimersMonotonic,NextElapseUSecRealtime,Triggers,Persistent",
     ]);
     const props = Object.fromEntries(
       properties
@@ -169,6 +170,7 @@ export class SftpTimerManager {
       calendars.length === 1 ? scheduleFor(calendar, enabled) : null;
     const editable =
       !!schedule &&
+      (this.source !== "sync" || (schedule.frequency === "daily" && props.Persistent === "no")) &&
       ["enabled", "disabled"].includes(props.UnitFileState ?? "") &&
       !props.TimersMonotonic?.trim() &&
       props.Triggers?.trim() === this.service;
@@ -239,8 +241,10 @@ export class SftpTimerManager {
     }
   }
   async save(value: unknown, revision: unknown) {
-    const schedule = validateSchedule(value),
-      before = await this.read();
+    const schedule = validateSchedule(value);
+    if (this.source === "sync" && schedule.frequency !== "daily")
+      throw new ScheduleError("Auto-sync supports a daily Beijing-time schedule only.");
+    const before = await this.read();
     if (!before.editable) throw new ScheduleError(before.note!, 409);
     if (typeof revision !== "string" || revision !== before.revision)
       throw new ScheduleError(
@@ -265,7 +269,7 @@ export class SftpTimerManager {
     const old = oldStat ? await fs.readFile(this.dropIn, "utf8") : null;
     // Write before touching the timer so permission/path failures cannot stop it.
     await this.write(
-      `[Timer]\nOnCalendar=\nOnCalendar=${calendarFor(schedule)}\nPersistent=true\n`,
+      `[Timer]\nOnCalendar=\nOnCalendar=${calendarFor(schedule)}\nPersistent=${this.source !== "sync"}\n`,
     );
     try {
       await this.command(["stop", this.timer]); // Never stop the running import service.

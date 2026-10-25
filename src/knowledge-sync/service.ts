@@ -434,7 +434,15 @@ export class SyncService {
       throw new SyncError("A maintenance task is already active.", 409);
     this.reserved = true;
   }
-  async start(ids: unknown) {
+  /** Scheduler metadata only; manual Sync selection and validation stay intact. */
+  wasAttempted(file: Incoming) {
+    return [...this.jobs.values()].some(job => job.kind === "sync" &&
+      job.items.some(item => item.name === file.name && item.sourceHash === file.sourceHash));
+  }
+  async waitFor(id: string) {
+    if (this.activeId === id) await this.active;
+  }
+  async start(ids: unknown, expected?: ReadonlyMap<string, string>) {
     if (
       !Array.isArray(ids) ||
       !ids.length ||
@@ -449,6 +457,8 @@ export class SyncService {
       const selected = ids.map((id) => {
         const file = incoming.find((f) => f.id === id);
         if (!file) throw new SyncError("Selected file no longer exists.", 409);
+        if (expected && (file.error || expected.get(id) !== file.sourceHash || this.wasAttempted(file)))
+          throw new SyncError("Scheduled input changed or was already handled; left for the next schedule or manual Sync.", 409);
         return file;
       });
       const job = this.newJob(

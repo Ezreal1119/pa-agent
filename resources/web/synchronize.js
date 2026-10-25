@@ -741,6 +741,7 @@ async function renderJob(job) {
   }
 }
 async function refresh() {
+  void globalThis.refreshAutoSyncSchedule?.();
   if (polling) return;
   polling = true;
   try {

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Product Expert Auto-sync (configure and enable in Web Settings)
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 Asia/Shanghai
+Persistent=false
+AccuracySec=1min
+Unit=product-expert-auto-sync.service
+
+[Install]
+WantedBy=timers.target

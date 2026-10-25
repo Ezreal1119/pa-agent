@@ -10,6 +10,7 @@
     <script src="/vendor/marked.js" defer></script>
     <script src="/vendor/purify.js" defer></script>
     <script src="/synchronize.js" defer></script>
+    <script src="/synchronize-auto-settings.js" defer></script>
     <script src="/synchronize-source-tabs.js" defer></script>
     <script src="/synchronize-library.js" defer></script>
     <script src="/synchronize-sftp-settings.js" defer></script>
@@ -37,7 +38,7 @@
             Turn new documents into an up-to-date product knowledge library.
           </p>
         </div>
-        <span class="sync-manual"><span></span>Manual sync</span>
+        <span class="sync-manual"><span></span><span id="sync-mode-label">Manual sync</span></span>
       </div>
       <nav class="sync-tabs" role="tablist" aria-label="Synchronize sections">
         <button
@@ -158,6 +159,7 @@
                 review.
               </p>
             </div>
+            <button id="auto-settings-open" class="sync-button sync-button-quiet" type="button">Settings</button>
           </div>
           <div id="reports-layout" class="sync-reports-layout is-empty">
             <nav
@@ -326,6 +328,23 @@
         <div class="sftp-settings-actions"><small id="library-schedule-unsaved" class="sync-subtle"></small><button id="library-schedule-save" type="button" class="sync-button sync-button-primary" disabled>Save schedule</button></div>
       </section>
       <div class="sftp-settings-footer"><button id="library-settings-close" type="button" class="sync-button">Close</button></div>
+    </dialog>
+    <dialog id="auto-settings-dialog" class="sftp-settings-dialog" aria-labelledby="auto-settings-title">
+      <div class="sftp-settings-title"><div><p class="sftp-settings-eyebrow">SYNC SETTINGS</p><h2 id="auto-settings-title">Auto-sync</h2><p>Run the existing Sync on new Incoming files once a day.</p></div><button id="auto-settings-x" type="button" class="sync-button sync-button-quiet" aria-label="Close Auto-sync settings">✕</button></div>
+      <section class="sftp-settings-section" aria-labelledby="auto-schedule-title">
+        <div class="sftp-settings-section-heading"><h3 id="auto-schedule-title">Daily schedule</h3><button id="auto-schedule-reload" type="button" class="sync-button sync-button-quiet">Reload schedule</button></div>
+        <p class="sync-subtle">All times are Beijing time (UTC+08:00). No missed-run catch-up. Your computer and this page can be closed.</p>
+        <p class="sync-subtle">Each run takes a snapshot of eligible Incoming files. Failed or decision-needed versions already recorded in Sync reports stay for manual Re-Sync; they are not automatically retried. A new version of a file can run again. Busy or empty runs are skipped.</p>
+        <p id="auto-timer-current" class="sync-subtle"></p>
+        <p id="auto-last-run" class="sync-subtle" role="status"></p>
+        <div class="sftp-schedule-fields">
+          <label class="sftp-schedule-enabled"><input id="auto-schedule-enabled" type="checkbox" disabled> Enable daily Auto-sync</label>
+          <label>Time · Beijing<input id="auto-schedule-time" type="time" step="60" value="07:00" required disabled></label>
+        </div>
+        <p id="auto-schedule-result" class="sftp-settings-result" role="status" aria-live="polite"></p>
+        <div class="sftp-settings-actions"><small id="auto-schedule-unsaved" class="sync-subtle"></small><button id="auto-schedule-save" type="button" class="sync-button sync-button-primary" disabled>Save schedule</button></div>
+      </section>
+      <div class="sftp-settings-footer"><button id="auto-settings-close" type="button" class="sync-button">Close</button></div>
     </dialog>
   </body>
 </html>
