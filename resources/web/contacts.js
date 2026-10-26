@@ -43,7 +43,7 @@ function render() {
     const error = document.createElement('p'); error.className = 'form-error'; error.hidden = true; error.setAttribute('role', 'alert'); edit.append(label, input, save, error); form.append(detail, metrics, edit);
     form.addEventListener('submit', async event => {
       event.preventDefault(); save.disabled = true; input.disabled = true; error.hidden = true;
-      try { const result = await api(`/api/wecom-contacts/${contact.id}`, 'PATCH', { name: input.value }); Object.assign(contact, result.contact); input.value = contact.name; title.textContent = contact.name || 'Unnamed'; toast('Name saved. Future notifications will use it.'); }
+      try { const result = await api(`/api/wecom-contacts/${contact.id}`, 'PATCH', { name: input.value }); Object.assign(contact, result.contact); input.value = contact.name; title.textContent = contact.name || 'Unnamed'; toast('Name saved. Notifications and Recent conversations will use it.'); }
       catch (failure) { error.textContent = failure.message; error.hidden = false; }
       finally { save.disabled = false; input.disabled = false; }
     });

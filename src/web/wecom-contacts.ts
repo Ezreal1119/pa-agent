@@ -8,8 +8,9 @@ export type Observation = { botId: string; userId: string; chatType: "single" | 
 export type TokenUsage = { input: number; output: number; requests: number; reportedRequests: number };
 type Stats = { since: number; questions: number; inputTokens: number; outputTokens: number; requests: number; reportedRequests: number; finishedRuns: number; coveredRuns: number };
 type RunSnapshot = { id: string; sequence: number; startedAt: string; status: string; usage?: TokenUsage; wecom?: Observation };
-type Cursor = { sequence: number; runId: string; contactId: string; usage: TokenUsage; finished: boolean; covered: boolean };
+type Cursor = { sequence: number; runId: string; contactId: string; chatType?: "single" | "group"; usage: TokenUsage; finished: boolean; covered: boolean };
 type Database = { version: 1; contacts: Contact[]; cursors?: Record<string, Cursor> };
+type BridgeState = { conversations?: Record<string, { sessionId?: string }>; jobs?: { key?: string; botId?: string; userId?: string; created?: number; sessionId?: string; oldSessionIds?: string[]; newSessionId?: string }[] };
 const count = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0;
 const validUsage = (u: TokenUsage) => u && [u.input, u.output, u.requests, u.reportedRequests].every(count) && u.reportedRequests <= u.requests;
 type Contact = { id: string; botId: string; userId: string; name: string; firstSeen: number; lastSeen: number; types: string[]; groups: string[]; stats?: Stats };
@@ -42,10 +43,58 @@ export class WecomContacts {
       const ids = new Set(data.contacts.map((contact: Contact) => contact.id));
       if (data.cursors && (typeof data.cursors !== "object" || Array.isArray(data.cursors) || Object.entries(data.cursors).some(([id, item]) => {
         const c = item as Cursor;
-        return !identity(id) || !c || !count(c.sequence) || !identity(c.runId) || !ids.has(c.contactId) || !validUsage(c.usage) || typeof c.finished !== "boolean" || typeof c.covered !== "boolean";
+        return !identity(id) || !c || !count(c.sequence) || !identity(c.runId) || !ids.has(c.contactId) || c.chatType !== undefined && !["single", "group"].includes(c.chatType) || !validUsage(c.usage) || typeof c.finished !== "boolean" || typeof c.covered !== "boolean";
       }))) throw new Error("Invalid WeCom statistics cursor.");
       return data;
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, contacts: [] }; throw error; }
+  }
+  private async readBridgeState(): Promise<BridgeState | undefined> {
+    try {
+      const file = path.join(this.directory, "bridge-state.json"); const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 32 * 1024 * 1024) throw new Error("WeCom mappings must be stored in a bounded regular file.");
+      const state = JSON.parse(await fs.readFile(file, "utf8"));
+      if (!state || typeof state !== "object" || state.conversations !== undefined && (!state.conversations || typeof state.conversations !== "object" || Array.isArray(state.conversations)) || state.jobs !== undefined && !Array.isArray(state.jobs)) throw new Error("Invalid WeCom conversation mappings.");
+      return state;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  /** Presentation only: resolve exact bot/user identities without rewriting sessions or bridge state. */
+  async sessionTitles(sessionIds: string[]) {
+    const titles = new Map<string, { title: string; displayTitle: string }>();
+    if (!sessionIds.length) return titles;
+    await this.tail;
+    const data = await this.read();
+    const contacts = new Map(data.contacts.map(contact => [contact.id, contact]));
+    if (!data.contacts.some(contact => contact.name)) return titles;
+    const wanted = new Set(sessionIds);
+    const owners = new Map<string, string | null>();
+    const add = (id: unknown, botId: unknown, type: unknown, userId: unknown) => {
+      if (typeof id !== "string" || !wanted.has(id) || !identity(botId) || !identity(userId) || !["single", "group"].includes(String(type))) return;
+      const owner = type === "single" ? contactId(botId, userId) : null;
+      owners.set(id, owners.has(id) && owners.get(id) !== owner ? null : owner);
+    };
+    for (const [id, cursor] of Object.entries(data.cursors ?? {})) {
+      const contact = contacts.get(cursor.contactId)!;
+      // Old cursors have no scope. Infer a private chat only when the contact has never appeared in a group.
+      const type = cursor.chatType ?? (contact.types.length === 1 && contact.types[0] === "single" ? "single" : undefined);
+      if (type) add(id, contact.botId, type, contact.userId);
+    }
+    const state = await this.readBridgeState();
+    const mapped = (id: unknown, key: unknown) => {
+      if (typeof key !== "string") return;
+      let parts; try { parts = JSON.parse(key); } catch { return; }
+      if (Array.isArray(parts) && parts.length === 3) add(id, parts[0], parts[1], parts[2]);
+    };
+    for (const [key, entry] of Object.entries(state?.conversations ?? {})) mapped(entry?.sessionId, key);
+    for (const job of state?.jobs ?? []) {
+      mapped(job?.sessionId, job?.key);
+      mapped(job?.newSessionId, job?.key);
+      for (const id of Array.isArray(job?.oldSessionIds) ? job.oldSessionIds : []) mapped(id, job.key);
+    }
+    for (const [id, owner] of owners) {
+      const contact = owner && contacts.get(owner);
+      if (contact && contact.name) titles.set(id, { title: `企微 · ${contact.userId}`.slice(0, 80), displayTitle: `企微 · ${contact.name}` });
+    }
+    return titles;
   }
   private merge(contacts: Contact[], item: Observation) {
     const id = contactId(item.botId, item.userId);
@@ -109,7 +158,7 @@ export class WecomContacts {
     stats.reportedRequests += usage.reportedRequests - (sameRun ? previous!.usage.reportedRequests : 0);
     stats.finishedRuns += Number(finished) - Number(sameRun && previous!.finished);
     stats.coveredRuns += Number(covered) - Number(sameRun && previous!.covered);
-    cursors[sessionId] = { sequence: run.sequence, runId: run.id, contactId: contact.id, usage, finished, covered };
+    cursors[sessionId] = { sequence: run.sequence, runId: run.id, contactId: contact.id, chatType: who.chatType, usage, finished, covered };
   }
   rename(id: string, input: unknown) {
     const value = input as { name: string };
@@ -119,12 +168,7 @@ export class WecomContacts {
   list() {
     return this.work(async contacts => {
       // Import identities already seen before this feature existed; never write bridge-state.json.
-      let state;
-      try {
-        const file = path.join(this.directory, "bridge-state.json"); const stat = await fs.lstat(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32 * 1024 * 1024) throw new Error("WeCom mappings must be stored in a bounded regular file.");
-        state = JSON.parse(await fs.readFile(file, "utf8"));
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const state = await this.readBridgeState();
       for (const [key, entry] of Object.entries(state?.conversations ?? {})) {
         const [botId, type, userId] = JSON.parse(key); const at = (entry as { updated: number }).updated;
         if (type === "single") this.merge(contacts, observation({ botId, userId, chatType: "single", at }));

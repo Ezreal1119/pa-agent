@@ -1,3 +1,4 @@
+import { compactVisualResolutions, VisualReviewError, validateVisualSubmission, visualIssue, type PartialVisualEvidence } from "./visual-review.js";
 import {ReportViews} from "./report-view.js";
 import { incomingWecom, contextFor, verifyRetirement } from "./wecom-sources.js";
 import fs from "node:fs/promises";
@@ -72,6 +73,8 @@ const attemptOf = (item: Item): Attempt => ({
   model: item.model,
   matchedSources: item.matchedSources,
   associationOnly: item.associationOnly,
+  visualReview: item.visualReview,
+  visualResolutions: item.visualResolutions,
 });
 export type Incoming = {
   id: string;
@@ -174,6 +177,8 @@ export class SyncService {
       items: job.items.map((i) => ({
         ...i,
         coverage: undefined,
+        visualResolutions: compactVisualResolutions(i.visualResolutions),
+        attempts: i.attempts?.map(a => ({ ...a, visualResolutions: compactVisualResolutions(a.visualResolutions) })),
         plan: i.plan ? { ...i.plan, changes: [] } : undefined,
       })),
     };
@@ -425,6 +430,27 @@ export class SyncService {
     });
     this.detailTail = task.then(()=>{},()=>{}); return task;
   }
+  private async visualEvidence(jobId: string, itemId: string, issueId: string) {
+    const job = await this.get(jobId);
+    const item = job.items.find(i => i.id === itemId);
+    const issue = item?.visualReview?.issues.find(i => i.id === issueId);
+    if (!item || !issue) throw new SyncError("Visual issue not found. Refresh the report.", 404);
+    const dir = await safePath(this.directory, `work/${item.id}`);
+    const evidence = await readJson<PartialVisualEvidence | null>(await safePath(dir, `${issue.file}.partial.json`), null);
+    if (!evidence || evidence.id !== issue.id || evidence.sourceHash !== item.sourceHash ||
+        evidence.id !== visualIssue(evidence.sourceHash, evidence.imageHash, evidence.file, evidence.label, evidence.text, evidence.issues).id)
+      throw new SyncError("Visual evidence changed. Re-Sync to review it again.", 409);
+    const bytes = await fs.readFile(await safePath(dir, issue.file));
+    if (hash(bytes) !== issue.imageHash) throw new SyncError("Visual image changed. Re-Sync to review it again.", 409);
+    return { evidence, bytes };
+  }
+  async visualDetail(jobId: string, itemId: string, issueId: string) {
+    const { evidence } = await this.visualEvidence(jobId, itemId, issueId);
+    return { text: evidence.text, issues: evidence.issues, label: evidence.label };
+  }
+  async visualImage(jobId: string, itemId: string, issueId: string) {
+    return (await this.visualEvidence(jobId, itemId, issueId)).bytes;
+  }
   get busy() {
     return this.reserved;
   }
@@ -528,6 +554,7 @@ export class SyncService {
     itemId: string,
     feedback: unknown,
     force = false,
+    visualSubmission?: unknown,
   ) {
     if (typeof feedback !== "string" || feedback.length > 16000)
       throw new SyncError("Feedback must be at most 16000 characters.");
@@ -546,6 +573,10 @@ export class SyncService {
         );
       if (old.wecom && old.status === "duplicate")
         throw new SyncError("This verified WeCom section already has its own source binding. To review product coverage, restore its unchanged imported Markdown to Incoming files and start a new Sync with instructions; association-only review cannot change this binding.", 409);
+      const submitted = visualSubmission === undefined ? undefined : validateVisualSubmission(visualSubmission, old.visualReview);
+      if (submitted && (job.kind !== "sync" || old.status !== "needs_review" || old.id !== itemId || force))
+        throw new SyncError("Visual decisions require a pending visual review and cannot be combined with Reconvert original.", 409);
+      if (submitted) for (const decision of submitted.decisions) await this.visualEvidence(jobId, old.id, decision.issueId);
       const instructions = `${old.feedback}${old.feedback ? "\n" : ""}${feedback}`;
       const associationOnly=job.kind==="sync" && (old.status==="duplicate" || old.associationOnly===true);
       if(associationOnly && force)
@@ -569,13 +600,23 @@ export class SyncService {
             409,
           );
         item = this.item(file, instructions, old.id);
-        item.reconvert=force || /重新.*(?:转换|识别|读取)|漏|识别.*错|reconvert|re.?read|missing|ocr/i.test(feedback);
+        if (submitted && file.sourceHash !== old.sourceHash)
+          throw new SyncError("Original input changed. Re-Sync without visual decisions to inspect the new file.", 409);
+        item.reconvert=force || !submitted && /重新.*(?:转换|识别|读取)|漏|识别.*错|reconvert|re.?read|missing|ocr/i.test(feedback);
+        if (file.sourceHash === old.sourceHash && !item.reconvert)
+          item.visualResolutions = old.visualResolutions?.filter(r => r.sourceHash === file.sourceHash);
+        if (submitted) {
+          item.visualResolutions = [
+            ...(item.visualResolutions ?? []).filter(r => !submitted.decisions.some(d => d.issueId === r.issueId)),
+            ...submitted.decisions.filter(d => d.action !== "retry").map(d => ({
+              issueId: d.issueId, sourceHash: file.sourceHash,
+              action: d.action as "accept" | "supplement", ...(d.action === "supplement" ? { text: d.text } : {}),
+            })),
+          ];
+        }
         // Reuse conversions only for unchanged bytes and no request to re-read/reconvert.
         if (
-          !force &&
-          !/重新.*(?:转换|识别|读取)|漏|识别.*错|reconvert|re.?read|missing|ocr/i.test(
-            feedback,
-          ) &&
+          !item.reconvert &&
           file.sourceHash === old.sourceHash
         ) {
           const oldDir = await safePath(this.directory, `work/${old.id}`);
@@ -588,6 +629,14 @@ export class SyncService {
               filter: async (p) => !(await fs.lstat(p)).isSymbolicLink(),
             });
           }
+        }
+      }
+      if (submitted) {
+        const dir = await safePath(this.directory, `work/${item.id}`);
+        await fs.rm(await safePath(dir, "conversion.json"), { force: true });
+        for (const decision of submitted.decisions.filter(d => d.action === "retry")) {
+          const issue = old.visualReview!.issues.find(i => i.id === decision.issueId)!;
+          await fs.rm(await safePath(dir, `${issue.file}.partial.json`), { force: true });
         }
       }
       // Preserve the legacy cumulative audit text; current instructions are
@@ -665,6 +714,11 @@ export class SyncService {
     }
     this.active = (async () => {
       try {
+        if (item.visualResolutions?.length) {
+          const file = await safePath(this.inbox, item.name);
+          if (hash(await fs.readFile(file)) !== item.sourceHash || item.visualResolutions.some(r => r.sourceHash !== item.sourceHash))
+            throw new SyncError("Original input changed after visual review. Re-Sync and inspect the new file before publishing.", 409);
+        }
         await this.publisher.publish(
           item.id,
           item.plan!,
@@ -876,6 +930,7 @@ export class SyncService {
             abort,
             item.visualUsage,
             () => this.progress(job),
+            item.visualResolutions,
           );
           if (result.sourceHash !== item.sourceHash)
             throw new SyncError(
@@ -893,6 +948,8 @@ export class SyncService {
           convertedBytes += size;
           converted.set(item.id, result);
           item.coverage = result.coverage;
+          item.visualReview = undefined;
+          item.visualResolutions = result.visualResolutions;
           item.status = "converted";
           item.stage = "Converted · waiting for analysis";
           conversionTimes.set(item.id, Date.now() - conversionStart);
@@ -902,8 +959,10 @@ export class SyncService {
             path.join(this.directory, `work/${item.id}/coverage.json`),
             undefined,
           );
-          item.status = signal.aborted ? "stopped" : e instanceof PlanError && e.review ? "needs_review" : "failed";
-          if(item.status==="needs_review")item.stage="Needs your decision";
+          const visual = e instanceof VisualReviewError;
+          if (visual) item.visualReview = e.review;
+          item.status = signal.aborted ? "stopped" : visual || e instanceof PlanError && e.review ? "needs_review" : "failed";
+          item.stage = item.status === "needs_review" ? "Needs your decision" : signal.aborted ? "Stopped" : "Conversion failed · nothing published";
           item.reason = this.options.redact(e);
           item.finished = new Date().toISOString();
           await this.event(job, item);
@@ -1017,6 +1076,8 @@ export class SyncService {
           association,
           wecom,
         );
+        if (result.decision.action !== "review" && item.visualResolutions?.length)
+          item.plan.confirmationReason = `Review the accepted visual omissions and administrator supplements before publishing (${item.visualResolutions.length} region(s)).`;
         if (result.decision.action === "review") {
           item.status = "needs_review";
           item.stage = "Needs your decision";

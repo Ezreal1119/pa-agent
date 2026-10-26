@@ -1,3 +1,4 @@
+import { compactVisualResolutions } from "./visual-review.js";
 import { hash, type Job, type Item, type Plan } from "./core.js";
 export type ChangeHeader = {
   path: string;
@@ -38,9 +39,11 @@ export class ReportViews {
       status: running ? "running" : job.status,
       items: job.items.map((item) => {
         this.record(item);
-        const { wecom, coverage, plan, ...rest } = item;
+        const { wecom, coverage, plan, visualResolutions, attempts, ...rest } = item;
         return {
           ...rest,
+          ...(visualResolutions ? { visualResolutions: compactVisualResolutions(visualResolutions) } : {}),
+          ...(attempts ? { attempts: attempts.map(a => ({ ...a, visualResolutions: compactVisualResolutions(a.visualResolutions) })) } : {}),
           coverageCount: this.coverage.get(item.id) ?? 0,
           ...(plan
             ? { plan: { ...plan, changes: this.headers.get(item.id) ?? [] } }

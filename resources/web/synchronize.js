@@ -35,6 +35,7 @@ function setTab(name, updateUrl = true) {
   }
 }
 const selectedChoices = new Map();
+const visualDrafts = new Map();
 const drafts = new Map(),
   openCards = new Set(),
   reconvertIds = new Set();
@@ -389,6 +390,76 @@ function reviewQuestion(item, choices) {
   }
   return "How should this document be handled?";
 }
+function visualReviewPanel(job, item) {
+  const review = item.visualReview;
+  const panel = el("div", undefined, "sync-visual-review");
+  panel.append(el("h4", "Some visual content needs your decision"),
+    el("p", "Readable content has been retained. Inspect each region, supply the missing text or explicitly accept its omission. Continuing generates a preview; publication requires a separate confirmation."));
+  const submit = async (decisions, forceConvert = false) => {
+    const next = await api(`jobs/${job.id}/resync`, "POST", {
+      itemId: item.id, feedback: "", forceConvert,
+      ...(decisions ? { visualReview: { revision: review.revision, decisions } } : {}),
+    });
+    for (const issue of review.issues) visualDrafts.delete(`${item.id}/${issue.id}`);
+    await choose(next);
+  };
+  const controls = [];
+  const next = button("Continue to publication preview →", () => submit(controls
+    .filter(c => c.draft.action)
+    .map(c => ({ issueId: c.issue.id, action: c.draft.action,
+      ...(c.draft.action === "supplement" ? { text: c.draft.text } : {}) }))), "sync-button sync-button-primary");
+  const update = () => {
+    const chosen = controls.filter(c => c.draft.action);
+    next.disabled = busy || !chosen.length || chosen.some(c => c.draft.action === "supplement" && !c.draft.text.trim());
+  };
+  for (const issue of review.issues) {
+    const box = el("section", undefined, "sync-visual-issue");
+    box.append(el("strong", issue.label));
+    const issues = el("ul");
+    for (const message of issue.issues) issues.append(el("li", message));
+    box.append(issues, lazyDetail(`${item.id}/visual/${issue.id}`, "Inspect image and readable text", async () => {
+      const base = `jobs/${job.id}/items/${item.id}/visual-issues/${issue.id}`;
+      const evidence = await api(base);
+      const holder = el("div"), image = el("img");
+      image.src = `/api/sync/${base}/image`;
+      image.alt = issue.label;
+      image.loading = "lazy";
+      holder.append(image, el("h5", "Readable text"), el("pre", evidence.text || "No readable text in this region."));
+      return holder;
+    }));
+    const draftKey = `${item.id}/${issue.id}`;
+    const draft = visualDrafts.get(draftKey) || { action: "", text: "" };
+    visualDrafts.set(draftKey, draft);
+    controls.push({ issue, draft });
+    const options = el("fieldset"), input = el("textarea"), radios = [];
+    options.append(el("legend", "How should this region be handled?"));
+    for (const [value, title] of [["accept", "Accept this specific omission"], ["supplement", "Supply the missing text"]]) {
+      const label = el("label"), radio = el("input");
+      radio.type = "radio"; radio.name = `visual-${item.id}-${issue.id}`; radio.value = value;
+      radio.checked = draft.action === value; radio.disabled = busy;
+      radio.onchange = () => { if (radio.checked) { draft.action = value; input.disabled = busy || value !== "supplement"; update(); } };
+      radios.push(radio); label.append(radio, document.createTextNode(title)); options.append(label);
+    }
+    input.placeholder = "Enter only the missing content. It will be attributed to the administrator.";
+    input.setAttribute("aria-label", `Missing text for ${issue.label}`);
+    input.maxLength = 16000; input.value = draft.text; input.disabled = busy || draft.action !== "supplement";
+    input.oninput = () => { draft.text = input.value; update(); };
+    const actions = el("div", undefined, "sync-feedback-actions");
+    const clear = button("Leave this region pending", () => {
+      draft.action = ""; for (const radio of radios) radio.checked = false;
+      input.disabled = true; update();
+    });
+    const retry = button("Retry this region", () => submit([{ issueId: issue.id, action: "retry" }]));
+    clear.disabled = retry.disabled = busy;
+    actions.append(clear, retry); box.append(options, input, actions); panel.append(box);
+  }
+  const actions = el("div", undefined, "sync-feedback-actions");
+  const reconvert = button("Reconvert original", () => submit(undefined, true));
+  reconvert.disabled = busy;
+  actions.append(reconvert, next); panel.append(
+    el("p", "Unselected regions remain pending. Reconvert original clears prior visual decisions and checks the source again.", "sync-subtle"), actions);
+  update(); return panel;
+}
 async function renderJob(job) {
   const key = JSON.stringify({ job, busy });
   if (
@@ -401,6 +472,7 @@ async function renderJob(job) {
   if (detailJob !== job.id) { reportDetails.clear(); detailJob = job.id; }
   const liveDetails = new Set(job.items.flatMap(item => [
     `${item.id}/coverage`,
+    ...(item.visualReview?.issues || []).map(issue => `${item.id}/visual/${issue.id}`),
     ...(item.plan?.changes || []).map((change, index) => `${item.id}/change/${index}/${change.revision}`),
   ]));
   for (const key of reportDetails.keys()) if (!liveDetails.has(key)) reportDetails.delete(key);
@@ -479,11 +551,13 @@ async function renderJob(job) {
         matches.append(el("p", "Product coverage review uses the existing published Markdown. Source contents and versions stay unchanged."));
       content.append(matches);
     }
-    const hint = statusHint(item.status, job.kind);
+    const hint = item.visualReview ? undefined : statusHint(item.status, job.kind);
     if (hint) content.append(el("p", hint, "sync-hint"));
     const choices = reviewChoices(item);
     let decisionAnchor, decisionEvidence;
-    if (item.status === "needs_review") {
+    if (item.status === "needs_review" && item.visualReview) {
+      content.append(visualReviewPanel(job, item));
+    } else if (item.status === "needs_review") {
       content.append(el("p", reviewQuestion(item, choices), "sync-decision-question"));
       const evidence = el("details", undefined, "sync-decision-evidence");
       decisionEvidence = evidence;
@@ -500,6 +574,8 @@ async function renderJob(job) {
       } else if (item.reason) content.append(el("p", item.reason));
       if (item.summary) content.append(el("p", item.summary));
     }
+    if (item.visualResolutions?.length)
+      content.append(el("p", `${item.visualResolutions.length} visual region(s) have administrator decisions. Review the source diff for recorded omissions and supplements.`, "sync-request"));
     if (item.feedback)
       content.append(
         el("p", `Your instructions: ${item.feedback}`, "sync-request"),
@@ -600,7 +676,7 @@ async function renderJob(job) {
         "interrupted",
         "awaiting_confirmation",
         "duplicate",
-      ].includes(item.status)
+      ].includes(item.status) && !item.visualReview
     ) {
       const feedback = el("div", undefined, "sync-feedback"),
         label = el(

@@ -389,7 +389,17 @@ export async function createWebServer(options: WebOptions = {}) {
     await retention.cleanup();
     const list = new Map((await savedSessions()).filter(s => !deletedIds.has(s.id)).map(s => [s.id, { id: s.id, title: s.name ?? s.firstMessage.slice(0, 36) ?? "New conversation", updated: s.modified.toISOString(), running: false }]));
     for (const r of records.values()) list.set(r.id, { id: r.id, title: r.title, updated: r.updated, running: r.running });
-    return [...list.values()].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 100);
+    const sessions = [...list.values()].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 100);
+    try {
+      const titles = await wecomContacts.sessionTitles(sessions.filter(session => bridge.owns(session.id)).map(session => session.id));
+      return sessions.map(session => {
+        const named = titles.get(session.id);
+        return named && session.title === named.title ? { ...session, displayTitle: named.displayTitle } : session;
+      });
+    } catch {
+      console.warn("Could not load WeCom conversation display names. Check contact data and conversation mappings.");
+      return sessions;
+    }
   }
   async function readBody(req: IncomingMessage, maxBytes = 65536) {
     if (!(req.headers["content-type"] ?? "").startsWith("application/json")) throw new HttpError(415, "Send the request as JSON.");
@@ -698,6 +708,14 @@ export async function createWebServer(options: WebOptions = {}) {
           json(res, status, wantsSummary ? synchronize.summary(job.id) : job);
         if (route === "jobs" && method === "POST") return respondJob(await synchronize.start((await readBody(req)).ids), 202);
         if (route === "delete-preview" && method === "POST") return respondJob(await synchronize.preview((await readBody(req)).prompt), 202);
+        const visual = route.match(/^jobs\/([a-f0-9-]{36})\/items\/([a-f0-9-]{36})\/visual-issues\/([a-f0-9]{64})(\/image)?$/);
+        if (visual && method === "GET") {
+          if (url.search) throw new HttpError(400, "Invalid visual evidence query.");
+          if (!visual[4]) return json(res, 200, await synchronize.visualDetail(visual[1]!, visual[2]!, visual[3]!));
+          const bytes = await synchronize.visualImage(visual[1]!, visual[2]!, visual[3]!);
+          res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+          res.end(bytes); return;
+        }
         const detail = route.match(/^jobs\/([a-f0-9-]{36})\/items\/([a-f0-9-]{36})\/(coverage|changes\/(\d+))$/);
         if (detail && method === "GET") {
           const coverage = detail[3] === "coverage";
@@ -713,7 +731,7 @@ export async function createWebServer(options: WebOptions = {}) {
           const body = await readBody(req);
           if (match[2] === "stop") return respondJob(await synchronize.stop(match[1]!), 200);
           if (match[2] === "confirm") return respondJob(await synchronize.confirm(match[1]!, body.itemId), 202);
-          if (match[2] === "resync") return respondJob(await synchronize.resync(match[1]!, body.itemId, body.feedback ?? "", body.forceConvert === true), 202);
+          if (match[2] === "resync") return respondJob(await synchronize.resync(match[1]!, body.itemId, body.feedback ?? "", body.forceConvert === true, body.visualReview), 202);
           if (match[2] === "cleanup") return respondJob(await synchronize.cleanup(match[1]!, body.itemId), 200);
         }
         throw new HttpError(404, "Sync operation not found.");

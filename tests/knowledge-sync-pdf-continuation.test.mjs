@@ -157,10 +157,10 @@ test("normal table continuation is reviewed once, independently checks the follo
   assert.equal(f.requests.length, 4, "TARGET gets a fresh check; ordinary following-page cache stays reusable");
 });
 
-test("real clipping, unrelated unreadable evidence and last-page truncation still fail", { timeout: 30000 }, async t => {
+test("real clipping, unreadable evidence and last-page truncation require review without complete caches", { timeout: 30000 }, async t => {
   for (const [name, first, pages, expectedCalls] of [
-    ["real clipping", incomplete, 2, 2],
-    ["mixed issues", { ...incomplete, issues: [boundaryIssue, "Unreadable value in another cell"] }, 2, 1],
+    ["real clipping", incomplete, 2, 3],
+    ["mixed issues", { ...incomplete, issues: [boundaryIssue, "Unreadable value in another cell"] }, 2, 2],
     ["last page", incomplete, 1, 1],
   ]) await t.test(name, async t => {
     const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? first : { complete: false, text: tail, issues: ["The continuation is absent; actual text is clipped."] }), { pages });
@@ -187,7 +187,13 @@ test("review cannot pass without quotes or with an invented continuation that th
 
 test("following-page failure cannot publish or cache the provisional TARGET evidence", { timeout: 30000 }, async t => {
   const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? incomplete : call === 2 ? reviewed : { complete: false, text: head, issues: ["Unreadable diagram"] }));
-  await assert.rejects(f.run(), /Unresolved visual evidence at Page 2.*Unreadable diagram/);
+  await assert.rejects(f.run(), error => {
+    assert.match(error.message, /Unresolved visual evidence/);
+    assert.equal(error.review.issues.length, 2);
+    assert.match(error.review.issues[1].label, /Page 2/);
+    assert.deepEqual(error.review.issues[1].issues, ["Unreadable diagram"]);
+    return true;
+  });
   assert.equal(f.requests.length, 3);
   assert.equal(await fs.stat(path.join(f.work, "image-0.png.json")).catch(() => null), null);
   assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);

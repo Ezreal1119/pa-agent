@@ -139,13 +139,14 @@ async function refreshSessions() {
   const { sessions } = await api('/api/sessions'); $('sessions').replaceChildren(); $('session-count').textContent = sessions.length;
   if (!sessions.length) { const p = document.createElement('p'); p.className = 'empty-sessions'; p.textContent = 'Your product conversations start here.'; $('sessions').append(p); }
   for (const session of sessions) {
+    const displayTitle = session.displayTitle || session.title || 'New conversation';
     const row = document.createElement('div'); row.className = `session-row${session.id === state.current ? ' active' : ''}`;
     const button = document.createElement('button'); button.className = `session-button${session.id === state.current ? ' active' : ''}`; button.disabled = state.busy;
-    const title = document.createElement('strong'); title.textContent = session.title || 'New conversation';
+    const title = document.createElement('strong'); title.textContent = displayTitle;
     const time = document.createElement('small'); time.textContent = session.running ? 'Running' : new Date(session.updated).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     button.append(title, time); button.addEventListener('click', () => openSession(session.id).then(() => setSidebar(false)).catch(error => toast(error.message)));
     const menu = document.createElement('details'); menu.className = 'session-menu';
-    const summary = document.createElement('summary'); summary.textContent = '⋯'; summary.setAttribute('aria-label', `Manage conversation: ${session.title || 'New conversation'}`);
+    const summary = document.createElement('summary'); summary.textContent = '⋯'; summary.setAttribute('aria-label', `Manage conversation: ${displayTitle}`);
     const actions = document.createElement('div'); actions.className = 'session-menu-actions';
     for (const [action, label] of [['rename', 'Rename'], ['delete', 'Delete']]) {
       const control = document.createElement('button'); control.className = `session-operation ${action}`; control.textContent = label;
@@ -161,7 +162,7 @@ function openSessionAction(action, session) {
   sessionAction = { action, id: session.id }; $('session-dialog-error').hidden = true;
   const deleting = action === 'delete';
   $('session-dialog-title').textContent = deleting ? 'Delete conversation?' : 'Rename conversation';
-  $('session-dialog-copy').textContent = deleting ? `Permanently delete all messages, tool calls, run history, uploads, and generated files (including cache and temporary files) for “${session.title || 'New conversation'}”. This cannot be undone.` : 'The name is saved with the conversation and survives refreshes and restarts.';
+  $('session-dialog-copy').textContent = deleting ? `Permanently delete all messages, tool calls, run history, uploads, and generated files (including cache and temporary files) for “${session.displayTitle || session.title || 'New conversation'}”. This cannot be undone.` : 'The name is saved with the conversation and survives refreshes and restarts.';
   $('session-title-field').hidden = deleting; $('session-title-input').required = !deleting;
   $('session-title-input').value = session.title || 'New conversation';
   $('session-dialog-save').textContent = deleting ? 'Delete conversation' : 'Save name';

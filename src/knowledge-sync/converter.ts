@@ -1,3 +1,4 @@
+import { VisualReviewError, visualIssue, visualReview, resolutionKey, visualResolutionNote, type PartialVisualEvidence, type VisualResolution, type VisualIssue } from "./visual-review.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,7 @@ export type Converter = (
   signal: AbortSignal,
   usage: Usage,
   update: () => Promise<void>,
+  resolutions?: VisualResolution[],
 ) => Promise<Conversion>;
 export const CONVERSION_VERSION = 4;
 function visionAbort(signal: AbortSignal, label: string) {
@@ -41,7 +43,7 @@ export function createConverter(
   maxVision: number,
   acquire: (signal: AbortSignal) => Promise<() => void>,
 ): Converter {
-  return async (source, dir, signal, usage, update) => {
+  return async (source, dir, signal, usage, update, resolutions = []) => {
     await safePath(path.dirname(source), path.basename(source));
     await safePath(dir);
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -52,7 +54,8 @@ export function createConverter(
     );
     if (
       cache?.sourceHash === sourceHash &&
-      cache.version === CONVERSION_VERSION
+      cache.version === CONVERSION_VERSION &&
+      (cache.resolutionKey ?? resolutionKey()) === resolutionKey(resolutions)
     )
       return cache;
     const input = path.join(dir, `source${path.extname(source).toLowerCase()}`);
@@ -152,10 +155,25 @@ export function createConverter(
       throw new Error(
         "Vision model is required for full visual coverage. Configure VISION_LLM_* in .env.",
       );
+    const unresolved: VisualIssue[] = [];
+    const applied: VisualResolution[] = [];
     const pendingContinuations = new Map<string, {
       label: string; head: string; cacheFile: string;
+      evidence: PartialVisualEvidence;
       cache: { hash: string; text: string; complete: true; continuationSourceHash: string };
     }>();
+    const includePartial = (partial: PartialVisualEvidence) => {
+      const { text: _text, sourceHash: _sourceHash, ...issue } = partial;
+      const decision = resolutions.find(r => r.issueId === issue.id && r.sourceHash === sourceHash);
+      if (decision) {
+        applied.push(decision);
+        markdown += visualResolutionNote(issue, decision);
+        manifest.coverage.push(`${issue.label}: administrator ${decision.action === "accept" ? "accepted local omission" : "supplemented unreadable content"}`);
+      } else {
+        unresolved.push(issue);
+        manifest.coverage.push(`${issue.label}: pending visual decision`);
+      }
+    };
     for (const image of manifest.images) {
       if (signal.aborted) throw visionAbort(signal, image.label);
       const file = await safePath(dir, image.file);
@@ -171,6 +189,12 @@ export function createConverter(
         previous?.hash === key && previous.complete &&
         (!previous.continuationSourceHash || previous.continuationSourceHash === sourceHash)
           ? previous.text : undefined;
+      let partial = await readJson<PartialVisualEvidence | null>(path.join(dir, `${image.file}.partial.json`), null);
+      if (partial?.sourceHash !== sourceHash || partial.imageHash !== key || partial.file !== image.file ||
+          partial.label !== image.label || partial.id !== visualIssue(sourceHash, key, image.file, image.label, partial.text, partial.issues).id) partial = null;
+      if (text !== undefined) partial = null;
+      // Partial checkpoints never count as complete OCR evidence.
+      if (text === undefined && partial) text = partial.text;
       let continuation: VisualRegion | undefined;
       let priorIssues: unknown;
       let confirmed: { tail: string; head: string } | undefined;
@@ -273,12 +297,11 @@ export function createConverter(
           } catch {
             throw new Error("Vision did not return a coverage result.");
           }
-          if (
-            value.complete !== true ||
-            typeof value.text !== "string" ||
-            !Array.isArray(value.issues) ||
-            value.issues.length > 0
-          ) {
+          if (!value || typeof value.complete !== "boolean" || typeof value.text !== "string" ||
+              !Array.isArray(value.issues) || value.issues.length > 100 ||
+              value.issues.some((issue: unknown) => typeof issue !== "string" || !issue.trim() || issue.length > 4000))
+            throw new Error("Vision did not return a valid coverage result.");
+          if (value.complete !== true || value.issues.length > 0) {
             if (!continuation) {
               const next = nextContinuationPage(source, image, manifest.images, value);
               if (next) {
@@ -292,9 +315,11 @@ export function createConverter(
                 continue;
               }
             }
-            throw new Error(
-              `Unresolved visual evidence at ${image.label}: ${JSON.stringify(value.issues ?? [])}`,
-            );
+            const issues = value.issues.length ? value.issues : ["The model reported incomplete visual evidence without a specific location."];
+            partial = visualIssue(sourceHash, key, image.file, image.label, value.text, issues);
+            await atomic(path.join(dir, `${image.file}.partial.json`), JSON.stringify(partial));
+            text = partial.text;
+            break;
           }
           if (continuation) {
             confirmed = continuationQuotes(value);
@@ -331,22 +356,32 @@ export function createConverter(
       }
       const pending = pendingContinuations.get(image.file);
       if (pending) {
-        if (!text || !containsContinuationQuote(text, pending.head)) throw new Error(
-          `Unresolved visual evidence at ${pending.label}: continuation quote was not confirmed by the following page's independent transcription.`,
-        );
-        await atomic(pending.cacheFile, JSON.stringify(pending.cache));
-        manifest.coverage.push(`${pending.label}: cross-page continuation verified`, `${pending.label}: inspected`);
+        if (partial) {
+          // A partially read following page cannot certify a provisional TARGET.
+          // Retain both as explicit review items, never complete checkpoints.
+          await atomic(path.join(dir, `${pending.evidence.file}.partial.json`), JSON.stringify(pending.evidence));
+          includePartial(pending.evidence);
+        } else {
+          if (!text || !containsContinuationQuote(text, pending.head)) throw new Error(
+            `Unresolved visual evidence at ${pending.label}: continuation quote was not confirmed by the following page's independent transcription.`,
+          );
+          await atomic(pending.cacheFile, JSON.stringify(pending.cache));
+          manifest.coverage.push(`${pending.label}: cross-page continuation verified`, `${pending.label}: inspected`);
+        }
         pendingContinuations.delete(image.file);
       }
       if (text)
         markdown += `\n\n### Visual evidence — ${image.label}\n\n${text}`;
+      if (partial) includePartial(partial);
       if (confirmed && continuation && text !== undefined) {
         pendingContinuations.set(continuation.file, {
           label: image.label, head: confirmed.head,
+          evidence: visualIssue(sourceHash, key, image.file, image.label, text,
+            ["Cross-page continuation could not be independently verified because the following page contains unreadable evidence."]),
           cacheFile: path.join(dir, `${image.file}.json`),
           cache: { hash: key, text, complete: true, continuationSourceHash: sourceHash },
         });
-      } else manifest.coverage.push(`${image.label}: inspected`);
+      } else if (!partial) manifest.coverage.push(`${image.label}: inspected`);
       await atomic(
         path.join(dir, "coverage.json"),
         JSON.stringify(manifest.coverage),
@@ -355,6 +390,12 @@ export function createConverter(
     if (pendingContinuations.size) throw new Error("Unresolved visual evidence: following-page verification was not completed.");
     if (Buffer.byteLength(markdown) > 32 * 1024 * 1024)
       throw new Error("Full Markdown exceeds 32 MiB; split the source.");
+    if (resolutions.some(r => !applied.some(a => a.issueId === r.issueId)))
+      throw new Error("Visual evidence changed; previous decisions cannot be applied. Reconvert without previous decisions.");
+    if (unresolved.length) {
+      await atomic(path.join(dir, "partial.md"), markdown);
+      throw new VisualReviewError(visualReview(sourceHash, unresolved));
+    }
     if (!markdown.trim()) throw new Error("No usable document content.");
     const result: Conversion = {
       markdown,
@@ -362,6 +403,7 @@ export function createConverter(
       visual: { ...usage },
       sourceHash,
       version: CONVERSION_VERSION,
+      ...(applied.length ? { visualResolutions: applied, resolutionKey: resolutionKey(applied) } : {}),
     };
     await atomic(path.join(dir, "conversion.json"), JSON.stringify(result));
     return result;

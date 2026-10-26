@@ -30,3 +30,24 @@ test('cumulative contact statistics use one cursor per session and reject duplic
  const disk=JSON.parse(await fs.readFile(path.join(root,'wecom/contacts.json'),'utf8'));assert.equal(Object.keys(disk.cursors).length,1);
  assert.equal((await fs.stat(path.join(root,'wecom/contacts.json'))).mode&0o777,0o600);
 });
+
+test('private session display names survive bridge job cleanup and keep group cursors separate', async t => {
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'contact-display-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ let book=new WecomContacts(root);const at=Date.now();
+ const sender={botId:'bot',userId:'u',chatType:'single',at};
+ const contact=await book.record(sender);await book.rename(contact.id,{name:'张三'});
+ const run={id:'run-first',sequence:1,startedAt:new Date(at).toISOString(),status:'completed',usage:{input:0,output:0,requests:0,reportedRequests:0}};
+ await book.recordRun(sender,'private-session',run);
+ await book.recordRun({...sender,chatType:'group',chatId:'group'},'group-session',{...run,id:'run-group'});
+ book=new WecomContacts(root);
+ const file=path.join(root,'wecom/contacts.json'),before=await fs.readFile(file,'utf8');
+ let titles=await book.sessionTitles(['private-session','group-session','unknown-session']);
+ assert.equal(titles.get('private-session').displayTitle,'企微 · 张三');assert.equal(titles.size,1);
+ assert.equal(await fs.readFile(file,'utf8'),before,'listing names must not write statistics');
+ const legacy=JSON.parse(before);delete legacy.cursors['private-session'].chatType;await fs.writeFile(file,JSON.stringify(legacy));
+ titles=await book.sessionTitles(['private-session']);assert.equal(titles.size,0,'an ambiguous legacy scope must not be guessed');
+ await book.recoverSession('private-session',[{...run,wecom:sender}]);
+ titles=await book.sessionTitles(['private-session']);assert.equal(titles.get('private-session').displayTitle,'企微 · 张三');
+ const actual=path.join(root,'wecom/original-state.json');await fs.writeFile(actual,JSON.stringify({conversations:{},jobs:[]}));await fs.symlink(actual,path.join(root,'wecom/bridge-state.json'));
+ await assert.rejects(book.sessionTitles(['private-session']),/regular file/);
+});

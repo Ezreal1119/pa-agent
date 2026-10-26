@@ -1368,3 +1368,12 @@
 
 .wecom-import-output { border-top: 1px solid var(--line, #e4e9df); padding-top: 12px; margin-top: 12px; overflow-wrap: anywhere; }
 .wecom-import-output > strong { margin-right: 12px; }
+
+.sync-visual-review { margin: 20px 0; }
+.sync-visual-issue { margin: 16px 0; padding: 18px; border: 1px solid #dfe7d8; border-radius: 9px; }
+.sync-visual-issue img { display: block; max-width: 100%; height: auto; margin: 12px 0; }
+.sync-visual-issue pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sync-visual-issue fieldset { display: grid; gap: 12px; margin: 16px 0; border: 0; padding: 0; }
+.sync-visual-issue fieldset label { display: flex; align-items: center; gap: 8px; }
+.sync-visual-issue textarea { box-sizing: border-box; width: 100%; min-height: 100px; padding: 12px; }
+.sync-visual-issue .sync-feedback-actions { flex-wrap: wrap; gap: 12px; }

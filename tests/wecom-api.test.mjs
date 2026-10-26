@@ -79,6 +79,43 @@ test('admin contact notes persist, Bridge can register but cannot edit notes, an
  assert.equal(f.requestCount,0,'identity and note management must not invoke the model');
 });
 
+test('Recent conversations use scoped WeCom names without renaming sessions, groups or custom titles', {timeout:30000}, async t => {
+ const f=await setup(t);let browser=await f.browser();
+ const create=async title=>{const {id}=await f.api.json('/sessions','POST',{});await f.api.json(`/sessions/${id}`,'PATCH',{title});return id;};
+ const title='企微 · same-user';
+ const a=await create(title),b=await create(title),old=await create(title),group=await create('企微 · 群 same-user'),custom=await create('Customer rollout');
+ const webId=(await(await browser('/api/sessions','POST',{})).json()).id;
+ await browser(`/api/sessions/${webId}`,'PATCH',{title});
+ const record=async botId=>(await f.api.json('/contacts','POST',{botId,userId:'same-user',chatType:'single',at:Date.now()})).contact;
+ const ca=await record('bot-a'),cb=await record('bot-b');
+ const key=(bot,type,target)=>JSON.stringify([bot,type,target]);
+ const state={version:1,conversations:{
+  [key('bot-a','single','same-user')]:{sessionId:a,updated:Date.now()},
+  [key('bot-b','single','same-user')]:{sessionId:b,updated:Date.now()},
+  [key('bot-a','group','same-user')]:{sessionId:group,updated:Date.now()},
+ },jobs:[{key:key('bot-a','single','same-user'),sessionId:old},{key:key('bot-a','single','same-user'),sessionId:custom}]};
+ const mappingFile=path.join(f.dataDir,'wecom/bridge-state.json');await fs.writeFile(mappingFile,JSON.stringify(state));
+ const snapshot=await fs.readFile(mappingFile,'utf8');
+ const list=async()=> (await(await browser('/api/sessions')).json()).sessions;
+ assert.equal((await list()).find(s=>s.id===a).displayTitle,undefined);
+ const alias='<script>张三</script>';
+ assert.equal((await browser(`/api/wecom-contacts/${ca.id}`,'PATCH',{name:alias})).status,200);
+ assert.equal((await browser(`/api/wecom-contacts/${cb.id}`,'PATCH',{name:'李四'})).status,200);
+ let sessions=await list();
+ for(const id of [a,old]){assert.equal(sessions.find(s=>s.id===id).displayTitle,`企微 · ${alias}`);assert.equal(sessions.find(s=>s.id===id).title,title);}
+ assert.equal(sessions.find(s=>s.id===b).displayTitle,'企微 · 李四');
+ for(const id of [group,custom,webId])assert.equal(sessions.find(s=>s.id===id).displayTitle,undefined);
+ assert.equal((await f.api.json(`/sessions/${a}`)).title,title);
+ assert.equal((await fs.readFile(mappingFile,'utf8')),snapshot,'display lookup must not write bridge mappings');
+ await f.restart();browser=await f.browser();sessions=await list();assert.equal(sessions.find(s=>s.id===a).displayTitle,`企微 · ${alias}`);const before=sessions.find(s=>s.id===a).updated;
+ await browser(`/api/wecom-contacts/${ca.id}`,'PATCH',{name:'王五'});
+ sessions=await list();assert.equal(sessions.find(s=>s.id===a).displayTitle,'企微 · 王五');assert.equal(sessions.find(s=>s.id===a).updated,before);
+ await browser(`/api/wecom-contacts/${ca.id}`,'PATCH',{name:''});
+ sessions=await list();assert.equal(sessions.find(s=>s.id===a).displayTitle,undefined);assert.equal(sessions.find(s=>s.id===a).title,title);
+ assert.equal(sessions.find(s=>s.id===b).displayTitle,'企微 · 李四');
+ assert.equal(f.requestCount,0,'display names must not invoke the model');
+});
+
 function usageReply(res, usage, tool) {
  res.writeHead(200, {'content-type':'text/event-stream'});
  const delta = tool ? {tool_calls:[{index:0,id:'read-test',type:'function',function:{name:'read',arguments:JSON.stringify({path:tool})}}]} : {content:'统计测试完成'};
