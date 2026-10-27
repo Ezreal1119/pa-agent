@@ -15,6 +15,7 @@ import { nextContinuationPage, continuationQuotes, containsContinuationQuote, ma
 const tail = "10. Supports flexible anti-metal labels with a";
 const head = "thickness not exceeding 1.5 mm.";
 const boundaryIssue = "The 'Other Attributes' cell text is cut off at the bottom page boundary, ending mid-sentence.";
+const screenshotIssue = 'The specifications table sentence is cut off at the page boundary after "POS terminal and the".';
 const incomplete = { complete: false, text: tail, issues: [boundaryIssue] };
 const reviewed = { complete: true, text: tail, issues: [], continuation: { confirmed: true, tail, head } };
 const whole = (page, file = `image-${page - 1}.png`) => ({
@@ -118,6 +119,35 @@ test("only whole PDF/DOCX pages with exclusively bottom-boundary issues and an i
     "do not normalize distinct digits or units into matching continuation evidence");
 });
 
+test("page boundary/page break wording enters review without admitting side clipping or unrelated failures", () => {
+  const a = whole(1), b = whole(2);
+  for (const source of ["source.pdf", "source.docx"]) {
+    for (const issue of [
+      screenshotIssue,
+      "The sentence is cut off at a page boundary.",
+      "The table row ends mid-sentence across page boundaries.",
+      "Text is truncated at the page-boundary.",
+      "The cell is cut off at the page break.",
+      "The sentence continues across a page-break.",
+      boundaryIssue,
+    ]) assert.equal(nextContinuationPage(source, a, [a, b], { ...incomplete, issues: [issue] }), b, issue);
+    for (const issues of [
+      ["The table is at a page boundary."],
+      ["Text cut off inside a table cell."],
+      ["Text cut off at the left page boundary."],
+      ["Text cut off at the right-hand page edge, near a page boundary."],
+      ["Text is truncated at the top of the page boundary."],
+      ["Text is truncated at the top edge near a page break."],
+      ["Missing numbers at the page boundary; the cell is cut off."],
+      ["The cropped sentence is cut off at the page boundary."],
+      [screenshotIssue, "Unreadable serial number"],
+      [screenshotIssue, "The diagram is cut off inside a cell"],
+    ]) assert.equal(nextContinuationPage(source, a, [a, b], { ...incomplete, issues }), undefined, issues.join("; "));
+    assert.equal(nextContinuationPage(source, a, [a], { ...incomplete, issues: [screenshotIssue] }), undefined);
+    assert.equal(nextContinuationPage(source, { ...a, label: a.label.replace("x=0", "x=50") }, [a, b], { ...incomplete, issues: [screenshotIssue] }), undefined);
+  }
+});
+
 const cradleTail = "Supports wireless communication between the POS terminal and the";
 const cradleNext = "cradle.\n\n| Interfaces | USB Type-C*1 (Power)\nLAN*1 (RJ45)\nRS232*1 (RJ45)\nUSB Type-A*1 (HOST)\nUSB Type-C*1 (Device) |\n| Physical | L x W x H (mm): 221*93*46mm |\n| Adaptor | 5V/2A |";
 const cradleTarget = `| Communication | Bluetooth & Wi-Fi\n${cradleTail} |`;
@@ -151,9 +181,11 @@ test("short continuations require a target ending and a complete next-page prefi
 test("DOCX cradle continuation and plain-text table quotes verify against an independent Markdown transcription", { timeout: 120000 }, async t => {
   for (const quote of ["cradle.", "cradle. Interfaces USB Type-C*1 (Power)"]) await t.test(quote, async t => {
     const f = await fixture(t, async (_req, res, body, call, { work }) => {
-      if (call === 1) return respond(res, { ...incomplete, text: cradleTarget });
+      if (call === 1) return respond(res, { ...incomplete, text: cradleTarget, issues: [screenshotIssue] });
       if (call === 2) {
         assert.match(body.messages[0].content, /never pad it/);
+        assert.equal(body.messages[1].content.filter(c => c.type === "image_url").length, 2);
+        assert.ok(body.messages[1].content[2].text.includes(screenshotIssue.replaceAll('"', '\\"')));
         return respond(res, { complete: true, text: cradleTarget, issues: [], continuation: { confirmed: true, tail: cradleTail, head: quote } });
       }
       assert.equal(await fs.stat(path.join(work, "image-0.png.json")).catch(() => null), null);
@@ -168,6 +200,7 @@ test("DOCX cradle continuation and plain-text table quotes verify against an ind
     const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
     assert.equal(audit.sourceHash, result.sourceHash);
     assert.equal(audit.result.continuation.head, quote);
+    assert.deepEqual(audit.priorIssues, [screenshotIssue]);
     assert.equal(audit.target.file, "image-0.png");
     assert.equal(audit.following.file, "image-1.png");
     assert.equal(audit.following.imageHash, JSON.parse(await fs.readFile(path.join(f.work, "image-1.png.json"), "utf8")).hash);
@@ -261,9 +294,9 @@ test(`${format} table continuation is reviewed once, independently checks the fo
 
 test(`${format}: real clipping, unreadable evidence and last-page truncation require review without complete caches`, { timeout: 120000 }, async t => {
   for (const [name, first, pages, expectedCalls] of [
-    ["real clipping", incomplete, 2, 3],
-    ["mixed issues", { ...incomplete, issues: [boundaryIssue, "Unreadable value in another cell"] }, 2, 2],
-    ["last page", incomplete, 1, 1],
+    ["real clipping", { ...incomplete, issues: [screenshotIssue] }, 2, 3],
+    ["mixed issues", { ...incomplete, issues: [screenshotIssue, "Unreadable value in another cell"] }, 2, 2],
+    ["last page", { ...incomplete, issues: [screenshotIssue] }, 1, 1],
   ]) await t.test(name, async t => {
     const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? first : { complete: false, text: tail, issues: ["The continuation is absent; actual text is clipped."] }), { pages, format });
     await assert.rejects(f.run(), /Unresolved visual evidence/);
@@ -294,11 +327,11 @@ test(`${format}: review cannot pass without quotes or with an invented continuat
 });
 }
 
-test("retrying a pending DOCX region enables continuation review while reusing the completed following page", { timeout: 60000 }, async t => {
+test("retrying a pending DOCX region handles page-boundary wording while reusing the completed following page", { timeout: 60000 }, async t => {
   const f = await fixture(t, (_req, res, _body, call) => respond(res,
     call === 1 ? { ...incomplete, issues: ["Unreadable table ending"] } :
     call === 2 ? { complete: true, text: head, issues: [] } :
-    call === 3 ? incomplete : reviewed), { format: "docx" });
+    call === 3 ? { ...incomplete, issues: [screenshotIssue] } : reviewed), { format: "docx" });
   await assert.rejects(f.run(), /Unresolved visual evidence/);
   const nextCachePath = path.join(f.work, "image-1.png.json");
   const nextCache = await fs.readFile(nextCachePath, "utf8");
@@ -309,6 +342,9 @@ test("retrying a pending DOCX region enables continuation review while reusing t
   const result = await f.run();
   assert.equal(f.requests.length, 4, "only the target and its contextual review need new requests");
   assert.match(result.coverage.join("\n"), /cross-page continuation verified/);
+  const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
+  assert.deepEqual(audit.priorIssues, [screenshotIssue]);
+  assert.equal(audit.verification.status, "verified");
   assert.equal(await fs.readFile(nextCachePath, "utf8"), nextCache);
   assert.deepEqual(await fs.readFile(f.source), f.original);
 });

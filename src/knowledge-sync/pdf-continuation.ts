@@ -1,4 +1,4 @@
-/** Only reconsider whole-page, bottom-boundary failures in PDFs and DOCX files
+/** Only reconsider whole-page continuation failures in PDFs and DOCX files
  * rendered as PDFs. Other visual failures and tiled pages stay fail-closed. */
 export interface VisualRegion {
   file: string;
@@ -24,11 +24,14 @@ export function nextContinuationPage(
   const result = value as { complete?: unknown; text?: unknown; issues?: unknown };
   if (result.complete !== false || typeof result.text !== "string" ||
       !Array.isArray(result.issues) || !result.issues.length) return;
-  // Mixed failures (e.g. blurry numbers plus a broken sentence) must not enter
-  // this exception. The model is instructed to report issues in English.
+  // A model may say "page boundary" or "page break" without "bottom/end".
+  // This gate requests evidence from the next page; it never certifies a match.
+  // Explicit side/top clipping and mixed failures must not enter this exception.
+  // The model is instructed to report issues in English.
   if (!result.issues.every((issue: unknown) => typeof issue === "string" &&
-    /cut[\s-]*off|truncat(?:ed|ion)|mid[\s-]*sentence|continu(?:ed|ation)/i.test(issue) &&
-    /\bbottom\b.{0,60}\bpage\b|\bpage\b.{0,60}\b(?:bottom|end)\b/i.test(issue) &&
+    /cut[\s-]*off|truncat(?:ed|ion)|mid[\s-]*sentence|continu(?:e[ds]?|ing|ation)/i.test(issue) &&
+    /\bbottom\b.{0,60}\bpage\b|\bpage\b.{0,60}\b(?:bottom|end)\b|\bpage[\s-]+(?:boundar(?:y|ies)|break)\b/i.test(issue) &&
+    !/\b(?:top|left|right|side)[\s-]+(?:hand[\s-]+)?(?:page[\s-]+)?(?:edge|boundar(?:y|ies))\b|\b(?:top|left|right|side)\s+of\s+(?:the\s+)?page\b/i.test(issue) &&
     !/unreadable|illegible|blur|corrupt|missing|cropp|obscur/i.test(issue))) return;
   const page = wholePage(image);
   if (page === undefined) return;
