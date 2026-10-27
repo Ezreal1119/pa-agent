@@ -6,6 +6,7 @@ import path from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import JSZip from "jszip";
 import { createConverter } from "../dist/knowledge-sync/converter.js";
 import { fileToolConfig } from "../dist/file-tools/config.js";
 import { emptyUsage } from "../dist/knowledge-sync/core.js";
@@ -30,16 +31,27 @@ function respond(res, result, finish = "stop") {
   }));
 }
 
-async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000 } = {}) {
+async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000, format = "pdf" } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-pdf-continuation-"));
-  const source = path.join(root, "fixture.pdf"), work = path.join(root, "work");
-  const pdf = await PDFDocument.create();
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  for (let i = 0; i < pages; i++) {
-    const page = pdf.addPage([400, 300]);
-    page.drawText(i ? head : tail, { x: 20, y: i ? 260 : 20, size: 12, font });
+  const source = path.join(root, `fixture.${format}`), work = path.join(root, "work");
+  if (format === "docx") {
+    // Exercise the real DOCX -> LibreOffice PDF -> page-image worker, using
+    // explicit pagination and a generic font so no Windows fonts are required.
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
+    zip.file("_rels/.rels", `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
+    const paragraphs = Array.from({ length: pages }, (_, i) => `<w:p>${i ? "<w:pPr><w:pageBreakBefore/></w:pPr>" : ""}<w:r><w:rPr><w:rFonts w:ascii="serif" w:hAnsi="serif"/></w:rPr><w:t>${i ? head : tail}</w:t></w:r></w:p>`).join("");
+    zip.file("word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}<w:sectPr><w:pgSz w:w="8000" w:h="6000"/><w:pgMar w:top="400" w:right="400" w:bottom="400" w:left="400"/></w:sectPr></w:body></w:document>`);
+    await fs.writeFile(source, await zip.generateAsync({ type: "nodebuffer" }));
+  } else {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < pages; i++) {
+      const page = pdf.addPage([400, 300]);
+      page.drawText(i ? head : tail, { x: 20, y: i ? 260 : 20, size: 12, font });
+    }
+    await fs.writeFile(source, await pdf.save());
   }
-  await fs.writeFile(source, await pdf.save());
   const original = await fs.readFile(source);
   const requests = [];
   const server = createServer(async (req, res) => {
@@ -58,12 +70,12 @@ async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000 }
     await fs.rm(root, { recursive: true, force: true });
   });
   const config = fileToolConfig(root, {
-    timeoutMs: 15000,
+    timeoutMs: format === "docx" ? 45000 : 15000,
     markitdown: path.resolve(".data/file-runtime/bin/markitdown"),
     vision: { apiKey: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}`, model: "fixture", timeoutMs },
   }, {});
   let acquired = 0, released = 0;
-  const converter = createConverter(config, "unused", budget, async () => {
+  const converter = createConverter(config, format === "docx" ? process.env.SYNC_SOFFICE_COMMAND || "soffice" : "unused", budget, async () => {
     acquired++;
     return () => { released++; };
   });
@@ -72,11 +84,14 @@ async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000 }
   return { root, source, work, original, requests, usage, run, gates: () => [acquired, released] };
 }
 
-test("only a whole PDF page with exclusively bottom-boundary issues and its immediate whole following page is eligible", () => {
+test("only whole PDF/DOCX pages with exclusively bottom-boundary issues and an immediate whole following page are eligible", () => {
   const a = whole(12), b = whole(13), c = whole(14);
   assert.equal(nextContinuationPage("source.pdf", a, [a, b, c], incomplete), b);
+  assert.equal(nextContinuationPage("source.docx", a, [a, b, c], incomplete), b);
+  assert.equal(nextContinuationPage("source.DOCX", a, [a, b, c], incomplete), b);
   const invalid = [
-    ["source.docx", a, [a, b], incomplete],
+    ["source.doc", a, [a, b], incomplete],
+    ["source.xlsx", a, [a, b], incomplete],
     ["source.pptx", a, [a, b], incomplete],
     ["source.png", a, [a, b], incomplete],
     ["source.pdf", a, [a, c], incomplete],
@@ -90,7 +105,10 @@ test("only a whole PDF page with exclusively bottom-boundary issues and its imme
     ["source.pdf", a, [a, b], { ...incomplete, issues: ["Text cut off inside the table"] }],
     ["source.pdf", a, [a, b], { ...incomplete, issues: ["Missing text cut off at the bottom page boundary"] }],
   ];
-  for (const args of invalid) assert.equal(nextContinuationPage(...args), undefined);
+  for (const args of invalid) {
+    assert.equal(nextContinuationPage(...args), undefined);
+    if (args[0] === "source.pdf") assert.equal(nextContinuationPage("source.docx", ...args.slice(1)), undefined);
+  }
   assert.deepEqual(continuationQuotes(reviewed), { tail, head });
   for (const continuation of [undefined, {}, { confirmed: false, tail, head }, { confirmed: true, tail: "a", head }, { confirmed: true, tail, head: "x".repeat(501) }]) {
     assert.equal(continuationQuotes({ ...reviewed, continuation }), undefined);
@@ -100,8 +118,9 @@ test("only a whole PDF page with exclusively bottom-boundary issues and its imme
     "do not normalize distinct digits or units into matching continuation evidence");
 });
 
-test("ordinary successful PDF pages keep one request each, the same prompt and reusable caches", { timeout: 30000 }, async t => {
-  const f = await fixture(t, (_req, res, _body, call) => respond(res, { complete: true, text: call === 1 ? tail : head, issues: [] }));
+for (const format of ["pdf", "docx"]) {
+test(`ordinary successful ${format} pages keep one request each, the same prompt and reusable caches`, { timeout: 60000 }, async t => {
+  const f = await fixture(t, (_req, res, _body, call) => respond(res, { complete: true, text: call === 1 ? tail : head, issues: [] }), { format });
   const result = await f.run();
   assert.equal(f.requests.length, 2);
   for (const request of f.requests) {
@@ -116,7 +135,7 @@ test("ordinary successful PDF pages keep one request each, the same prompt and r
   assert.deepEqual(f.gates(), [2, 2]);
 });
 
-test("normal table continuation is reviewed once, independently checks the following page, and only then checkpoints", { timeout: 30000 }, async t => {
+test(`${format} table continuation is reviewed once, independently checks the following page, and only then checkpoints`, { timeout: 60000 }, async t => {
   let beforeFollowing;
   const f = await fixture(t, async (_req, res, body, call, { work }) => {
     if (call === 1) respond(res, incomplete);
@@ -130,7 +149,7 @@ test("normal table continuation is reviewed once, independently checks the follo
       assert.equal(body.messages[1].content.filter(c => c.type === "image_url").length, 1);
       respond(res, { complete: true, text: head, issues: [] });
     }
-  });
+  }, { format });
   const result = await f.run();
   assert.equal(beforeFollowing, null, "do not mark TARGET complete before independently verifying the continuation");
   assert.equal(f.requests.length, 3);
@@ -149,21 +168,27 @@ test("normal table continuation is reviewed once, independently checks the follo
 
   // Same page pixels, different document identity: a reviewed TARGET cache may
   // not be reused solely because its own image still has the same hash.
-  const changed = await PDFDocument.load(f.original);
-  changed.setTitle("Changed PDF identity");
-  await fs.writeFile(f.source, await changed.save());
+  if (format === "pdf") {
+    const changed = await PDFDocument.load(f.original);
+    changed.setTitle("Changed PDF identity");
+    await fs.writeFile(f.source, await changed.save());
+  } else {
+    const changed = await JSZip.loadAsync(f.original);
+    changed.file("docProps/core.xml", `<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Changed DOCX identity</dc:title></cp:coreProperties>`);
+    await fs.writeFile(f.source, await changed.generateAsync({ type: "nodebuffer" }));
+  }
   const modified = await f.run(undefined, emptyUsage());
   assert.notEqual(modified.sourceHash, result.sourceHash);
   assert.equal(f.requests.length, 4, "TARGET gets a fresh check; ordinary following-page cache stays reusable");
 });
 
-test("real clipping, unreadable evidence and last-page truncation require review without complete caches", { timeout: 30000 }, async t => {
+test(`${format}: real clipping, unreadable evidence and last-page truncation require review without complete caches`, { timeout: 120000 }, async t => {
   for (const [name, first, pages, expectedCalls] of [
     ["real clipping", incomplete, 2, 3],
     ["mixed issues", { ...incomplete, issues: [boundaryIssue, "Unreadable value in another cell"] }, 2, 2],
     ["last page", incomplete, 1, 1],
   ]) await t.test(name, async t => {
-    const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? first : { complete: false, text: tail, issues: ["The continuation is absent; actual text is clipped."] }), { pages });
+    const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? first : { complete: false, text: tail, issues: ["The continuation is absent; actual text is clipped."] }), { pages, format });
     await assert.rejects(f.run(), /Unresolved visual evidence/);
     assert.equal(f.requests.length, expectedCalls);
     assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
@@ -171,18 +196,38 @@ test("real clipping, unreadable evidence and last-page truncation require review
   });
 });
 
-test("review cannot pass without quotes or with an invented continuation that the following page does not confirm", { timeout: 30000 }, async t => {
+test(`${format}: review cannot pass without quotes or with an invented continuation that the following page does not confirm`, { timeout: 120000 }, async t => {
   for (const [name, review, next, calls] of [
     ["no quotes", { complete: true, text: tail, issues: [] }, head, 2],
     ["unconfirmed", { ...reviewed, continuation: { confirmed: false, tail, head } }, head, 2],
     ["invented head", reviewed, "Unrelated following-page text", 3],
   ]) await t.test(name, async t => {
-    const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? incomplete : call === 2 ? review : { complete: true, text: next, issues: [] }));
+    const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? incomplete : call === 2 ? review : { complete: true, text: next, issues: [] }), { format });
     await assert.rejects(f.run(), /Unresolved visual evidence.*(?:verifiable continuation quotes|independent transcription)/);
     assert.equal(f.requests.length, calls);
     assert.equal(await fs.stat(path.join(f.work, "image-0.png.json")).catch(() => null), null);
     assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
   });
+});
+}
+
+test("retrying a pending DOCX region enables continuation review while reusing the completed following page", { timeout: 60000 }, async t => {
+  const f = await fixture(t, (_req, res, _body, call) => respond(res,
+    call === 1 ? { ...incomplete, issues: ["Unreadable table ending"] } :
+    call === 2 ? { complete: true, text: head, issues: [] } :
+    call === 3 ? incomplete : reviewed), { format: "docx" });
+  await assert.rejects(f.run(), /Unresolved visual evidence/);
+  const nextCachePath = path.join(f.work, "image-1.png.json");
+  const nextCache = await fs.readFile(nextCachePath, "utf8");
+  await assert.rejects(f.run(), /Unresolved visual evidence/);
+  assert.equal(f.requests.length, 2, "pending evidence is retained until an explicit retry");
+  // Retry this region removes only its partial checkpoint, as SyncService does.
+  await fs.rm(path.join(f.work, "image-0.png.partial.json"));
+  const result = await f.run();
+  assert.equal(f.requests.length, 4, "only the target and its contextual review need new requests");
+  assert.match(result.coverage.join("\n"), /cross-page continuation verified/);
+  assert.equal(await fs.readFile(nextCachePath, "utf8"), nextCache);
+  assert.deepEqual(await fs.readFile(f.source), f.original);
 });
 
 test("following-page failure cannot publish or cache the provisional TARGET evidence", { timeout: 30000 }, async t => {

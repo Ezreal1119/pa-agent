@@ -1,5 +1,5 @@
-/** Only reconsider a PDF's whole-page, bottom-boundary failure. Other visual
- * failures and tiled pages keep the existing fail-closed behaviour. */
+/** Only reconsider whole-page, bottom-boundary failures in PDFs and DOCX files
+ * rendered as PDFs. Other visual failures and tiled pages stay fail-closed. */
 export interface VisualRegion {
   file: string;
   label: string;
@@ -20,7 +20,7 @@ export function nextContinuationPage(
   images: VisualRegion[],
   value: unknown,
 ): VisualRegion | undefined {
-  if (!/\.pdf$/i.test(source) || !value || typeof value !== "object") return;
+  if (!/\.(?:pdf|docx)$/i.test(source) || !value || typeof value !== "object") return;
   const result = value as { complete?: unknown; text?: unknown; issues?: unknown };
   if (result.complete !== false || typeof result.text !== "string" ||
       !Array.isArray(result.issues) || !result.issues.length) return;
