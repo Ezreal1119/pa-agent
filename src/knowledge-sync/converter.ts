@@ -9,7 +9,7 @@ import { SYNC_MAX_SHEETS } from "./config.js";
 import { visionHttpError } from "./vision-http.js";
 import {
   CONTINUATION_REVIEW_PROMPT,
-  containsContinuationQuote,
+  matchesContinuationHead,
   continuationQuotes,
   nextContinuationPage,
   type VisualRegion,
@@ -32,6 +32,19 @@ export type Converter = (
   resolutions?: VisualResolution[],
 ) => Promise<Conversion>;
 export const CONVERSION_VERSION = 4;
+interface ContinuationRecord {
+  version: 1;
+  sourceHash: string;
+  target: { file: string; label: string; imageHash: string };
+  following: { file: string; label: string; imageHash: string };
+  priorIssues: unknown;
+  result: { complete: boolean; text: string; issues: string[]; continuation?: unknown };
+  verification: {
+    status: "pending" | "rejected" | "invalid_quotes" | "following_incomplete" | "mismatch" | "verified";
+    reason?: string;
+    followingText?: string;
+  };
+}
 function visionAbort(signal: AbortSignal, label: string) {
   return new Error(
     `${signal.reason?.name === "TimeoutError" ? "SYNC file deadline exceeded" : "Vision conversion cancelled"} at ${label}. Completed regions are retained.`,
@@ -161,6 +174,7 @@ export function createConverter(
       label: string; head: string; cacheFile: string;
       evidence: PartialVisualEvidence;
       cache: { hash: string; text: string; complete: true; continuationSourceHash: string };
+      audit: { file: string; record: ContinuationRecord };
     }>();
     const includePartial = (partial: PartialVisualEvidence) => {
       const { text: _text, sourceHash: _sourceHash, ...issue } = partial;
@@ -198,6 +212,7 @@ export function createConverter(
       let continuation: VisualRegion | undefined;
       let priorIssues: unknown;
       let confirmed: { tail: string; head: string } | undefined;
+      let audit: { file: string; record: ContinuationRecord } | undefined;
       // One retry only for a local request timeout, within the original file
       // deadline and request budget. Complete region caches remain unchanged.
       for (let attempt = 1, attemptLimit = 2; text === undefined && attempt <= attemptLimit; attempt++) {
@@ -301,6 +316,26 @@ export function createConverter(
               !Array.isArray(value.issues) || value.issues.length > 100 ||
               value.issues.some((issue: unknown) => typeof issue !== "string" || !issue.trim() || issue.length > 4000))
             throw new Error("Vision did not return a valid coverage result.");
+          if (continuation && contextBytes) {
+            confirmed = value.complete && !value.issues.length ? continuationQuotes(value) : undefined;
+            audit = {
+              file: path.join(dir, `${image.file}.continuation.json`),
+              record: {
+                version: 1, sourceHash,
+                target: { file: image.file, label: image.label, imageHash: key },
+                following: { file: continuation.file, label: continuation.label, imageHash: hash(contextBytes) },
+                priorIssues,
+                result: { complete: value.complete, text: value.text, issues: value.issues, continuation: value.continuation },
+                verification: !value.complete || value.issues.length
+                  ? { status: "rejected", reason: "The cross-page review reported unresolved visual evidence." }
+                  : confirmed ? { status: "pending" }
+                  : { status: "invalid_quotes", reason: "The cross-page review did not provide verifiable continuation quotes." },
+              },
+            };
+            // Private diagnostic evidence, never a successful OCR checkpoint or
+            // model input. Save before any rejection so the quotes are available.
+            await atomic(audit.file, JSON.stringify(audit.record));
+          }
           if (value.complete !== true || value.issues.length > 0) {
             if (!continuation) {
               const next = nextContinuationPage(source, image, manifest.images, value);
@@ -322,7 +357,6 @@ export function createConverter(
             break;
           }
           if (continuation) {
-            confirmed = continuationQuotes(value);
             if (!confirmed) throw new Error(
               `Unresolved visual evidence at ${image.label}: cross-page review did not provide verifiable continuation quotes.`,
             );
@@ -356,13 +390,22 @@ export function createConverter(
       }
       const pending = pendingContinuations.get(image.file);
       if (pending) {
+        const verified = !partial && !!text && matchesContinuationHead(text, pending.head);
+        pending.audit.record.verification = {
+          status: partial ? "following_incomplete" : verified ? "verified" : "mismatch",
+          followingText: text,
+          ...(partial ? { reason: "The following page contains unreadable evidence." }
+            : !verified
+              ? { reason: "The continuation quote was not confirmed by the following page's independent transcription." } : {}),
+        };
+        await atomic(pending.audit.file, JSON.stringify(pending.audit.record));
         if (partial) {
           // A partially read following page cannot certify a provisional TARGET.
           // Retain both as explicit review items, never complete checkpoints.
           await atomic(path.join(dir, `${pending.evidence.file}.partial.json`), JSON.stringify(pending.evidence));
           includePartial(pending.evidence);
         } else {
-          if (!text || !containsContinuationQuote(text, pending.head)) throw new Error(
+          if (pending.audit.record.verification.status !== "verified") throw new Error(
             `Unresolved visual evidence at ${pending.label}: continuation quote was not confirmed by the following page's independent transcription.`,
           );
           await atomic(pending.cacheFile, JSON.stringify(pending.cache));
@@ -373,13 +416,14 @@ export function createConverter(
       if (text)
         markdown += `\n\n### Visual evidence — ${image.label}\n\n${text}`;
       if (partial) includePartial(partial);
-      if (confirmed && continuation && text !== undefined) {
+      if (confirmed && continuation && audit && text !== undefined) {
         pendingContinuations.set(continuation.file, {
           label: image.label, head: confirmed.head,
           evidence: visualIssue(sourceHash, key, image.file, image.label, text,
             ["Cross-page continuation could not be independently verified because the following page contains unreadable evidence."]),
           cacheFile: path.join(dir, `${image.file}.json`),
           cache: { hash: key, text, complete: true, continuationSourceHash: sourceHash },
+          audit,
         });
       } else if (!partial) manifest.coverage.push(`${image.label}: inspected`);
       await atomic(

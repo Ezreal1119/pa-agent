@@ -10,7 +10,7 @@ import JSZip from "jszip";
 import { createConverter } from "../dist/knowledge-sync/converter.js";
 import { fileToolConfig } from "../dist/file-tools/config.js";
 import { emptyUsage } from "../dist/knowledge-sync/core.js";
-import { nextContinuationPage, continuationQuotes } from "../dist/knowledge-sync/pdf-continuation.js";
+import { nextContinuationPage, continuationQuotes, containsContinuationQuote, matchesContinuationHead } from "../dist/knowledge-sync/pdf-continuation.js";
 
 const tail = "10. Supports flexible anti-metal labels with a";
 const head = "thickness not exceeding 1.5 mm.";
@@ -31,7 +31,7 @@ function respond(res, result, finish = "stop") {
   }));
 }
 
-async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000, format = "pdf" } = {}) {
+async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000, format = "pdf", pageTexts = [tail, head] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-pdf-continuation-"));
   const source = path.join(root, `fixture.${format}`), work = path.join(root, "work");
   if (format === "docx") {
@@ -40,7 +40,7 @@ async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000, 
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
     zip.file("_rels/.rels", `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
-    const paragraphs = Array.from({ length: pages }, (_, i) => `<w:p>${i ? "<w:pPr><w:pageBreakBefore/></w:pPr>" : ""}<w:r><w:rPr><w:rFonts w:ascii="serif" w:hAnsi="serif"/></w:rPr><w:t>${i ? head : tail}</w:t></w:r></w:p>`).join("");
+    const paragraphs = Array.from({ length: pages }, (_, i) => `<w:p>${i ? "<w:pPr><w:pageBreakBefore/></w:pPr>" : ""}<w:r><w:rPr><w:rFonts w:ascii="serif" w:hAnsi="serif"/></w:rPr><w:t>${i ? pageTexts[1] : pageTexts[0]}</w:t></w:r></w:p>`).join("");
     zip.file("word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}<w:sectPr><w:pgSz w:w="8000" w:h="6000"/><w:pgMar w:top="400" w:right="400" w:bottom="400" w:left="400"/></w:sectPr></w:body></w:document>`);
     await fs.writeFile(source, await zip.generateAsync({ type: "nodebuffer" }));
   } else {
@@ -48,7 +48,7 @@ async function fixture(t, handler, { pages = 2, budget = 128, timeoutMs = 1000, 
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     for (let i = 0; i < pages; i++) {
       const page = pdf.addPage([400, 300]);
-      page.drawText(i ? head : tail, { x: 20, y: i ? 260 : 20, size: 12, font });
+      page.drawText(i ? pageTexts[1] : pageTexts[0], { x: 20, y: i ? 260 : 20, size: 12, font });
     }
     await fs.writeFile(source, await pdf.save());
   }
@@ -118,6 +118,82 @@ test("only whole PDF/DOCX pages with exclusively bottom-boundary issues and an i
     "do not normalize distinct digits or units into matching continuation evidence");
 });
 
+const cradleTail = "Supports wireless communication between the POS terminal and the";
+const cradleNext = "cradle.\n\n| Interfaces | USB Type-C*1 (Power)\nLAN*1 (RJ45)\nRS232*1 (RJ45)\nUSB Type-A*1 (HOST)\nUSB Type-C*1 (Device) |\n| Physical | L x W x H (mm): 221*93*46mm |\n| Adaptor | 5V/2A |";
+const cradleTarget = `| Communication | Bluetooth & Wi-Fi\n${cradleTail} |`;
+
+test("short continuations require a target ending and a complete next-page prefix; table layout never erases values", () => {
+  const value = { text: cradleTarget, continuation: { confirmed: true, tail: cradleTail, head: "cradle." } };
+  assert.deepEqual(continuationQuotes(value), { tail: cradleTail, head: "cradle." });
+  assert.equal(continuationQuotes({ ...value, text: `${cradleTarget}\nUnrelated later target text` }), undefined);
+  for (const badHead of ["", "...", "| --- |", " ", "x".repeat(501)]) {
+    assert.equal(continuationQuotes({ ...value, continuation: { ...value.continuation, head: badHead } }), undefined);
+  }
+  assert.equal(matchesContinuationHead(cradleNext, "cradle."), true);
+  assert.equal(matchesContinuationHead("| | cradle. |", "cradle."), true);
+  assert.equal(matchesContinuationHead("Other content before cradle.", "cradle."), false);
+  assert.equal(matchesContinuationHead("cradle.X", "cradle."), false);
+  assert.equal(matchesContinuationHead("5V/2A", "5V"), false);
+  assert.equal(matchesContinuationHead("---", "---"), false);
+  assert.equal(matchesContinuationHead(cradleNext, "cradle. Interfaces USB Type-C*1 (Power)"), true);
+  assert.equal(containsContinuationQuote("| Label | Value |\n| --- | :---: |\n| Device | USB Type-C\\*1 |", "Device USB Type-C*1"), true);
+  for (const [actual, quote] of [
+    ["| Value | 1² mm |", "Value 12 mm"],
+    ["| Value | -5 V |", "Value 5 V"],
+    ["| Value | 5V/2A |", "Value 5V 2A"],
+    ["| Value | 1*2 |", "Value 12"],
+    ["| Value | A\\|B |", "Value A B"],
+    ["A | B", "A B"],
+    ["prefix ends |", "prefix ends other"],
+  ]) assert.equal(containsContinuationQuote(actual, quote), false, `${actual} must not match ${quote}`);
+});
+
+test("DOCX cradle continuation and plain-text table quotes verify against an independent Markdown transcription", { timeout: 120000 }, async t => {
+  for (const quote of ["cradle.", "cradle. Interfaces USB Type-C*1 (Power)"]) await t.test(quote, async t => {
+    const f = await fixture(t, async (_req, res, body, call, { work }) => {
+      if (call === 1) return respond(res, { ...incomplete, text: cradleTarget });
+      if (call === 2) {
+        assert.match(body.messages[0].content, /never pad it/);
+        return respond(res, { complete: true, text: cradleTarget, issues: [], continuation: { confirmed: true, tail: cradleTail, head: quote } });
+      }
+      assert.equal(await fs.stat(path.join(work, "image-0.png.json")).catch(() => null), null);
+      const audit = JSON.parse(await fs.readFile(path.join(work, "image-0.png.continuation.json"), "utf8"));
+      assert.equal(audit.verification.status, "pending");
+      respond(res, { complete: true, text: cradleNext, issues: [] });
+    }, { format: "docx", pageTexts: [cradleTail, "cradle."] });
+    const result = await f.run();
+    assert.equal(f.requests.length, 3);
+    assert.match(result.coverage.join("\n"), /cross-page continuation verified/);
+    assert.match(result.markdown, /221\*93\*46mm/);
+    const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
+    assert.equal(audit.sourceHash, result.sourceHash);
+    assert.equal(audit.result.continuation.head, quote);
+    assert.equal(audit.target.file, "image-0.png");
+    assert.equal(audit.following.file, "image-1.png");
+    assert.equal(audit.following.imageHash, JSON.parse(await fs.readFile(path.join(f.work, "image-1.png.json"), "utf8")).hash);
+    assert.equal(audit.verification.status, "verified");
+    assert.equal(audit.verification.followingText, cradleNext);
+    const stat = await fs.stat(path.join(f.work, "image-0.png.continuation.json"));
+    assert.equal(stat.mode & 0o777, 0o600);
+    await f.run();
+    assert.equal(f.requests.length, 3);
+  });
+});
+
+test("a short DOCX continuation found elsewhere cannot certify the next page and leaves diagnostic quotes", { timeout: 60000 }, async t => {
+  const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1
+    ? { ...incomplete, text: cradleTail }
+    : call === 2 ? { complete: true, text: cradleTail, issues: [], continuation: { confirmed: true, tail: cradleTail, head: "cradle." } }
+    : { complete: true, text: "Unrelated opening text.\ncradle.", issues: [] }), { format: "docx", pageTexts: [cradleTail, "cradle."] });
+  await assert.rejects(f.run(), /continuation quote was not confirmed/);
+  const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
+  assert.equal(audit.result.continuation.head, "cradle.");
+  assert.equal(audit.verification.status, "mismatch");
+  assert.match(audit.verification.reason, /not confirmed/);
+  assert.equal(await fs.stat(path.join(f.work, "image-0.png.json")).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
+});
+
 for (const format of ["pdf", "docx"]) {
 test(`ordinary successful ${format} pages keep one request each, the same prompt and reusable caches`, { timeout: 60000 }, async t => {
   const f = await fixture(t, (_req, res, _body, call) => respond(res, { complete: true, text: call === 1 ? tail : head, issues: [] }), { format });
@@ -129,6 +205,7 @@ test(`ordinary successful ${format} pages keep one request each, the same prompt
   }
   assert.equal(result.coverage.filter(c => c.endsWith(": inspected")).length, 2);
   assert.doesNotMatch(result.coverage.join("\n"), /continuation/);
+  assert.equal(await fs.stat(path.join(f.work, "image-0.png.continuation.json")).catch(() => null), null);
   await f.run();
   assert.equal(f.requests.length, 2);
   assert.deepEqual(await fs.readFile(f.source), f.original);
@@ -192,6 +269,10 @@ test(`${format}: real clipping, unreadable evidence and last-page truncation req
     await assert.rejects(f.run(), /Unresolved visual evidence/);
     assert.equal(f.requests.length, expectedCalls);
     assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
+    const auditPath = path.join(f.work, "image-0.png.continuation.json");
+    if (name === "real clipping") {
+      assert.equal(JSON.parse(await fs.readFile(auditPath, "utf8")).verification.status, "rejected");
+    } else assert.equal(await fs.stat(auditPath).catch(() => null), null);
     assert.equal(await fs.stat(path.join(f.work, "image-0.png.json")).catch(() => null), null);
   });
 });
@@ -205,6 +286,8 @@ test(`${format}: review cannot pass without quotes or with an invented continuat
     const f = await fixture(t, (_req, res, _body, call) => respond(res, call === 1 ? incomplete : call === 2 ? review : { complete: true, text: next, issues: [] }), { format });
     await assert.rejects(f.run(), /Unresolved visual evidence.*(?:verifiable continuation quotes|independent transcription)/);
     assert.equal(f.requests.length, calls);
+    const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
+    assert.equal(audit.verification.status, calls === 2 ? "invalid_quotes" : "mismatch");
     assert.equal(await fs.stat(path.join(f.work, "image-0.png.json")).catch(() => null), null);
     assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
   });
@@ -242,6 +325,8 @@ test("following-page failure cannot publish or cache the provisional TARGET evid
   assert.equal(f.requests.length, 3);
   assert.equal(await fs.stat(path.join(f.work, "image-0.png.json")).catch(() => null), null);
   assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
+  const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
+  assert.equal(audit.verification.status, "following_incomplete");
 });
 
 test("review and following-page verification remain within the original request budget", { timeout: 30000 }, async t => {
