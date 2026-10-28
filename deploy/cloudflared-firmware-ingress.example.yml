@@ -1,0 +1,9 @@
+# Add this ingress rule BEFORE the catch-all rule in ~/.cloudflared/config.yml.
+# Keep existing APP/Agent ingress rules and tunnel credentials.
+# When QUIC is unstable, the top-level option protocol: http2 can be used.
+- hostname: urovo-tech.patrick-shenzhen.org
+  path: ^/firmware-api/.*$
+  service: http://127.0.0.1:8765
+  originRequest:
+    httpHostHeader: 127.0.0.1:8765
+    disableChunkedEncoding: true

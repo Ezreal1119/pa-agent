@@ -42,6 +42,9 @@ export class BridgeStore {
         return !Array.isArray(parts) || parts.length !== 3 || !['single', 'group'].includes(parts[1]) || !scope || !Number.isSafeInteger(scope.generation) || scope.generation < 0 || scope.awaitingUser !== undefined && (typeof scope.awaitingUser !== 'string' || !scope.awaitingUser || scope.awaitingUser.length > 256) || scope.awaitingMode !== undefined && !['role', 'files'].includes(scope.awaitingMode);
       }))) throw new Error('WeCom command scope state is invalid; existing preferences were not reset.');
       this.data = value;
+      for (const scope of Object.values(this.data.scopes ?? {})) {
+        if (scope.firmwareUser !== undefined && (typeof scope.firmwareUser !== 'string' || !scope.firmwareUser || scope.firmwareUser.length > 256) || scope.firmwareFlow !== undefined && !/^[a-f0-9]{32}$/.test(scope.firmwareFlow) || scope.firmwareUntil !== undefined && !Number.isFinite(scope.firmwareUntil)) throw new Error('Invalid persisted firmware input scope.');
+      }
     } catch (error) { if (error.code !== 'ENOENT') { await this.close(); throw error; } }
     return this;
   }

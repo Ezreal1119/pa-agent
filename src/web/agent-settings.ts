@@ -12,6 +12,7 @@ export interface WebAgentSettings {
   effort: ReasoningMode;
   mcp?: { enabled: boolean };
   libraryLinks: { enabled: boolean };
+  firmware?: { enabled: boolean };
   webTools: { tools: Record<WebToolName, boolean> };
   fileTools: { tools: Record<FileToolName, boolean> };
 }
@@ -23,14 +24,15 @@ function toolPreferences<T extends string>(input: unknown, names: readonly T[], 
 }
 export function validateAgentSettings(input: unknown): WebAgentSettings {
   const value = input as WebAgentSettings;
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["effort", "fileTools", "libraryLinks", "webTools", "mcp"].includes(key)) || !isReasoningMode(value.effort)) throw new Error("Select a valid reasoning level.");
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["effort", "fileTools", "libraryLinks", "webTools", "mcp", "firmware"].includes(key)) || !isReasoningMode(value.effort)) throw new Error("Select a valid reasoning level.");
+  if (value.firmware !== undefined && (!value.firmware || typeof value.firmware !== "object" || Array.isArray(value.firmware) || Object.keys(value.firmware).some(key => key !== "enabled") || typeof value.firmware.enabled !== "boolean")) throw new Error("Provide a valid firmware tool switch.");
   if (value.mcp !== undefined && (!value.mcp || typeof value.mcp !== "object" || Array.isArray(value.mcp) || Object.keys(value.mcp).some(key => key !== "enabled") || typeof value.mcp.enabled !== "boolean")) throw new Error("Provide a valid MCP switch.");
   const fileTools = toolPreferences(value.fileTools, FILE_TOOL_NAMES, "file");
   const links = value.libraryLinks;
   // Settings saved before the library switch existed retain their enabled behavior.
   if (links !== undefined && (!links || typeof links !== "object" || Array.isArray(links) || Object.keys(links).some(key => key !== "enabled") || typeof links.enabled !== "boolean")) throw new Error("Provide a valid library link tool switch.");
   const webTools = value.webTools === undefined ? defaultWebToolSettings() : toolPreferences(value.webTools, WEB_TOOL_NAMES, "online");
-  return { effort: value.effort, ...(value.mcp ? { mcp: { enabled: value.mcp.enabled } } : {}), webTools, libraryLinks: { enabled: links?.enabled ?? true }, fileTools };
+  return { effort: value.effort, ...(value.mcp ? { mcp: { enabled: value.mcp.enabled } } : {}), ...(value.firmware ? { firmware: { enabled: value.firmware.enabled } } : {}), webTools, libraryLinks: { enabled: links?.enabled ?? true }, fileTools };
 }
 export class AgentSettingsStore {
   readonly file: string;

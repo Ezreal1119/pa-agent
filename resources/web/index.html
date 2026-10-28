@@ -131,6 +131,9 @@
       </div>
       <div class="file-tools-heading"><div><strong>Library links</strong><small>Applies to subsequent requests in Web and WeCom.</small></div></div>
       <label class="file-tool-option"><span><strong>Find file and software links</strong><code>get_file_link_from_library</code><small>Get specification, document, or software download links from the library.</small></span><input id="library-links-enabled" type="checkbox" role="switch" aria-label="Enable library link search"></label>
+      <div class="file-tools-heading"><div><strong>OS firmware</strong><small>Only available through the WeCom /firmware command.</small></div></div>
+      <label class="file-tool-option"><span><strong>Download and upload OS firmware</strong><code>firmware</code><small>Match real FTP files, ask for confirmation, then download locally and upload to R2. Disabling blocks new requests; accepted tasks continue.</small></span><input id="firmware-enabled" type="checkbox" role="switch" aria-label="Enable firmware download and upload"></label>
+      <p id="firmware-help" class="settings-help"></p>
       <div class="file-tools-heading"><div><strong>File tools</strong><small>Enable or disable each tool independently.</small></div></div>
       <div id="file-tool-toggles" class="file-tool-toggles"></div>
       <p id="settings-error" class="form-error" role="alert" hidden></p>

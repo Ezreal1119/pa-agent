@@ -1,4 +1,7 @@
 import { balanceCommand, libraryCommand } from "./wecom-commands.js";
+import { firmwareConfig, LocalFirmwareClient, type FirmwareClient } from "../firmware/client.js";
+import { FirmwareService } from "../firmware/service.js";
+import { createFirmwareMatcher, type FirmwareMatcher } from "../firmware/matcher.js";
 import { WecomRoles, roleScope, senderScope } from "./wecom-roles.js";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
@@ -73,7 +76,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { firmware?: { client?: FirmwareClient; matcher?: FirmwareMatcher; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -84,6 +87,7 @@ export async function createWebServer(options: WebOptions = {}) {
     if (error.code === "ENOENT") return {} as Record<string, string>;
     throw error;
   });
+  const firmwareOptions = firmwareConfig({ ...diskEnv, ...process.env });
   const libraryOptions = libraryConfig({ ...diskEnv, ...process.env });
   const sftpOptions = sftpConfig(cwd, dataDir, { ...diskEnv, ...process.env });
   const mcpOptions = mcpConfig(options.mcp, { ...diskEnv, ...process.env });
@@ -136,6 +140,7 @@ export async function createWebServer(options: WebOptions = {}) {
     let message = error instanceof Error ? error.message : String(error);
     if (mcpOptions.apiKey) message = message.split(mcpOptions.apiKey).join("[REDACTED]");
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
+    if (firmwareOptions.token) message = message.split(firmwareOptions.token).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
     if (webConfig.apiKey) message = message.split(webConfig.apiKey).join("[REDACTED]");
     if (libraryOptions.password) message = message.split(libraryOptions.password).join("[REDACTED]");
@@ -179,10 +184,15 @@ export async function createWebServer(options: WebOptions = {}) {
       return createResearchEngine({dataDir, resourcesDir, model: () => model, web: () => web, pricing: syncEnv.RESEARCH_PRICING_JSON ? JSON.parse(syncEnv.RESEARCH_PRICING_JSON) : undefined});
     })});
   await research.init();
+  const firmware = new FirmwareService({ dataDir, client: options.firmware?.client ?? new LocalFirmwareClient(firmwareOptions),
+    matcher: options.firmware?.matcher ?? createFirmwareMatcher(() => ({ ...settings }), path.join(dataDir, "firmware")),
+    enabled: () => Boolean(agentSettings.firmware?.enabled && (options.firmware?.matcher || configured())),
+    publicBase: options.firmware?.publicBase ?? firmwareOptions.publicBase, pollMs: options.firmware?.pollMs });
+  await firmware.start();
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
-      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, webTools: webConfig };
+      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
       initializing = AgentRuntime.create(config).then(value => runtime = value).catch(error => { initializing = undefined; throw error; });
     }
     return initializing;
@@ -452,6 +462,16 @@ export async function createWebServer(options: WebOptions = {}) {
       if (machine) {
         if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "WeCom API credentials are invalid or not configured.");
         const route = url.pathname.slice("/api/wecom".length);
+        if (route.startsWith("/firmware/")) {
+          if (method !== "POST" || url.search) throw new HttpError(400, "Firmware commands require POST without query parameters.");
+          const input = await readBody(req, 16384);
+          try {
+            if (route === "/firmware/command") return json(res, 200, await firmware.command(input));
+            if (route === "/firmware/notifications/claim") return json(res, 200, await firmware.claim(input));
+            if (route === "/firmware/notifications/ack") return json(res, 200, await firmware.ack(input));
+          } catch (error) { throw new HttpError(400, redact(error)); }
+          throw new HttpError(404, "Firmware operation not found.");
+        }
         if (route === "/role" && ["GET", "PUT", "DELETE"].includes(method ?? "")) {
           let scope;
           try { scope = roleScope(JSON.parse(url.searchParams.get("scope") ?? "null")); }
@@ -496,7 +516,7 @@ export async function createWebServer(options: WebOptions = {}) {
           catch (error) { throw new HttpError(400, redact(error)); }
         }
         url.pathname = `/api${route}`;
-        if (route === "/status") return json(res, 200, { configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
+        if (route === "/status") return json(res, 200, { firmwareSupported: true, configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
       }
       const authenticated = machine || auth.authenticated(req);
       if (method === "GET" && url.pathname === "/api/auth/status") return json(res, 200, { token: csrf, configured: auth.configured, authenticated });
@@ -534,7 +554,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (url.pathname === "/api/prompt/preview" && method === "POST") {
           const body = await readBody(req, 262144);
           if (Object.keys(body).some(k => !["instructions", "mode"].includes(k)) || !["standard", "mcp"].includes(body.mode)) throw new HttpError(400, "Provide instructions and standard or mcp mode.");
-          const config = resolveConfig({cwd,dataDir,resourcesDir,model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled});
+          const config = resolveConfig({cwd,dataDir,resourcesDir,model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
           const release = await knowledgeLock(path.join(dataDir,"urovo-product-expert")).read();
           try { return json(res, 200, {...await previewPrompt(config,body.mode === "mcp",body.instructions), reasoning: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default"}); }
           finally { release(); }
@@ -771,7 +791,7 @@ export async function createWebServer(options: WebOptions = {}) {
       if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "bearer", keyConfigured: mcpAccess.configured, ...await mcpStore.summary() });
       if (url.pathname === "/api/config") throw new HttpError(410, "Model connections are configured in .env. Restart the service after making changes.");
       if (url.pathname === "/api/agent-settings") {
-        if (method === "GET") return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey) });
+        if (method === "GET") return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey), firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token) });
         if (method !== "PUT") throw new HttpError(405, "Agent settings support GET and PUT only.");
         if (configuring || initializing && !runtime || openingSessions > 0 || [...records.values()].some(item => item.running || item.opening || item.mutating)) throw new HttpError(409, "Wait for the current run to finish before changing agent settings.");
         configuring = true;
@@ -779,6 +799,7 @@ export async function createWebServer(options: WebOptions = {}) {
           let next;
           try { next = validateAgentSettings(await readBody(req)); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, redact(error)); }
           next.mcp ??= agentSettings.mcp;
+          next.firmware ??= agentSettings.firmware;
           if (next.mcp?.enabled && !mcpAccess.configured) throw new HttpError(400, "Set MCP_API_KEY in .env and restart the service before enabling MCP.");
           if (!isDeepSeekModel(settings) && next.effort !== agentSettings.effort) throw new HttpError(400, "This model does not support reasoning-level changes. Tool switches remain available.");
           if (WEB_TOOL_NAMES.some(name => next.webTools.tools[name]) && !webConfig.apiKey) throw new HttpError(400, "Online tools require a DeepSeek key. Direct DeepSeek connections reuse API_KEY; otherwise set DEEPSEEK_API_KEY in .env and restart the service.");
@@ -786,7 +807,7 @@ export async function createWebServer(options: WebOptions = {}) {
           for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
           runtime?.dispose(); runtime = undefined; initializing = undefined;
           agentSettings = next; applyAgentSettings(); mcpOptions.enabled = next.mcp?.enabled ?? mcpOptions.enabled;
-          return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey) });
+          return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey), firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token) });
         } finally { configuring = false; }
       }
       if (method === "GET" && url.pathname === "/api/sessions") return json(res, 200, { sessions: await listSessions() });
@@ -1098,6 +1119,7 @@ export async function createWebServer(options: WebOptions = {}) {
   server.requestTimeout = 60000;
   async function close() {
     for (const controller of commandControllers) controller.abort();
+    await firmware.close();
     await autoSync.close();
     await autoSyncSocket.close();
     await research.close();

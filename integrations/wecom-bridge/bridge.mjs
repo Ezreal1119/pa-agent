@@ -7,6 +7,7 @@ import { downloadMedia } from './media.mjs';
 import { MessageObserver, notificationInput } from './notifications.mjs';
 import { commandInput, processControl } from './commands.mjs';
 import { BalanceNotifier } from './balance-notifications.mjs';
+import { FirmwareNotifier } from './firmware-notifications.mjs';
 
 const live = job => !['done', 'interrupted'].includes(job.state);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -45,8 +46,19 @@ export class WecomBridge {
         isConnected: botId => this.connected.has(botId), now: this.balanceNow, log: this.log }).start();
     }
     this.retryTimer = setInterval(() => this.pump(), 1000); this.retryTimer.unref?.();
+    await this.enableFirmwareNotifications();
+    this.firmwareCapabilityTimer = setInterval(() => { void this.enableFirmwareNotifications(); }, 15000); this.firmwareCapabilityTimer.unref?.();
   }
-  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); }
+  async enableFirmwareNotifications() {
+    if (this.closing || this.firmwareNotifier || this.firmwareChecking) return;
+    this.firmwareChecking = true;
+    try {
+      const status = await this.api.json('/status', 'GET', undefined, AbortSignal.timeout(3000));
+      if (!this.closing && status.firmwareSupported) this.firmwareNotifier = new FirmwareNotifier({ store: this.store, api: this.api, clients: this.clients, isConnected: id => this.connected.has(id), scope: key => this.scope(key), log: this.log }).start();
+    } catch { /* Backend upgrades must not disable chat or lose queued firmware notices. */ }
+    finally { this.firmwareChecking = false; }
+  }
+  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); this.firmwareNotifier?.pump(); }
   disconnected(botId) { this.connected.delete(botId); }
   client(botId) { const client = this.clients.get(botId); if (!client) throw new Error('机器人配置不存在。'); return client; }
   async send(job, text) {
@@ -68,6 +80,12 @@ export class WecomBridge {
     const control = commandInput(frame.body, scope, who.userId);
     if (control) {
       const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'command', control, generation: scope.generation, sentParts: 0, sentFiles: [] };
+      if (control.kind === 'firmware' && (!scope.firmwareUser || scope.firmwareUser === who.userId || scope.firmwareUntil <= Date.now())) {
+        scope.firmwareUser = who.userId; scope.firmwareUntil = Date.now() + 5 * 60000;
+        if (scope.awaitingUser === who.userId) { delete scope.awaitingUser; delete scope.awaitingMode; }
+      } else if (['reset', 'open', 'openFiles'].includes(control.kind) && scope.firmwareUser === who.userId) {
+        delete scope.firmwareUser; delete scope.firmwareFlow; delete scope.firmwareUntil;
+      }
       if (control.kind === 'reset') {
         job.oldSessionIds = [...new Set([this.store.data.conversations[who.key]?.sessionId, ...this.store.data.jobs.filter(old => old.key === who.key && live(old)).flatMap(old => [old.sessionId, ...(old.oldSessionIds ?? []), old.newSessionId])].filter(Boolean))];
         job.cancelledJobIds = this.store.data.jobs.filter(old => old.key === who.key && live(old)).map(old => old.id);
@@ -77,7 +95,7 @@ export class WecomBridge {
           old.state = 'done'; old.finished = Date.now();
           this.jobControllers.get(old.id)?.abort();
         }
-      } else if (!['notice', 'welcome', 'balance'].includes(control.kind)) {
+      } else if (!['notice', 'welcome', 'balance', 'firmware'].includes(control.kind)) {
         if (['open', 'openFiles'].includes(control.kind)) {
           scope.awaitingUser = who.userId;
           scope.awaitingMode = control.kind === 'openFiles' ? 'files' : 'role';
@@ -316,9 +334,9 @@ export class WecomBridge {
     return this.closePromise ??= this.shutdown();
   }
   async shutdown() {
-    this.closing = true; clearInterval(this.timer); clearInterval(this.retryTimer);
+    this.closing = true; clearInterval(this.timer); clearInterval(this.retryTimer); clearInterval(this.firmwareCapabilityTimer);
     for (const controller of this.controllers) controller.abort();
-    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close()]);
+    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close(), this.firmwareNotifier?.close()]);
     for (const client of this.clients.values()) client.disconnect();
     await this.observer?.close();
     await this.store.save(); await this.store.close();

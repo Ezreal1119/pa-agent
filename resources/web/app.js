@@ -336,6 +336,8 @@ async function openSettings() {
     $('web-fetch-enabled').checked = data.settings.webTools.tools.fetch;
     $('web-tools-help').textContent = data.webToolsConfigured ? 'DeepSeek key configured. Each tool setting applies to Web and WeCom.' : 'No DeepSeek key configured. Direct DeepSeek connections reuse API_KEY; otherwise set DEEPSEEK_API_KEY in .env.';
     $('library-links-enabled').checked = data.settings.libraryLinks.enabled;
+    $('firmware-enabled').checked = data.settings.firmware?.enabled ?? false;
+    $('firmware-help').textContent = data.firmwareConfigured ? 'Firmware service connection is configured. Offline services reply with a maintenance message.' : 'Set FIRMWARE_SERVICE_URL and FIRMWARE_SERVICE_TOKEN in the server .env before use.';
     $('file-tool-toggles').replaceChildren();
     for (const [name, label, description] of fileToolOptions) {
       const row = document.createElement('label'); row.className = 'file-tool-option';
@@ -428,7 +430,7 @@ $('settings-form').addEventListener('submit', async event => {
   event.preventDefault(); if (mcpSaving) return; $('settings-save').disabled = true; $('mcp-enabled').disabled = true; $('settings-error').hidden = true;
   try {
     const tools = Object.fromEntries([...$('file-tool-toggles').querySelectorAll('input')].map(input => [input.dataset.fileTool, input.checked]));
-    await api('/api/agent-settings', { method: 'PUT', body: JSON.stringify({ effort: $('global-effort').value, webTools: { tools: { search: $('web-search-enabled').checked, fetch: $('web-fetch-enabled').checked } }, libraryLinks: { enabled: $('library-links-enabled').checked }, fileTools: { tools } }) });
+    await api('/api/agent-settings', { method: 'PUT', body: JSON.stringify({ effort: $('global-effort').value, webTools: { tools: { search: $('web-search-enabled').checked, fetch: $('web-fetch-enabled').checked } }, libraryLinks: { enabled: $('library-links-enabled').checked }, firmware: { enabled: $('firmware-enabled').checked }, fileTools: { tools } }) });
     dialog.close(); await refreshStatus(); toast('Agent settings saved. Changes apply to subsequent requests.');
   } catch (error) { $('settings-error').textContent = error.message; $('settings-error').hidden = false; }
   finally { $('settings-save').disabled = false; $('mcp-enabled').disabled = false; }

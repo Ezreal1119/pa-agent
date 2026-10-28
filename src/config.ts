@@ -28,6 +28,7 @@ export interface AgentConfig {
   model: ModelConfig;
   fileTools: FileToolConfig;
   libraryLinksEnabled: boolean;
+  firmwareEnabled: boolean;
   webTools: WebToolConfig;
 }
 
@@ -39,6 +40,7 @@ export interface AgentConfigOptions {
   model?: Partial<ModelConfig>;
   fileTools?: FileToolOptions;
   libraryLinksEnabled?: boolean;
+  firmwareEnabled?: boolean;
   webTools?: WebToolOptions;
 }
 
@@ -60,6 +62,7 @@ function positiveInteger(
 }
 
 export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
+  if (options.firmwareEnabled !== undefined && typeof options.firmwareEnabled !== "boolean") throw new Error("firmwareEnabled must be a boolean");
   if (options.libraryLinksEnabled !== undefined && typeof options.libraryLinksEnabled !== "boolean") throw new Error("libraryLinksEnabled must be a boolean");
   const cwd = path.resolve(
     options.cwd ?? process.env.AGENT_CWD ?? process.cwd(),
@@ -83,6 +86,7 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
     ),
     fileTools: fileToolConfig(dataDir, options.fileTools),
     libraryLinksEnabled: options.libraryLinksEnabled ?? true,
+    firmwareEnabled: options.firmwareEnabled ?? false,
     webTools: webToolConfig(options.webTools, { baseUrl, apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY") }),
     model: {
       apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY"),

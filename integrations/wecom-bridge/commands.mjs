@@ -39,11 +39,19 @@ export function commandInput(body, scope, userId) {
   };
   collect(body);
   const text = parts.join('\n').trim();
+  if (/^\/firmware(?:\s|$)/u.test(text)) {
+    if (raw === undefined || body.quote || /[\r\n\0]/u.test(raw) || raw.length > 510) return { kind: 'notice', text: '请用纯文本发送 /firmware 或 /firmware 固件文件名。' };
+    return { kind: 'firmware', command: true, text: text.replace(/^\/firmware(?:\s+|$)/u, '') };
+  }
   if (text.startsWith('/clear') || text === '/new' || text === '新建对话') return { kind: 'reset' };
   if (text.startsWith('/role')) return { kind: 'open' };
   if (text.startsWith('/files')) return { kind: 'openFiles' };
   if (text.startsWith('/patrick_balance')) return { kind: 'balance' };
   if (text.startsWith('/welcome')) return { kind: 'welcome' };
+  if (scope.firmwareUser === userId && scope.firmwareUntil > Date.now()) {
+    if (raw === undefined || body.quote || !text || /[\r\n\0]/u.test(raw) || raw.length > 500) return { kind: 'notice', text: '固件流程只接收单行纯文本；请输入文件名、候选序号、本次确认码或“取消”。' };
+    return { kind: 'firmware', command: false, text };
+  }
   if (scope.awaitingUser !== userId) return;
   if (scope.awaitingMode === 'files') {
     if (raw === undefined || body.quote || !text || raw.length > 12000 || raw.includes('\0')) return { kind: 'notice', text: '请发送不超过 12000 个字符的非空纯文本文件需求，或输入“取消”。' };
@@ -71,6 +79,24 @@ export async function processControl(bridge, job) {
     const route = `/role?scope=${encodeURIComponent(job.key)}`;
     let text;
     switch (job.control.kind) {
+      case 'firmware': {
+        let result;
+        try {
+          result = await bridge.api.json('/firmware/command', 'POST', { botId: job.botId, userId: job.userId, target: job.target, chatType: JSON.parse(job.key)[1], msgid: job.msgid, text: job.control.text, command: job.control.command }, signal);
+        } catch (error) {
+          if (signal.aborted) throw error;
+          result = { text: '固件功能维护中，请稍后再试。', awaiting: false };
+        }
+        if (typeof result.text !== 'string' || !result.text.trim() || Buffer.byteLength(result.text) > 32768) throw new Error('Invalid firmware command response.');
+        const scope = bridge.scope(job.key);
+        if (result.awaiting && result.flowId && result.expiresAt > Date.now()) {
+          scope.firmwareUser = job.userId; scope.firmwareFlow = result.flowId; scope.firmwareUntil = result.expiresAt;
+        } else if (scope.firmwareUser === job.userId) {
+          delete scope.firmwareUser; delete scope.firmwareFlow; delete scope.firmwareUntil;
+        }
+        text = result.text;
+        break;
+      }
       case 'openFiles': text = '请发送你需要的资料、文件或工具，例如“给我 K388Pro 的 SDK”。下一条需求会原样提交资料库；输入“取消”退出。'; break;
       case 'cancelFiles': text = '已取消文件查询。'; break;
       case 'filesQuery':
