@@ -1,3 +1,4 @@
+import { meterSession } from "../usage/ledger.js";
 import { hint as wecomHint, type WecomContext } from "./wecom-sources.js";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -64,6 +65,7 @@ export function createPlanner(options: {
   resourcesDir: string;
   workDir: string;
   maxCalls: number;
+  dataDir?: string;
   acquire: (signal: AbortSignal) => Promise<() => void>;
 }): Planner {
   return async (input) => {
@@ -675,6 +677,7 @@ export function createPlanner(options: {
       // A submitted decision ends the turn before another inference. Keep tool batches ordered
       // so calls after finish_sync cannot mutate the accepted staged pages.
       session.agent.toolExecution = "sequential";
+      meterSession(session, options.dataDir, "sync-text", options.model);
       session.agent.shouldStopAfterTurn = () => Boolean(decision || failure);
       session.agent.onPayload = (payload) => {
         input.signal.throwIfAborted();

@@ -42,3 +42,7 @@ The CLI never creates another SyncService or runs models. It sends only `{"opera
 Git-ignored `.data/knowledge-sync/auto-sync-last.json` atomically stores timestamps, selected/held/invalid counts, report IDs, results and redacted errors. Actual reports remain canonical; no persistent retry queue or second publication mechanism is introduced. Each scheduled batch rechecks snapshot hashes and prior handling while reserving existing Sync, preventing changed files/intervening manual work from silently taking their place.
 
 Local validation uses isolated data, real Unix sockets/CLI/HTTP/UI harnesses and mock planners, not production model/publishing or installed Linux timers. Live VPS timer activation and next trigger must be checked after installation.
+
+## Completion notifications
+
+Actual Sync completion now sends a private WeCom summary to the same global recipient and primary bot as balance notifications. Manual Sync/Re-Sync also report; an automatic multi-batch run produces one overall summary. Empty, busy or already-handled skips do not notify or move the cost boundary. The report includes recorded model-cost estimates from the previous actual completion to this completion, with missing prices/usage/history explicitly marked. No additional notification schedule is needed. See [Sync notifications and accounting](sync-notifications.md) for scope, recovery and the Agent/Bridge restart steps.

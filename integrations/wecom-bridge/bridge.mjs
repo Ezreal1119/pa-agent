@@ -1,3 +1,4 @@
+import { SyncNotifier } from './sync-notifications.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -50,15 +51,17 @@ export class WecomBridge {
     this.firmwareCapabilityTimer = setInterval(() => { void this.enableFirmwareNotifications(); }, 15000); this.firmwareCapabilityTimer.unref?.();
   }
   async enableFirmwareNotifications() {
-    if (this.closing || this.firmwareNotifier || this.firmwareChecking) return;
+    if (this.closing || (this.firmwareNotifier && (this.syncNotifier || !this.config.notifyUserId)) || this.firmwareChecking) return;
     this.firmwareChecking = true;
     try {
       const status = await this.api.json('/status', 'GET', undefined, AbortSignal.timeout(3000));
-      if (!this.closing && status.firmwareSupported) this.firmwareNotifier = new FirmwareNotifier({ store: this.store, api: this.api, clients: this.clients, isConnected: id => this.connected.has(id), scope: key => this.scope(key), log: this.log }).start();
+      if (!this.closing && status.syncNotificationsSupported && !this.syncNotifier) this.syncNotifier = new SyncNotifier({ store: this.store, api: this.api, clients: this.clients,
+        botId: this.config.bots[0]?.botId, recipient: this.config.notifyUserId, isConnected: id => this.connected.has(id), log: this.log }).start();
+      if (!this.closing && status.firmwareSupported && !this.firmwareNotifier) this.firmwareNotifier = new FirmwareNotifier({ store: this.store, api: this.api, clients: this.clients, isConnected: id => this.connected.has(id), scope: key => this.scope(key), log: this.log }).start();
     } catch { /* Backend upgrades must not disable chat or lose queued firmware notices. */ }
     finally { this.firmwareChecking = false; }
   }
-  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); this.firmwareNotifier?.pump(); }
+  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); this.firmwareNotifier?.pump(); this.syncNotifier?.pump(); }
   disconnected(botId) { this.connected.delete(botId); }
   client(botId) { const client = this.clients.get(botId); if (!client) throw new Error('机器人配置不存在。'); return client; }
   async send(job, text) {
@@ -336,7 +339,7 @@ export class WecomBridge {
   async shutdown() {
     this.closing = true; clearInterval(this.timer); clearInterval(this.retryTimer); clearInterval(this.firmwareCapabilityTimer);
     for (const controller of this.controllers) controller.abort();
-    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close(), this.firmwareNotifier?.close()]);
+    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close(), this.firmwareNotifier?.close(), this.syncNotifier?.close()]);
     for (const client of this.clients.values()) client.disconnect();
     await this.observer?.close();
     await this.store.save(); await this.store.close();

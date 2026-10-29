@@ -1,3 +1,4 @@
+import { metered } from "../usage/ledger.js";
 import { VisualReviewError, visualIssue, visualReview, resolutionKey, visualResolutionNote, type PartialVisualEvidence, type VisualResolution, type VisualIssue } from "./visual-review.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -232,12 +233,13 @@ export function createConverter(
           usage.requests++;
           await update();
           timeout = AbortSignal.timeout(config.vision.timeoutMs);
+          const body = await metered(config.dataDir, "sync-vision", {modelId: config.vision.model, baseUrl: config.vision.baseUrl}, async record => {
           const response = await fetch(
             `${config.vision.baseUrl.replace(/\/$/, "")}/chat/completions`,
             {
               method: "POST",
               redirect: "error",
-              signal: AbortSignal.any([signal, timeout]),
+              signal: AbortSignal.any([signal, timeout!]),
               headers: {
                 Authorization: `Bearer ${config.vision.apiKey}`,
                 "Content-Type": "application/json",
@@ -294,6 +296,9 @@ export function createConverter(
             chunks.push(c);
           }
           const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          await record(body.usage);
+          return body;
+          });
           const tokens = visionTokens(body.usage);
           if (tokens) {
             usage.input += tokens.input;

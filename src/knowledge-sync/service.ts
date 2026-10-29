@@ -1,3 +1,5 @@
+import { CompletionJournal } from "../sync-notifications/journal.js";
+import { usageScope } from "../usage/ledger.js";
 import { compactVisualResolutions, VisualReviewError, validateVisualSubmission, visualIssue, type PartialVisualEvidence } from "./visual-review.js";
 import {ReportViews} from "./report-view.js";
 import { incomingWecom, contextFor, verifyRetirement } from "./wecom-sources.js";
@@ -98,6 +100,7 @@ export class SyncService {
   readonly inbox: string;
   readonly directory: string;
   readonly publisher: Publisher;
+  private readonly completionJournal: CompletionJournal;
   private knowledge = new Map<string, string>();
   private jobs = new Map<string, Job>();
   private archived = new Set<string>();
@@ -118,6 +121,7 @@ export class SyncService {
     this.inbox = path.join(this.root, "newly_added");
     this.directory = path.join(options.dataDir, "knowledge-sync");
     this.publisher = new Publisher(this.root, this.directory);
+    this.completionJournal = new CompletionJournal(options.dataDir);
   }
   async init() {
     await safePath(this.directory);
@@ -157,6 +161,7 @@ export class SyncService {
           ? "awaiting_confirmation"
           : "interrupted";
       }
+      if (job.execution && !job.finished && ["interrupted", "failed", "stopped"].includes(job.status)) job.finished = new Date().toISOString();
       this.jobs.set(job.id, job);
       await this.save(job);
       this.archive(job);
@@ -208,6 +213,7 @@ export class SyncService {
     const task = this.saveTail.then(async () => {
       for(const item of job.items) this.reportViews.record(item);
       await atomic(path.join(this.directory, "jobs", `${job.id}.json`), JSON.stringify(job));
+      await this.completionJournal.job(job).catch(() => console.error("Sync completion notification deferred; report retained."));
     });
     this.saveTail = task.catch(() => {});
     await task;
@@ -378,6 +384,8 @@ export class SyncService {
       this.reserved = false;
     }
   }
+  async reconcileCompletions() { for (const job of this.jobs.values()) await this.completionJournal.job(job); }
+  latestCompletion() { return [...this.jobs.values()].filter(j => j.kind === "sync" && j.finished).map(j => j.finished!).sort().at(-1); }
   list() {
     return [...this.jobs.values()]
       .sort((a, b) => b.created.localeCompare(a.created))
@@ -468,7 +476,7 @@ export class SyncService {
   async waitFor(id: string) {
     if (this.activeId === id) await this.active;
   }
-  async start(ids: unknown, expected?: ReadonlyMap<string, string>) {
+  async start(ids: unknown, expected?: ReadonlyMap<string, string>, autoRunId?: string) {
     if (
       !Array.isArray(ids) ||
       !ids.length ||
@@ -491,7 +499,7 @@ export class SyncService {
         "sync",
         selected.map((f) => this.item(f)),
       );
-      await this.launch(job);
+      await this.launch(job, undefined, autoRunId);
       return this.get(job.id);
     } catch (e) {
       this.reserved = false;
@@ -824,7 +832,9 @@ export class SyncService {
     }
     await this.save(job);
   }
-  private async launch(job: Job, only?: Set<string>) {
+  private async launch(job: Job, only?: Set<string>, autoRunId?: string) {
+    job.execution = { id: randomUUID(), started: new Date().toISOString(), itemIds: job.items.filter(i => !only || only.has(i.id)).map(i => i.id), ...(autoRunId ? { autoRunId } : {}) };
+    job.finished = undefined;
     this.activeId = job.id;
     this.controller = new AbortController();
     const signal = this.controller.signal;
@@ -833,9 +843,10 @@ export class SyncService {
     const model = this.options.modelId();
     job.status = "running";
     await this.save(job);
-    this.active = this.execute(job, signal, planner, convert, model, only)
+    this.active = usageScope({ kind: "sync", id: job.execution.id }, () => this.execute(job, signal, planner, convert, model, only))
       .catch(async (e) => {
         job.status = "failed";
+        job.finished = new Date().toISOString();
         for (const item of job.items)
           if (!terminal(item.status) && (!only || only.has(item.id))) {
             item.status = "failed";

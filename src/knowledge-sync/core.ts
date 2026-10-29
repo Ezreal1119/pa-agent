@@ -343,6 +343,7 @@ export type Item = {
   model?: string;
 };
 export type Job = {
+  execution?: { id: string; started: string; itemIds: string[]; autoRunId?: string };
   id: string;
   kind: "sync" | "delete";
   created: string;

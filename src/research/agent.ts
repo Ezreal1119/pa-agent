@@ -1,3 +1,4 @@
+import { meterSession } from "../usage/ledger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -162,6 +163,7 @@ export function createResearchEngine(options: EngineOptions): ResearchEngine {
       customTools: tools,
       thinkingLevel: "medium",
     });
+    meterSession(s, options.dataDir, "research", model);
     s.agent.toolExecution = "sequential";
     s.agent.shouldStopAfterTurn = () => exhausted || stop();
     const phase: CostPhase = system.includes("独立 UROVO") ? "review" : ctx.run.phase === "discovery" ? "discovery" : "research";

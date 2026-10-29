@@ -1,3 +1,4 @@
+import { meterSession } from "../usage/ledger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -243,6 +244,7 @@ export class AgentRuntime {
       thinkingLevel: "medium",
     });
 
+    meterSession(session, this.config.dataDir, "chat", this.config.model);
     boundSession = session;
     try {
       await installSessionPolicy(session, this.config.dataDir, this.retention, {

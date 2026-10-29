@@ -1,3 +1,5 @@
+import { SyncNotifications, syncDestination } from "../sync-notifications/service.js";
+import { UsageLedger, configureUsagePricing } from "../usage/ledger.js";
 import { balanceCommand, libraryCommand } from "./wecom-commands.js";
 import { firmwareConfig, LocalFirmwareClient, type FirmwareClient } from "../firmware/client.js";
 import { FirmwareService } from "../firmware/service.js";
@@ -153,8 +155,10 @@ export async function createWebServer(options: WebOptions = {}) {
   const syncTimeout = boundedSetting(options.sync?.timeoutMs ?? syncEnv.SYNC_FILE_TIMEOUT_MS, 1800000, 1000, 7200000, "SYNC_FILE_TIMEOUT_MS");
   const syncCalls = boundedSetting(syncEnv.SYNC_MAX_MODEL_REQUESTS, 64, 1, 512, "SYNC_MAX_MODEL_REQUESTS");
   const syncVision = boundedSetting(syncEnv.SYNC_MAX_VISION_REQUESTS, 128, 1, 1024, "SYNC_MAX_VISION_REQUESTS");
+  configureUsagePricing(dataDir, syncEnv.RESEARCH_PRICING_JSON);
+  await new UsageLedger(dataDir).init();
   const synchronize = new SyncService({ dataDir, maxBytes: SYNC_MAX_FILE_BYTES, maxBatchMarkdownBytes: boundedSetting(syncEnv.SYNC_MAX_BATCH_MARKDOWN_BYTES, 16777216, 1048576, 134217728, "SYNC_MAX_BATCH_MARKDOWN_BYTES"), timeoutMs: syncTimeout, modelId: () => settings.modelId, redact,
-    planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
+    planner: options.sync?.planner ?? (() => createPlanner({ model: { ...settings }, effort: agentSettings.effort, resourcesDir, dataDir, workDir: path.join(dataDir, "knowledge-sync", "agent"), maxCalls: syncCalls, acquire: signal => runGate.acquire(signal) })),
     converter: options.sync?.converter ?? (() => createConverter({ ...structuredClone(fileConfig), maxFileBytes: SYNC_MAX_FILE_BYTES,
       // Dense maintenance pages need more time than interactive chat images.
       vision: { ...fileConfig.vision, timeoutMs: Math.max(fileConfig.vision.timeoutMs, 180_000) },
@@ -162,6 +166,8 @@ export async function createWebServer(options: WebOptions = {}) {
   await synchronize.init();
   const autoSync = new AutoSync(synchronize, () => configured() && auth.configured, redact);
   await autoSync.init();
+  const syncNotifications = new SyncNotifications({ dataDir, destination: syncDestination(syncEnv), latest: () => synchronize.latestCompletion(), reconcile: async () => { await synchronize.reconcileCompletions(); await autoSync.recordCompletion(); } });
+  await syncNotifications.init();
   const autoSyncSocket = new AutoSyncSocket(autoSyncSocketPath(dataDir), () => autoSync.trigger());
   const autoSyncSchedule = options.autoSyncSchedule ?? new SftpScheduleClient(undefined, "sync");
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
@@ -170,13 +176,13 @@ export async function createWebServer(options: WebOptions = {}) {
   const sftpSchedule = options.sftpSchedule ?? new SftpScheduleClient();
   const librarySchedule = options.librarySchedule ?? new SftpScheduleClient(undefined, "library");
   const libraryImports = new LibraryImportService({dataDir, config:libraryOptions, modelConfigured:configured, modelId:()=>settings.modelId, redact,
-    classifier:() => createClassifier({...settings}, agentSettings.effort, signal => runGate.acquire(signal))});
+    classifier:() => createClassifier({...settings}, agentSettings.effort, signal => runGate.acquire(signal), dataDir)});
   await libraryImports.init();
   const wecomImports = new WecomImportService({ dataDir, config: wecomConfig(cwd, dataDir, syncEnv), ...options.wecomImport });
   await wecomImports.init();
   const wecomSchedule = options.wecomSchedule ?? new SftpScheduleClient(undefined, "wecom");
   const memoryInjection = new MemoryInjectionService({dataDir, attachments: new MemoryAttachments(dataDir, () => fileConfig), modelId: () => settings.modelId, redact,
-    planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), acquire: signal => runGate.acquire(signal)}))});
+    planner: options.memoryInjection?.planner ?? (() => createMemoryPlanner({model: {...settings}, effort: agentSettings.effort, workDir: path.join(dataDir, "memory-injection", "agent"), dataDir, acquire: signal => runGate.acquire(signal)}))});
   await memoryInjection.init();
   const research = new ResearchService({dataDir, resourcesDir, settings: options.research?.settings ?? researchConfig(syncEnv), redact,
     engine: options.research?.engine ?? (() => {
@@ -185,7 +191,7 @@ export async function createWebServer(options: WebOptions = {}) {
     })});
   await research.init();
   const firmware = new FirmwareService({ dataDir, client: options.firmware?.client ?? new LocalFirmwareClient(firmwareOptions),
-    extractor: options.firmware?.extractor ?? createFirmwareExtractor(() => ({ ...settings }), path.join(dataDir, "firmware")),
+    extractor: options.firmware?.extractor ?? createFirmwareExtractor(() => ({ ...settings }), path.join(dataDir, "firmware"), dataDir),
     enabled: () => Boolean(agentSettings.firmware?.enabled && (options.firmware?.extractor || configured())),
     publicBase: options.firmware?.publicBase ?? firmwareOptions.publicBase, pollMs: options.firmware?.pollMs });
   await firmware.start();
@@ -462,6 +468,13 @@ export async function createWebServer(options: WebOptions = {}) {
       if (machine) {
         if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "WeCom API credentials are invalid or not configured.");
         const route = url.pathname.slice("/api/wecom".length);
+        if (route.startsWith("/sync-notifications/")) {
+          if (method !== "POST" || url.search) throw new HttpError(400, "Sync notifications require POST without query parameters.");
+          const input = await readBody(req, 4096);
+          if (route === "/sync-notifications/claim") return json(res, 200, await syncNotifications.claim(input));
+          if (route === "/sync-notifications/ack") return json(res, 200, await syncNotifications.ack(input));
+          throw new HttpError(404, "Sync notification operation not found.");
+        }
         if (route.startsWith("/firmware/")) {
           if (method !== "POST" || url.search) throw new HttpError(400, "Firmware commands require POST without query parameters.");
           const input = await readBody(req, 16384);
@@ -516,7 +529,7 @@ export async function createWebServer(options: WebOptions = {}) {
           catch (error) { throw new HttpError(400, redact(error)); }
         }
         url.pathname = `/api${route}`;
-        if (route === "/status") return json(res, 200, { firmwareSupported: true, configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
+        if (route === "/status") return json(res, 200, { firmwareSupported: true, syncNotificationsSupported: true, configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
       }
       const authenticated = machine || auth.authenticated(req);
       if (method === "GET" && url.pathname === "/api/auth/status") return json(res, 200, { token: csrf, configured: auth.configured, authenticated });
@@ -1136,6 +1149,7 @@ export async function createWebServer(options: WebOptions = {}) {
     await syncClosing;
     await autoSync.wait();
     await memoryClosing;
+    await syncNotifications.refresh().catch(() => {}); await syncNotifications.close();
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
     await auth.close(); retention.dispose();

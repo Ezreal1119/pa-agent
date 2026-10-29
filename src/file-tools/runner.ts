@@ -1,3 +1,4 @@
+import { metered } from "../usage/ledger.js";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import fs from "node:fs/promises";
@@ -83,13 +84,15 @@ export async function recognize(config: FileToolConfig, request: VisionRequest, 
   if (!request || typeof request.prompt !== "string" || request.prompt.length > 10_000 || typeof request.systemPrompt !== "string" || request.systemPrompt.length > 10_000 || !Array.isArray(request.images) || request.images.length < 1 || request.images.length > 4 || JSON.stringify(request.images).length > 20 * 1024 * 1024 || request.images.some(image => typeof image.label !== "string" || !/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(image.dataUrl))) throw new Error("Invalid vision request.");
   const started = performance.now(); const deadline = AbortSignal.any([signal, AbortSignal.timeout(vision.timeoutMs)]);
   try {
+    return await metered(config.dataDir, "vision", {modelId: vision.model, baseUrl: vision.baseUrl}, async record => {
     const response = await fetch(`${vision.baseUrl}/chat/completions`, { method: "POST", redirect: "error", signal: deadline, headers: { Authorization: `Bearer ${vision.apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: vision.model, stream: false, max_tokens: 4096, messages: [{ role: "system", content: request.systemPrompt }, { role: "user", content: [{ type: "text", text: request.prompt }, ...request.images.flatMap(image => [{ type: "text", text: image.label }, { type: "image_url", image_url: { url: image.dataUrl } }])] }] }) });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`Vision provider returned HTTP ${response.status}.`); }
     const chunks: Uint8Array[] = []; let size = 0;
     if (!response.body) throw new Error("Vision provider returned no response.");
     for await (const chunk of response.body) { size += chunk.length; if (size > 256 * 1024) throw new Error("Vision response exceeded limit."); chunks.push(chunk); }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")); const description = body.choices?.[0]?.message?.content;
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")); await record(body.usage); const description = body.choices?.[0]?.message?.content;
     if (typeof description !== "string" || !description.trim()) throw new Error("Vision provider returned no readable description.");
     return { description: description.slice(0, 30_000), model: vision.model, modelRoute: "dedicated", elapsedMs: Math.round(performance.now() - started), usage: body.usage };
+    });
   } catch (error) { if (signal.aborted) throw new Error("Image recognition cancelled."); if (deadline.aborted) throw new Error("Image recognition timed out."); const message = error instanceof Error ? error.message : "Image recognition failed."; throw new Error(message.replaceAll(vision.apiKey, "[REDACTED]").slice(0, 1000)); }
 }
