@@ -6,10 +6,13 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { FirmwareService } from '../dist/firmware/service.js';
 import { LocalFirmwareClient, firmwareConfig, FIRMWARE_MAINTENANCE } from '../dist/firmware/client.js';
+import { validateQuery, extractedQuery, matchesQuery } from '../dist/firmware/query.js';
 import { createFirmwareTool } from '../dist/tools/firmware.js';
 import { validateAgentSettings } from '../dist/web/agent-settings.js';
 
 const name = 'SQ27M_EN_XX_WE__DS_FI_S02_U_251205_02_rel_uFWsign_VendorEN.zip';
+const criteria = { model: 'SQ27M', date: '251205', index: '02' };
+const searchResult = (candidates, extra = {}) => ({ candidates: candidates.slice(0, 12), total: candidates.length, truncated: candidates.length > 12, complete: true, matching: 'model_date_index_and', ...extra });
 const base = 'https://temp.patrick-shenzhen.org/firmware/';
 const candidate = (extra = {}) => ({ id: randomUUID().replaceAll('-', ''), filename: name, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name, size: 1234567, modified: '20261028090000', score: 1, exact: true, differences: [], ...extra });
 const owner = (userId = 'alice', botId = 'bot') => ({ userId, botId, target: userId, chatType: 'single' });
@@ -21,13 +24,13 @@ async function fixture(t, options = {}) {
   let now = Date.now(), enabled = true, ready = true, submits = 0;
   const candidates = options.candidates ?? [candidate()], jobs = new Map();
   const client = {
-    async ready() { return ready; }, async search() { return candidates; },
+    async ready() { return ready; }, async search(query) { return searchResult(candidates, options.result); },
     async submit(id, requestId) { submits++; if (jobs.has(requestId)) return jobs.get(requestId); const c = candidates.find(c => c.id === id); const job = { id: randomUUID().replaceAll('-', ''), candidate: c, state: 'running', stage: 'downloading', bytes: 1, total_bytes: c.size }; jobs.set(requestId, job); if (options.loseSubmit && submits === 1) throw new Error('response lost'); return job; },
     async lookup(requestId) { if (!ready) throw new Error('offline'); return jobs.get(requestId); },
     async job(id) { if (!ready) throw new Error('offline'); const job = [...jobs.values()].find(j => j.id === id); if (!job) throw new Error('unknown job'); return job; },
     async cancel(id) { const job = [...jobs.values()].find(j => j.id === id); job.state = 'cancelled'; return job; },
   };
-  const create = () => new FirmwareService({ dataDir, client, matcher: options.matcher ?? (async (_, all) => all.map(c => c.id)), enabled: () => enabled, now: () => now, pollMs: 3600000, publicBase: base });
+  const create = () => new FirmwareService({ dataDir, client, extractor: options.extractor ?? (async () => criteria), enabled: () => enabled, now: () => now, pollMs: 3600000, publicBase: base });
   let service = create(); await service.start();
   const state = () => fs.readFile(path.join(dataDir, 'firmware/state.json'), 'utf8').then(JSON.parse);
   t.after(async () => { await service.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
@@ -103,12 +106,36 @@ test('fixed progress milestones include both download and upload without duplica
   f.advance(10 * 60000); await f.service.tick(); assert.equal((await f.state()).notices.filter(n => n.text.includes('当前阶段进度')).length, before + 1);
 });
 
-test('multiple candidates require explicit selection and a fresh code, while old code cannot start a new flow', async t => {
-  const c1 = candidate({ exact: false, score: .98 }), c2 = candidate({ exact: false, filename: name.replace('_02_rel', '_03_rel'), path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name.replace('_02_rel', '_03_rel'), differences: ['序号不同'] });
-  const f = await fixture(t, { candidates: [c1, c2] }); const flow = await f.query(name.replace('Vendor', 'Vendro')); assert.equal(flow.phase, 'choose');
-  await f.service.command(input('选择 2', false)); const selected = (await f.state()).active; assert.equal(selected.selected.id, c2.id); assert.equal(f.submits, 0);
-  await f.service.command(input('取消', false)); await f.query(name.replace('Vendor', 'Vendro')); await f.service.command(input('选择 1', false));
-  assert.match((await f.service.command(input(`确认 ${selected.code}`, false))).text, /尚未开始/); assert.equal(f.submits, 0);
+test('multiple matches terminate even when a complete filename is exact; the slot is released', async t => {
+  const c1 = candidate(), c2 = candidate({ filename: name.replace('VendorEN', 'VendorXX'), path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name.replace('VendorEN', 'VendorXX') });
+  const f = await fixture(t, { candidates: [c1, c2] });
+  await f.service.command(input(name)); await until(async () => (await f.state()).notices.length);
+  const db = await f.state(); assert.equal(db.active, undefined); assert.equal(f.submits, 0);
+  assert.match(db.notices.at(-1).text, /找到 2 个/); assert.ok(db.notices.at(-1).text.includes(c1.filename)); assert.ok(db.notices.at(-1).text.includes(c2.filename));
+  assert.equal((await f.service.command(input('', true, owner('bob')))).awaiting, true);
+});
+
+test('no matches and incomplete directory enumeration end without a download', async t => {
+  for (const options of [{ candidates: [] }, { result: { complete: false } }]) {
+    const f = await fixture(t, options); await f.service.command(input(name)); await until(async () => (await f.state()).notices.length);
+    const db = await f.state(); assert.equal(db.active, undefined); assert.equal(f.submits, 0); assert.match(db.notices.at(-1).text, /任务已结束/);
+  }
+});
+
+test('natural language is passed intact to extraction before structured FTP search', async t => {
+  const text = '帮我下载“SQ27M的251205_02”的固件'; let seen;
+  const f = await fixture(t, { extractor: async request => { seen = request; return criteria; } });
+  let searched; const search = f.client.search; f.client.search = async query => { searched = query; return search(query); };
+  const flow = await f.query(text); assert.equal(seen, text); assert.deepEqual(searched, criteria); assert.equal(flow.phase, 'confirm'); assert.equal(f.submits, 0);
+});
+
+test('missing or invented extraction conditions end before FTP access', async t => {
+  for (const extracted of [null, { ...criteria, model: 'SQ68MB' }, { ...criteria, date: '251206' }, { ...criteria, index: '01' }]) {
+    const f = await fixture(t, { extractor: async () => extracted }); let searches = 0;
+    f.client.search = async () => { searches++; throw new Error('should not search'); };
+    await f.service.command(input(name)); await until(async () => (await f.state()).notices.length);
+    assert.equal((await f.state()).active, undefined); assert.equal(f.submits, 0); assert.equal(searches, 0);
+  }
 });
 
 test('replayed WeCom message is idempotent and cannot be replayed by another identity', async t => {
@@ -117,8 +144,8 @@ test('replayed WeCom message is idempotent and cannot be replayed by another ide
   await assert.rejects(f.service.command({ ...cmd, ...owner('bob') }), /identity mismatch/);
 });
 
-test('bad model IDs cannot select invented FTP files or create transfers', async t => {
-  const f = await fixture(t, { matcher: async () => ['f'.repeat(32)] }); await f.service.command(input(name));
+test('invalid structured extraction cannot create transfers', async t => {
+  const f = await fixture(t, { extractor: async () => ({ model: '../SQ27M', date: '251205', index: '02' }) }); await f.service.command(input(name));
   await until(async () => (await f.state()).notices.length); assert.equal((await f.state()).active, undefined); assert.equal(f.submits, 0);
 });
 
@@ -163,10 +190,39 @@ test('firmware tool cannot execute outside trusted command matching, and setting
 test('local client preserves auth, short requests and upload=true, validates data and bounds error disclosure', async () => {
   const c = candidate(), calls = [], job = { id: 'a'.repeat(32), candidate: c, state: 'running', stage: 'downloading', bytes: 0, total_bytes: c.size };
   const config = firmwareConfig({ FIRMWARE_SERVICE_URL: 'https://service.example/firmware-api', FIRMWARE_SERVICE_TOKEN: 'secret'.repeat(8) });
-  const client = new LocalFirmwareClient(config, async (url, init) => { calls.push({ url, init }); assert.equal(init.redirect, 'error'); assert.equal(init.headers.Authorization, 'Bearer ' + config.token); if (url.endsWith('/health')) return Response.json({ ok: true }); if (url.endsWith('/search')) return Response.json({ candidates: [c] }); return Response.json(job); });
-  assert.equal(await client.ready(), true); assert.equal((await client.search(name))[0].filename, name);
+  const client = new LocalFirmwareClient(config, async (url, init) => { calls.push({ url, init }); assert.equal(init.redirect, 'error'); assert.equal(init.headers.Authorization, 'Bearer ' + config.token); if (url.endsWith('/health')) return Response.json({ ok: true }); if (url.endsWith('/search')) return Response.json(searchResult([c])); return Response.json(job); });
+  assert.equal(await client.ready(), true); assert.equal((await client.search(criteria)).candidates[0].filename, name);
+  assert.deepEqual(JSON.parse(calls.at(-1).init.body), { criteria, limit: 12 });
   await client.submit(c.id, 'firmware:one'); assert.equal(JSON.parse(calls.at(-1).init.body).upload, true);
   const bad = new LocalFirmwareClient(config, async () => new Response('private secret credentials', { status: 503 }));
-  assert.equal(await bad.ready(), false); await assert.rejects(bad.search(name), e => !e.message.includes('secret'));
+  assert.equal(await bad.ready(), false); await assert.rejects(bad.search(criteria), e => !e.message.includes('secret'));
   await assert.rejects(client.job('../shutdown'), /Invalid/);
+});
+
+test('query validation requires calendar dates and exact model/date-index boundaries', () => {
+  assert.deepEqual(validateQuery({ ...criteria, model: 'sq27m' }), criteria);
+  for (const q of [{ ...criteria, date: '250230' }, { ...criteria, index: '2' }, { ...criteria, model: 'SQ27M/' }]) assert.throws(() => validateQuery(q));
+  assert.equal(matchesQuery(name, criteria), true);
+  assert.equal(matchesQuery(name.replace('SQ27M_', 'SQ27MB_'), criteria), false);
+  assert.equal(matchesQuery(name.replace('_251205_02_', '_251205_01_'), criteria), false);
+  assert.throws(() => extractedQuery({ ...criteria, index: '01' }, name));
+  assert.equal(extractedQuery({ model: 'SQ27M', date: null, index: '02' }, name), null);
+});
+
+test('old unconfirmed flows end on upgrade; accepted running jobs keep their identity', async t => {
+  const f = await fixture(t); await f.query();
+  const file = path.join(f.service.directory, 'state.json');
+  const old = await f.state(); delete old.active.matchVersion; await fs.writeFile(file, JSON.stringify(old));
+  await f.restart(); assert.equal((await f.state()).active, undefined); assert.match((await f.state()).notices.at(-1).text, /规则已更新/);
+  await f.confirm(await f.query()); const running = await f.state(), id = running.active.jobId;
+  delete running.active.matchVersion; await fs.writeFile(file, JSON.stringify(running));
+  await f.restart(); await f.service.tick(); assert.equal((await f.state()).active.jobId, id); assert.equal(f.submits, 1);
+});
+
+test('local client rejects legacy, hidden ambiguity and wrong-condition results', async () => {
+  const config = firmwareConfig({ FIRMWARE_SERVICE_URL: 'https://service.example/firmware-api', FIRMWARE_SERVICE_TOKEN: 'secret'.repeat(8) });
+  for (const value of [{ candidates: [candidate()] }, searchResult([candidate()], { total: 2 }), searchResult([candidate({ filename: name.replace('SQ27M_', 'SQ27MB_'), path: '/FTP7/OS/13.0/SQ27MB/EN/XX/' + name.replace('SQ27M_', 'SQ27MB_') })])]) {
+    const client = new LocalFirmwareClient(config, async () => Response.json(value));
+    await assert.rejects(client.search(criteria));
+  }
 });

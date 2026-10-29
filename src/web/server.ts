@@ -1,7 +1,7 @@
 import { balanceCommand, libraryCommand } from "./wecom-commands.js";
 import { firmwareConfig, LocalFirmwareClient, type FirmwareClient } from "../firmware/client.js";
 import { FirmwareService } from "../firmware/service.js";
-import { createFirmwareMatcher, type FirmwareMatcher } from "../firmware/matcher.js";
+import { createFirmwareExtractor, type FirmwareExtractor } from "../firmware/matcher.js";
 import { WecomRoles, roleScope, senderScope } from "./wecom-roles.js";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
@@ -76,7 +76,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { firmware?: { client?: FirmwareClient; matcher?: FirmwareMatcher; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -185,8 +185,8 @@ export async function createWebServer(options: WebOptions = {}) {
     })});
   await research.init();
   const firmware = new FirmwareService({ dataDir, client: options.firmware?.client ?? new LocalFirmwareClient(firmwareOptions),
-    matcher: options.firmware?.matcher ?? createFirmwareMatcher(() => ({ ...settings }), path.join(dataDir, "firmware")),
-    enabled: () => Boolean(agentSettings.firmware?.enabled && (options.firmware?.matcher || configured())),
+    extractor: options.firmware?.extractor ?? createFirmwareExtractor(() => ({ ...settings }), path.join(dataDir, "firmware")),
+    enabled: () => Boolean(agentSettings.firmware?.enabled && (options.firmware?.extractor || configured())),
     publicBase: options.firmware?.publicBase ?? firmwareOptions.publicBase, pollMs: options.firmware?.pollMs });
   await firmware.start();
   const getRuntime = async () => {

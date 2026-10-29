@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import lockfile from "proper-lockfile";
-import type { FirmwareMatcher } from "./matcher.js";
-import { FIRMWARE_MAINTENANCE, validateCandidate, validFilename, type Candidate, type FirmwareClient, type LocalJob } from "./client.js";
+import { extractedQuery, type FirmwareQuery } from "./query.js";
+import type { FirmwareExtractor } from "./matcher.js";
+import { FIRMWARE_MAINTENANCE, validateSearch, type Candidate, type FirmwareClient, type LocalJob } from "./client.js";
 
 export const PROGRESS_MINUTES = [1, 2, 3, 5, 7, 10, 15, 20, 30];
 const INPUT_TTL = 5 * 60000;
@@ -11,10 +12,10 @@ type Owner = { botId: string; userId: string; chatType: "single" | "group"; targ
 export type Command = Owner & { msgid: string; text: string; command: boolean };
 export type Reply = { text: string; awaiting: boolean; flowId?: string; expiresAt?: number };
 type Phase = "filename" | "matching" | "choose" | "confirm" | "starting" | "running" | "cancelling";
-type Flow = { id: string; owner: Owner; phase: Phase; expiresAt: number; query?: string; candidates: Candidate[]; selected?: Candidate; code?: string; confirmedAt?: number; jobId?: string; snapshot?: LocalJob; notified: number[]; offline?: boolean; invalidResult?: boolean };
+type Flow = { id: string; owner: Owner; phase: Phase; expiresAt: number; query?: string; criteria?: FirmwareQuery; matchVersion?: number; candidates: Candidate[]; selected?: Candidate; code?: string; confirmedAt?: number; jobId?: string; snapshot?: LocalJob; notified: number[]; offline?: boolean; invalidResult?: boolean };
 export type Notice = { id: string; flowId: string; botId: string; userId: string; chatType: "single" | "group"; target: string; text: string; created: number; prompt?: boolean; expiresAt?: number; claim?: string; claimUntil?: number; sent?: number };
 type Database = { version: 1; active?: Flow; replies: Record<string, { owner: string; at: number; value: Reply }>; notices: Notice[] };
-export interface FirmwareServiceOptions { dataDir: string; client: FirmwareClient; matcher: FirmwareMatcher; enabled: () => boolean; publicBase: string; now?: () => number; pollMs?: number; }
+export interface FirmwareServiceOptions { dataDir: string; client: FirmwareClient; extractor: FirmwareExtractor; enabled: () => boolean; publicBase: string; now?: () => number; pollMs?: number; }
 const ownerKey = (o: Owner) => JSON.stringify([o.botId, o.chatType, o.target, o.userId]);
 const safe = (text: string) => text.replace(/[<>\[\]`]/g, "").slice(0, 1500);
 function identity(input: unknown): Command {
@@ -38,7 +39,7 @@ export class FirmwareService {
   async start() {
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     if ((await fs.lstat(this.directory)).isSymbolicLink()) throw new Error("Firmware state directory must not be a symlink.");
-    await this.change(() => {});
+    await this.change(db => this.expire(db));
     this.timer = setInterval(() => { void this.tick().catch(() => {}); }, this.options.pollMs ?? 5000); this.timer.unref();
     void this.tick().catch(() => {});
   }
@@ -73,17 +74,19 @@ export class FirmwareService {
     db.replies = Object.fromEntries(Object.entries(db.replies).filter(([, r]) => r.at > this.now() - 86400000).slice(-500));
     db.notices = db.notices.filter(n => !n.sent || n.sent > this.now() - 86400000);
     const flow = db.active;
+    if (flow && !["starting", "running", "cancelling"].includes(flow.phase) && flow.matchVersion !== 2) {
+      this.clearPrompts(db, flow.id); this.notice(db, flow, "固件查询规则已更新，旧的未确认流程已结束，请重新发送 /firmware。"); delete db.active; return;
+    }
     if (flow && !["starting", "running", "cancelling"].includes(flow.phase) && flow.expiresAt <= this.now()) {
       this.clearPrompts(db, flow.id); this.notice(db, flow, "固件流程已超时退出，请重新发送 /firmware。"); delete db.active;
     }
   }
   private preview(flow: Flow): Reply {
-    if (flow.phase === "filename") return { text: "请输入 OS 固件文件名，可以不带 .zip；输入“取消”退出，5 分钟内有效。", awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
-    if (flow.phase === "matching") return { text: "正在查询 FTP 并由 AI 匹配真实文件，请稍候。", awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
-    if (flow.phase === "choose") return { text: "找到多个候选，请核对机型、日期、地区和版本：\n\n" + flow.candidates.map((c, i) => `${i + 1}. ${c.filename}\n大小：${(c.size / 1024 / 1024).toFixed(1)} MiB\n${c.differences.length ? "差异：" + c.differences.map(safe).join("；") : "文件名精确匹配"}`).join("\n\n") + "\n\n回复“选择 1”等序号；输入“取消”退出，5 分钟内有效。", awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
+    if (flow.phase === "filename") return { text: "请输入 OS 固件需求，例如“帮我下载 SQ68MB 的 260422_01 固件”，也可以发送完整文件名。需包含 SQ 型号、六位日期和两位 index；输入“取消”退出，5 分钟内有效。", awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
+    if (flow.phase === "matching") return { text: "正在由 AI 提取型号、日期和 index，并查询 FTP 精确匹配，请稍候。", awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
     if (flow.phase === "confirm") {
       const c = flow.selected!;
-      return { text: `是否下载并上传以下 OS 包？\n\n${c.filename}\nFTP 路径：${safe(c.path)}\n大小：${(c.size / 1024 / 1024).toFixed(1)} MiB\n${c.differences.length ? "与输入的差异：" + c.differences.map(safe).join("；") : "文件名精确匹配"}\n\n回复“确认 ${flow.code}”开始，输入“取消”退出。5 分钟内有效。`, awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
+      return { text: `是否下载并上传以下 OS 包？\n\n${c.filename}\nFTP 路径：${safe(c.path)}\n大小：${(c.size / 1024 / 1024).toFixed(1)} MiB\n${c.differences.length ? "与输入的差异：" + c.differences.map(safe).join("；") : "型号、日期和 index 全部匹配"}\n\n回复“确认 ${flow.code}”开始，输入“取消”退出。5 分钟内有效。`, awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
     }
     return { text: this.progress(flow), awaiting: false, flowId: flow.id };
   }
@@ -107,7 +110,7 @@ export class FirmwareService {
         if (!flow) {
           if (!cmd.command) answer = { text: "固件流程已结束或超时，请重新发送 /firmware。", awaiting: false };
           else {
-            flow = { id: randomUUID().replaceAll("-", ""), owner: { botId: cmd.botId, userId: cmd.userId, target: cmd.target, chatType: cmd.chatType }, phase: "filename", expiresAt: this.now() + INPUT_TTL, candidates: [], notified: [] };
+            flow = { id: randomUUID().replaceAll("-", ""), owner: { botId: cmd.botId, userId: cmd.userId, target: cmd.target, chatType: cmd.chatType }, phase: "filename", matchVersion: 2, expiresAt: this.now() + INPUT_TTL, candidates: [], notified: [] };
             db.active = flow;
           }
         }
@@ -117,20 +120,13 @@ export class FirmwareService {
             if (["starting", "running", "cancelling"].includes(flow.phase)) { flow.phase = "cancelling"; answer = { text: "已请求取消，正在确认本机任务停止。", awaiting: false, flowId: flow.id }; }
             else { delete db.active; answer = { text: "已取消固件流程。", awaiting: false }; }
           } else if (!text || text === "状态" || ["matching", "starting", "running", "cancelling"].includes(flow.phase)) answer = this.preview(flow);
-          else if (flow.phase === "choose") {
-            const match = text.match(/^(?:选择\s*)?(\d{1,2})$/);
-            const c = match ? flow.candidates[Number(match[1]) - 1] : undefined;
-            if (!c) answer = { ...this.preview(flow), text: "请输入有效的候选序号。\n\n" + this.preview(flow).text };
-            else { this.clearPrompts(db, flow.id); this.select(flow, c); answer = this.preview(flow); }
-          } else if (flow.phase === "confirm") {
+          else if (flow.phase === "confirm") {
             if (text.match(/^确认\s+([A-F0-9]{6})$/i)?.[1]?.toUpperCase() === flow.code) {
               this.clearPrompts(db, flow.id); flow.phase = "starting"; flow.confirmedAt = this.now();
               answer = { text: `已确认 ${flow.selected!.filename}，正在提交本机下载与 R2 上传任务。完成后返回下载链接。`, awaiting: false, flowId: flow.id };
             } else answer = { ...this.preview(flow), text: "尚未开始，请使用本次确认码。\n\n" + this.preview(flow).text };
           } else {
-            let filename = text.replace(/^帮我(?:下载|上传)\s*/u, ""); if (!/\.zip$/i.test(filename)) filename += ".zip";
-            if (!validFilename(filename) || !filename.includes("_")) answer = { ...this.preview(flow), text: "请发送完整 OS 包文件名，不能包含目录、链接或多行文字。" };
-            else { flow.query = filename; flow.phase = "matching"; flow.expiresAt = this.now() + 120000; answer = this.preview(flow); }
+            flow.query = text; flow.phase = "matching"; flow.expiresAt = this.now() + 120000; answer = this.preview(flow);
           }
         }
       }
@@ -196,22 +192,32 @@ export class FirmwareService {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90000)]);
     try {
       if (!this.options.enabled()) throw new Error("disabled");
-      const all = (await this.options.client.search(flow.query!, signal)).map(validateCandidate);
-      const ids = all.length ? await this.options.matcher(flow.query!, all, signal) : [];
-      if (ids.some(id => !all.some(c => c.id === id)) || new Set(ids).size !== ids.length) throw new Error("Invalid AI candidate selection.");
-      // Exact matches are deterministic; never substitute another package for them.
-      const exact = all.filter(c => c.exact);
-      const candidates = exact.length ? exact : ids.map(id => all.find(c => c.id === id)!);
+      const extracted = await this.options.extractor(flow.query!, signal);
+      const criteria = extracted === null ? null : extractedQuery(extracted, flow.query!);
+      if (!criteria) {
+        await this.change(db => { const current = db.active; if (current?.id === flow.id && current.phase === "matching") { this.clearPrompts(db, current.id); this.notice(db, current, "无法确定唯一的 SQ 型号、六位日期和两位 index。请补齐或澄清条件后重新发送 /firmware。本次任务已结束，未开始下载。"); delete db.active; } });
+        return;
+      }
+      // Recheck ownership/state after the model request, before opening FTP.
+      if (!await this.change(db => db.active?.id === flow.id && db.active.phase === "matching" && this.options.enabled())) return;
+      const result = validateSearch(await this.options.client.search(criteria, signal), criteria);
+      const candidates = result.candidates;
       await this.change(db => {
         const current = db.active; if (current?.id !== flow.id || current.phase !== "matching") return;
         if (!this.options.enabled()) { this.notice(db, current, FIRMWARE_MAINTENANCE); delete db.active; return; }
-        if (!candidates.length) { this.notice(db, current, "未找到能确定的 OS 包，请核对文件名后重新发送 /firmware。"); delete db.active; return; }
-        current.candidates = candidates; current.expiresAt = this.now() + INPUT_TTL;
-        if (candidates.length === 1) this.select(current, candidates[0]!); else current.phase = "choose";
+        this.clearPrompts(db, current.id);
+        if (!result.complete) { this.notice(db, current, "FTP 目录或文件信息查询不完整，无法确定匹配数量。本次任务已结束，未下载，请稍后重新发送 /firmware。"); delete db.active; return; }
+        const summary = `${criteria.model} / ${criteria.date}_${criteria.index}`;
+        if (!result.total) { this.notice(db, current, `未找到同时匹配 ${summary} 的 OS 包。本次任务已结束，未开始下载。`); delete db.active; return; }
+        if (result.total > 1) {
+          const list = candidates.map((c, i) => `${i + 1}. ${c.filename}\nFTP 路径：${safe(c.path)}`).join("\n\n");
+          this.notice(db, current, `找到 ${result.total} 个同时匹配 ${summary} 的 OS 包：\n\n${list}${result.truncated ? "\n\n仅展示前 12 个匹配项。" : ""}\n\n无法唯一确定固件，本次任务已结束，未开始下载。`); delete db.active; return;
+        }
+        current.criteria = criteria; current.candidates = candidates; this.select(current, candidates[0]!);
         this.notice(db, current, this.preview(current).text, true);
       });
     } catch {
-      if (!this.closing) await this.change(db => { if (db.active?.id === flow.id && db.active.phase === "matching") { this.notice(db, db.active, "固件查询或 AI 匹配暂时不可用，请重新发送 /firmware 重试。"); delete db.active; } });
+      if (!this.closing) await this.change(db => { if (db.active?.id === flow.id && db.active.phase === "matching") { this.notice(db, db.active, "固件条件提取或 FTP 查询未完成，本次任务已结束，未开始下载。请重新发送 /firmware 重试。"); delete db.active; } });
     } finally { this.controllers.delete(controller); }
   }
   private progress(flow: Flow) {
