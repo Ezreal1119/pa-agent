@@ -13,6 +13,7 @@ import { BridgeStore } from '../integrations/wecom-bridge/store.mjs';
 import { WecomBridge } from '../integrations/wecom-bridge/bridge.mjs';
 import { FirmwareNotifier } from '../integrations/wecom-bridge/firmware-notifications.mjs';
 import { commandInput } from '../integrations/wecom-bridge/commands.mjs';
+import { bridgeConfig } from '../integrations/wecom-bridge/config.mjs';
 
 const filename = 'SQ27M_EN_XX_WE__DS_FI_S02_U_251205_02_rel_uFWsign_VendorEN.zip';
 const candidate = { id: 'b'.repeat(32), filename, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + filename, size: 1234567, modified: '20261028100000', score: 1, exact: true, differences: [] };
@@ -88,6 +89,93 @@ test('command parsing requires exact firmware command and never treats attachmen
   assert.equal(commandInput(message('确认 ABCDEF', 'bob', 'g').body, scope, 'bob'), undefined);
   assert.equal(commandInput(message('确认 ABCDEF', 'alice', 'g').body, scope, 'alice').command, false);
   const quoted = message('/firmware'); quoted.body.quote = { text: { content: 'untrusted' } }; assert.equal(commandInput(quoted.body, {}, 'alice').kind, 'notice');
+});
+
+test('group firmware strips only exact bot mentions at input edges, including screenshot examples', () => {
+  const parse = (text, scope = {}, name) => commandInput(message(text, 'alice', 'g').body, scope, 'alice', name);
+  for (const text of ['/firmware @AI Patrick', '@AI Patrick /firmware', '@AI Patrick\u2005/firmware\u2005@AI Patrick']) {
+    assert.deepEqual(parse(text), { kind: 'firmware', command: true, text: '' });
+  }
+  const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
+  const screenshot = 'SQ68MB_EN_XX_WE__DS_FI_S01_U_260422_01_rel_uFWsign_VendorEN';
+  for (const text of [screenshot, '选择 1', '确认 ABCDEF', '取消', '状态']) {
+    assert.deepEqual(parse(`${text} @AI Patrick`, scope), { kind: 'firmware', command: false, text });
+    assert.deepEqual(parse(`@AI Patrick ${text}`, scope), { kind: 'firmware', command: false, text });
+  }
+  assert.deepEqual(parse(`/firmware ${screenshot} @AI Patrick`), { kind: 'firmware', command: true, text: screenshot });
+  assert.deepEqual(parse('@固件助手 (EN)+ /firmware', {}, '固件助手 (EN)+'), { kind: 'firmware', command: true, text: '' });
+  assert.equal(parse('确认 ABCDEF @其他人 @AI Patrick', scope).text, '确认 ABCDEF @其他人');
+  assert.equal(parse('确认 ABCDEF @AI Patrick Jr', scope).text, '确认 ABCDEF @AI Patrick Jr');
+  assert.equal(parse('确认 ABCDEF x@AI Patrick', scope).text, '确认 ABCDEF x@AI Patrick');
+  assert.equal(parse('确认 @AI Patrick ABCDEF', scope).text, '确认 @AI Patrick ABCDEF');
+  assert.equal(parse('@其他人 /firmware'), undefined);
+  assert.equal(parse('@AI Patrick /firmware', {}, 'Other Bot'), undefined);
+  assert.equal(parse('@AI Patrick /firmwareish'), undefined);
+  assert.equal(parse('普通问题 @AI Patrick'), undefined);
+  assert.equal(parse('@AI Patrick /role'), undefined, 'other commands keep their existing parsing');
+  assert.equal(commandInput(message('/firmware @AI Patrick').body, {}, 'alice').text, '@AI Patrick', 'private text is unchanged');
+  assert.equal(commandInput(message('确认 ABCDEF @AI Patrick', 'bob', 'g').body, scope, 'bob'), undefined);
+});
+
+test('group mentions do not bypass firmware plain-text, quote or length boundaries', () => {
+  const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
+  for (const text of ['@AI Patrick\n/firmware', '/firmware\n@AI Patrick', '@AI Patrick /firmware\0']) {
+    assert.equal(commandInput(message(text, 'alice', 'g').body, scope, 'alice').kind, 'notice');
+  }
+  for (const text of ['确认 ABCDEF\n@AI Patrick', '@AI Patrick', '确认 ABCDEF @AI Patrick' + ' '.repeat(501)]) {
+    assert.equal(commandInput(message(text, 'alice', 'g').body, scope, 'alice').kind, 'notice');
+  }
+  const quoted = message('@AI Patrick /firmware', 'alice', 'g').body; quoted.quote = { msgtype: 'text', text: { content: filename } };
+  assert.equal(commandInput(quoted, scope, 'alice').kind, 'notice');
+  const mixed = message('', 'alice', 'g').body; mixed.msgtype = 'mixed'; mixed.mixed = { msg_item: [{ msgtype: 'text', text: { content: '/firmware @AI Patrick' } }] };
+  assert.equal(commandInput(mixed, scope, 'alice').kind, 'notice');
+});
+
+test('bot mention display names default compatibly and are isolated per configured bot', () => {
+  const env = { WECOM_ENABLED: 'true', WECOM_BOT_ID: 'bot', WECOM_BOT_SECRET: 'test' };
+  assert.equal(bridgeConfig(env, '/tmp').bots[0].name, 'AI Patrick');
+  assert.equal(bridgeConfig({ ...env, WECOM_BOT_NAME: '助手 (EN)+' }, '/tmp').bots[0].name, '助手 (EN)+');
+  const bots = bridgeConfig({ ...env, WECOM_BOTS: JSON.stringify([{ botId: 'one', secret: 's', name: 'One Bot' }, { botId: 'two', secret: 't', name: 'Two Bot' }]) }, '/tmp').bots;
+  assert.deepEqual(bots.map(bot => bot.name), ['One Bot', 'Two Bot']);
+  for (const name of ['', ' ', '@Bot', 'Bot\nName', 'x'.repeat(81), 3]) assert.throws(() => bridgeConfig({ ...env, WECOM_BOT_NAME: name }, '/tmp'), /显示名/);
+});
+
+test('group Web + Bridge flow handles mentions, selection, owner confirmation and running cancellation', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'firmware-group-'));
+  const token = 'group-test-token-'.repeat(4);
+  const alternate = { ...candidate, id: 'e'.repeat(32), filename: filename.replace('_02_rel', '_03_rel'), path: candidate.path.replace('_02_rel', '_03_rel') };
+  let job, submissions = 0, cancellations = 0, searched;
+  const local = { async ready() { return true; }, async search(query) { searched = query; return [candidate, alternate]; }, async lookup() { return job; }, async submit(id) { submissions++; assert.equal(id, alternate.id); job = { id: 'c'.repeat(32), candidate: alternate, state: 'running', stage: 'downloading', bytes: 100, total_bytes: candidate.size }; return job; }, async job() { return job; }, async cancel() { cancellations++; job.state = 'cancelled'; return job; } };
+  const app = await createWebServer({ cwd: root, dataDir: path.join(root, '.data'), resourcesDir: path.resolve('resources'), admin: { account: 'admin', password: 'test-passphrase' }, bridgeToken: token, model: { apiKey: '', baseUrl: '', modelId: '' }, fileTools: { enabled: false }, firmware: { client: local, matcher: async () => [candidate.id, alternate.id], pollMs: 10 } });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening'); const base = `http://127.0.0.1:${app.server.address().port}`;
+  const auth = await (await fetch(base + '/api/auth/status')).json();
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Local-Token': auth.token }, body: JSON.stringify({ account: 'admin', password: 'test-passphrase' }) });
+  const headers = { Cookie: login.headers.get('set-cookie').split(';')[0], 'X-Local-Token': auth.token, 'Content-Type': 'application/json' };
+  const settings = (await (await fetch(base + '/api/agent-settings', { headers })).json()).settings;
+  assert.equal((await fetch(base + '/api/agent-settings', { method: 'PUT', headers, body: JSON.stringify({ ...settings, firmware: { enabled: true } }) })).status, 200);
+  const store = await new BridgeStore(path.join(root, 'bridge')).open(); const bot = client(), targets = [];
+  const sendMessage = bot.sendMessage.bind(bot); bot.sendMessage = async (target, value) => { targets.push(target); await sendMessage(target, value); };
+  const bridge = new WecomBridge({ config: { bots: [{ botId: 'bot', secret: 'fake', name: 'AI Patrick' }, { botId: 'custom', secret: 'fake', name: '固件助手 (EN)+' }], token, concurrency: 2, queueLimit: 5, timeoutMs: 5000 }, store, api: new AgentApi(base, token, 5000), clients: new Map([['bot', bot], ['custom', bot]]), log: { warn() {}, error() {} } });
+  t.after(async () => { await bridge.close(); await app.close(); await fs.rm(root, { recursive: true, force: true }); });
+  await bridge.start(); bridge.authenticated('bot'); bridge.authenticated('custom');
+  const state = () => fs.readFile(path.join(root, '.data/firmware/state.json'), 'utf8').then(JSON.parse);
+  const send = async (text, user = 'alice', chat = 'g', botId = 'bot') => { await bridge.receive(botId, message(text, user, chat)); await bridge.idle(); };
+  await send('/firmware @AI Patrick'); assert.match(bot.texts.at(-1), /请输入 OS/);
+  await send(filename + ' @AI Patrick'); await until(async () => (await state()).active?.phase === 'choose');
+  assert.equal(searched, filename); assert.equal(submissions, 0);
+  await bridge.firmwareNotifier.pump();
+  await send('@AI Patrick 选择 2'); const code = (await state()).active.code; assert.ok(code);
+  await send(`/firmware 确认 ${code} @AI Patrick`, 'bob'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
+  await send(`/firmware 确认 ${code} @AI Patrick`, 'alice', 'other-group'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
+  await send(`确认 ${code} @其他人 @AI Patrick`); assert.match(bot.texts.at(-1), /尚未开始/); assert.equal(submissions, 0);
+  await send(`确认 ${code} @AI Patrick`); await until(() => submissions === 1);
+  await send('@AI Patrick /firmware 状态'); assert.match(bot.texts.at(-1), /下载/);
+  await send('/firmware 取消 @AI Patrick'); await until(async () => !(await state()).active);
+  assert.equal(cancellations, 1); assert.equal(submissions, 1);
+  await bridge.firmwareNotifier.pump(); assert.ok(targets.length); assert.ok(targets.every(target => target === 'g'));
+  await send('@AI Patrick /firmware'); await send('取消 @AI Patrick'); assert.equal(bot.texts.at(-1), '已取消固件流程。');
+  await send('@固件助手 (EN)+ /firmware', 'alice', 'g', 'custom'); assert.match(bot.texts.at(-1), /请输入 OS/);
+  await send('取消 @固件助手 (EN)+', 'alice', 'g', 'custom'); assert.equal(bot.texts.at(-1), '已取消固件流程。');
 });
 
 test('terminal notice exits only its matching input mode so ordinary chat is not swallowed', async t => {

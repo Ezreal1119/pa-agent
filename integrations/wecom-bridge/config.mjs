@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+export const DEFAULT_BOT_NAME = 'AI Patrick';
+
 function number(value, fallback, min, max, name) {
   const result = value === undefined || value === '' ? fallback : Number(value);
   if (!Number.isInteger(result) || result < min || result > max) throw new Error(`${name} must be ${min}–${max}.`);
@@ -10,9 +12,11 @@ export function bridgeConfig(env, cwd) {
   const enabled = env.WECOM_ENABLED === 'true';
   if (!enabled) return { enabled: false };
   let bots;
-  try { bots = env.WECOM_BOTS ? JSON.parse(env.WECOM_BOTS) : [{ botId: env.WECOM_BOT_ID, secret: env.WECOM_BOT_SECRET }]; }
+  try { bots = env.WECOM_BOTS ? JSON.parse(env.WECOM_BOTS) : [{ botId: env.WECOM_BOT_ID, secret: env.WECOM_BOT_SECRET, name: env.WECOM_BOT_NAME }]; }
   catch { throw new Error('WECOM_BOTS 不是有效 JSON，请检查格式。'); }
   if (!Array.isArray(bots) || !bots.length || bots.length > 20 || bots.some(bot => !bot || typeof bot.botId !== 'string' || !bot.botId.trim() || typeof bot.secret !== 'string' || !bot.secret.trim()) || new Set(bots.map(bot => bot.botId)).size !== bots.length) throw new Error('请配置唯一的 WECOM_BOT_ID / WECOM_BOT_SECRET，或 WECOM_BOTS JSON 数组。');
+  if (bots.some(bot => bot.name !== undefined && (typeof bot.name !== 'string' || !bot.name.trim() || bot.name.length > 80 || /[@\p{Cc}\p{Cf}]/u.test(bot.name)))) throw new Error('WECOM_BOT_NAME / name 必须是最多 80 字符、不含 @ 或控制字符的机器人显示名。');
+  bots = bots.map(bot => ({ ...bot, name: bot.name?.trim() ?? DEFAULT_BOT_NAME }));
   const notifyUserId = env.WECOM_NOTIFY_USER_ID?.trim() || '';
   for (const value of [notifyUserId, ...bots.map(bot => bot.notifyUserId ?? '')]) if (typeof value !== 'string' || value.length > 256 || /[\s\u0000-\u001f\u007f]/.test(value)) throw new Error('WECOM_NOTIFY_USER_ID / notifyUserId 必须是有效的企微用户标识。');
   const dataDir = path.resolve(cwd, env.AGENT_DATA_DIR || '.data');

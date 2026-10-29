@@ -1,3 +1,5 @@
+import { DEFAULT_BOT_NAME } from './config.mjs';
+
 export const WELCOME = `Hi，我是 AI Patrick 🤖
 
 我可以帮你：
@@ -29,8 +31,20 @@ ${text ?? '未设置'}
 请直接发送新的设置内容；输入“取消”保留原设置，输入“清除”恢复默认设置。`;
 }
 
+// The SDK supplies text rather than mention identities. Match only the configured
+// bot name at the edges; never remove arbitrary @content or change ordinary chat.
+function firmwareInputText(body, text, botName) {
+  if (body.chattype !== 'group' || body.msgtype !== 'text') return text;
+  const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const prefix = new RegExp('^@' + escaped + '(?:[\\t\\p{Zs}]+|$)', 'u');
+  const suffix = new RegExp('(?:^|[\\t\\p{Zs}]+)@' + escaped + '$', 'u');
+  let prior;
+  do { prior = text; text = text.replace(prefix, '').replace(suffix, '').trim(); } while (text !== prior);
+  return text;
+}
+
 /** Recognize controls before inbound trimming, file downloads, or Agent capacity checks. */
-export function commandInput(body, scope, userId) {
+export function commandInput(body, scope, userId, botName = DEFAULT_BOT_NAME) {
   const raw = body.msgtype === 'text' && typeof body.text?.content === 'string' ? body.text.content : undefined;
   const parts = [];
   const collect = value => {
@@ -39,9 +53,10 @@ export function commandInput(body, scope, userId) {
   };
   collect(body);
   const text = parts.join('\n').trim();
-  if (/^\/firmware(?:\s|$)/u.test(text)) {
+  const firmwareText = firmwareInputText(body, text, botName);
+  if (/^\/firmware(?:\s|$)/u.test(firmwareText)) {
     if (raw === undefined || body.quote || /[\r\n\0]/u.test(raw) || raw.length > 510) return { kind: 'notice', text: '请用纯文本发送 /firmware 或 /firmware 固件文件名。' };
-    return { kind: 'firmware', command: true, text: text.replace(/^\/firmware(?:\s+|$)/u, '') };
+    return { kind: 'firmware', command: true, text: firmwareText.replace(/^\/firmware(?:\s+|$)/u, '') };
   }
   if (text.startsWith('/clear') || text === '/new' || text === '新建对话') return { kind: 'reset' };
   if (text.startsWith('/role')) return { kind: 'open' };
@@ -49,8 +64,8 @@ export function commandInput(body, scope, userId) {
   if (text.startsWith('/patrick_balance')) return { kind: 'balance' };
   if (text.startsWith('/welcome')) return { kind: 'welcome' };
   if (scope.firmwareUser === userId && scope.firmwareUntil > Date.now()) {
-    if (raw === undefined || body.quote || !text || /[\r\n\0]/u.test(raw) || raw.length > 500) return { kind: 'notice', text: '固件流程只接收单行纯文本；请输入文件名、候选序号、本次确认码或“取消”。' };
-    return { kind: 'firmware', command: false, text };
+    if (raw === undefined || body.quote || !firmwareText || /[\r\n\0]/u.test(raw) || raw.length > 500) return { kind: 'notice', text: '固件流程只接收单行纯文本；请输入文件名、候选序号、本次确认码或“取消”。' };
+    return { kind: 'firmware', command: false, text: firmwareText };
   }
   if (scope.awaitingUser !== userId) return;
   if (scope.awaitingMode === 'files') {

@@ -177,6 +177,8 @@ WECOM_BOTS='[{"botId":"bot-1","secret":"secret-1"},{"botId":"bot-2","secret":"se
 
 每个机器人独立长连接与会话命名空间，共享 Agent 与上述全局并发上限。不要给同一个 Bot ID 开第二份 Bridge。
 
+固件隐藏命令 `/firmware` 在群聊中按机器人显示名处理输入首尾的 @提及，默认名 `AI Patrick`。单机器人可设置 `WECOM_BOT_NAME`，多机器人可在各条目设置 `name`（例如 `{"botId":"bot-1","secret":"...","name":"技术助手"}`），名称须与企微显示名一致。此设置仅用于固件输入解析，不更改欢迎语或企微侧名称；修改后重启 Bridge。详见 [固件流程](firmware.md)。
+
 ## 验收顺序
 
 1. 单聊问一个简单产品问题，再换另一个用户问，确认上下文隔离。

@@ -33,3 +33,28 @@
 ## 边界
 
 未提交、推送、上传或部署代码，未连接/改动 VPS，没有启动第二条真实企微机器人连接或发送真实企微测试消息。VPS `.env`、构建、两项服务重启及工具开关由管理员按文档完成后，才代表真实机器人上线。首次实际包传输仍需要该用户在企微明确确认，模拟测试和真实匹配不替代正式包长时传输验收。
+
+
+## 强制代理补充 · 2026-10-28
+
+核对 ~/.zshrc 后确认旧项目 start 由 proxychains4 包裹，读取 /opt/homebrew/etc/proxychains.conf 的 strict_chain 与 socks5 127.0.0.1:7897。新本机服务的 R2 上传及对象校验现已使用该配置，并显式设置 rclone --http-proxy、覆盖代理变量和清空 NO_PROXY；代理异常禁止直连。FTP 在未包裹的主进程中保持直连。未修改原 Proxychains 文件，派生配置只豁免连接代理自身的回环地址，避免双重代理。
+
+本机完整测试 38/38 通过，含真实 rclone S3 PUT 的 SOCKS5 转发、代理拒绝后不访问可直达目标、代理关闭禁止启动上传、环境变量冲突及 FTP 直连。真实 R2 小文件上传、公开下载内容校验及临时对象清理通过。本机服务已按原 npm 命令重启，公网健康检查 proxy=true。此次执行代码仍全部位于忽略的 local-download-service/；Agent、Bridge、VPS 均未改动，无需为该本机策略重新部署它们。
+
+## 网页资料库补充 · 2026-10-28
+
+核对现有 r2-file-browser 的 tools/ 扫描和 UPLOADED 显示规则后，在本机服务新增上传后发布步骤：保留 firmware/ 原对象及机器人链接，通过同桶 R2 服务端复制生成 tools/firmware/ 对象，并添加 OS 描述及 SHA256 元数据。上传、复制各有持久检查点，重试复用已验证对象；网页接口确认收录后才返回成功。多占一份 R2 对象空间，不从本机重复上传大包，不批量改动历史文件。
+
+本机完整测试 **47/47**，33.490 秒，日志 local-download-service/data/test-library-full.log。新增覆盖网页短暂不可用后的恢复、重启检查点、已发布对象变化、重复请求保留人工描述、服务端复制能力及链接编码校验。
+
+真实端到端测试使用临时 FTP 的 **12,934 字节**测试 ZIP：本机上传真实 R2、确认服务端复制、查询正式网页 API、校验 source=r2/external=false（UPLOADED）、分别读取机器人及网页下载链接并核对 SHA256；两份临时对象已删除，ok=true、cleanup_ok=true。报告 local-download-service/data/library-smoke.json。未传输正式 OS 包；未改 r2-file-browser、Agent、Bridge 或 VPS。
+
+本机服务已安全停止并按原 npm 命令重启加载发布配置；公网健康检查 HTTP 200，worker/ftp/disk/storage/proxy 全部通过。Python 编译检查、Git 忽略检查和 git diff --check 通过。
+
+## 维护提示排查补充 · 2026-10-28
+
+用户反馈本机服务、隧道、工具开关均开启，企微仍提示维护。实际检查确认本机及公网 readiness 正常，VPS 已更新固件代码、两个服务均运行、工具已保存为开启、模型配置正常，但 VPS `.env` 缺失 FIRMWARE_SERVICE_URL 和 FIRMWARE_SERVICE_TOKEN，因此 Agent readiness 始终失败。
+
+此次通过 SSH 补齐 VPS 的三项 FIRMWARE 配置；token 仅通过 SSH 标准输入传递，未输出。原 `.env` 以权限 600 备份至 VPS `.data/backups/env-before-firmware-2026-10-28T14-24-05-179Z`，新 `.env` 保持权限 600。确认 Agent 无执行或排队任务、无固件流程后，仅重启 product-expert.service，未上传代码、改动 Bridge 或发送企微消息。
+
+VPS 到本机公网 readiness HTTP 200，worker/ftp/disk/storage/proxy 全部通过。重启后的真实 Agent 机器接口用独立诊断身份执行“取消”入口检查，HTTP 200 返回“已取消固件流程。”，验证工具与 readiness 已放行，且未留下活动流程、未提交文件名或下载任务。用户可在原企微会话重新发送 `/firmware`。

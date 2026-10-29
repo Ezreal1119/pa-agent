@@ -77,7 +77,7 @@ export class WecomBridge {
     const notice = notificationInput(frame.body);
     void this.observer?.enqueue(who, notice).catch(error => this.log.warn('WeCom observer:', this.safeError(error)));
     const scope = this.scope(who.key);
-    const control = commandInput(frame.body, scope, who.userId);
+    const control = commandInput(frame.body, scope, who.userId, this.config.bots.find(bot => bot.botId === botId)?.name);
     if (control) {
       const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'command', control, generation: scope.generation, sentParts: 0, sentFiles: [] };
       if (control.kind === 'firmware' && (!scope.firmwareUser || scope.firmwareUser === who.userId || scope.firmwareUntil <= Date.now())) {

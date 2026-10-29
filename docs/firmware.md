@@ -12,6 +12,10 @@
 
 等待文件名、选择和确认各有 5 分钟有效期，查询匹配阶段最多 2 分钟。输入“取消”可退出未执行流程。执行后使用 `/firmware 取消` 请求停止，或 `/firmware 状态` 查看当前阶段。
 
+群聊支持在单行固件输入首尾 @ 当前机器人，例如 `/firmware @AI Patrick`、`@AI Patrick /firmware`、`固件名 @AI Patrick`、`确认 ABC123 @AI Patrick` 和 `/firmware 取消 @AI Patrick`。Bridge 仅移除与配置显示名精确匹配的首尾提及，再进行原有校验；不会移除其他人的 @、文字中间的 @ 或前缀相似的名字。发起人、原群、确认码、引用/附件和单行限制保持不变，普通聊天及其他命令沿用原解析。
+
+默认显示名为 `AI Patrick`，现有机器人无需新增环境变量。如果机器人改名，单机器人在 `.env` 设置 `WECOM_BOT_NAME=实际显示名`；多机器人分别在 `WECOM_BOTS` 条目设置 `name`，未设置时沿用默认名。SDK 文本回调不提供显示名对应的提及身份，此处按配置名称匹配，不从用户消息自动学习名称。更新该解析逻辑只需同步代码并重启 Bridge；不需重启 Agent、本机固件服务或隧道。
+
 机器人按确认后的第 **1、2、3、5、7、10、15、20、30 分钟**主动通知当前下载或上传阶段；30 分钟后每 10 分钟一次。完成和失败不等通知时点，下一轮状态检查后立即投递。后台状态通常每 5 秒检查一次，通知通过主动消息发送，不依赖原消息回复窗口，不让 AI 持续在线。
 
 ## 单任务和维护
@@ -47,6 +51,30 @@ npm --prefix local-download-service stop
 公开固件 API 仅允许健康检查、候选查询、确认提交、状态查询、按幂等请求查询及取消，不开放本机 `/v1/shutdown`、重试或事件管理入口。所有公开固件接口都需要独立的本机服务 Bearer token；它不是旧 APP 的 Mobile API Token，也不是 Bridge Token。
 
 本机 `/firmware-api/health` 会检查 worker、FTP 连接、剩余磁盘及 rclone 配置，短暂缓存 5 秒；不保证远端 R2 在整个后续传输期间持续可达，实际上传错误由任务状态反馈。
+
+本机 R2 上传和对象校验强制使用旧项目同一份 `/opt/homebrew/etc/proxychains.conf` 的 `strict_chain` 和本机 SOCKS5 代理（当前 `127.0.0.1:7897`）。服务不依赖启动终端的代理环境变量；rclone 子进程会覆盖代理变量、清空 `NO_PROXY`，并显式传入原生 `--http-proxy`。代理不通、配置缺失或链模式不符合要求时禁止直连上传，健康检查失败时机器人显示维护提示。FTP 查询与下载在未包裹代理的服务进程中保持直连。
+
+原始 Proxychains 配置不修改。为避免把“连接本机 SOCKS5 代理”再次通过同一代理转发，本机服务在被忽略的 `data/proxy/` 中生成专用副本，仅增加代理自身回环连接的豁免；R2 HTTP(S) 仍由 rclone 原生参数强制送往同一个代理。此配置及本机执行代码不上传 VPS；启动命令不变。
+
+无需手动给 `npm start` 再套一层 Proxychains，也不需要先 export 代理变量。原生参数依据 [rclone 官方代理说明](https://rclone.org/faq/#can-i-use-rclone-with-an-http-proxy)；本机已通过真实 S3 上传代理测试、禁止直连回退测试及真实 R2 小文件测试。
+
+## 网页资料库显示
+
+本机上传完成后，将同一个 R2 桶内的 `firmware/<文件名>` 用服务端复制发布到 `tools/firmware/<文件名>`。现有 `r2-file-browser` 网页直接列出 `tools/` 下的对象，因此新固件能被搜索、显示和下载，标签沿用 **UPLOADED**。此步骤在 R2 内多保留一个对象，不从本机重新上传文件。机器人仍返回原来的 `/firmware/<文件名>` 链接。
+
+发布配置仅保存在被忽略的 `local-download-service/config/settings.json`：
+
+```json
+{
+  "library_r2_destination": "r2:firmware/tools/firmware/",
+  "library_public_url_base": "https://temp.patrick-shenzhen.org/tools/firmware/",
+  "library_api_url": "https://tool-files.patrick-shenzhen.org/api/files"
+}
+```
+
+服务校验复制后的名称、大小和 SHA256 元数据，再查询网页接口核对来源、大小和下载链接，全部通过才把任务标记为成功。原上传和网页发布分别保存检查点；网页暂不可用时重试查询，不重复下载、上传或复制已经校验的文件。相同内容已存在时复用对象并保留已有的人工描述。
+
+网页发布、校验和接口查询沿用强制代理。无需修改或部署 `r2-file-browser`、Agent、Bridge，也无需更改 VPS 的原下载链接配置。本次只改变后续固件任务的行为，未批量发布历史对象。
 
 ## VPS 上线（管理员手动执行）
 
