@@ -6,13 +6,21 @@ import { CompletionJournal, type SyncCompletion } from "./journal.js";
 
 export type Destination = { botId: string; recipient: string };
 const identifier = (v: unknown): v is string => typeof v === "string" && !!v && v.length <= 256 && !/[\s\u0000-\u001f\u007f]/.test(v);
-export const destinationKey = (d: Destination) => createHash("sha256").update(JSON.stringify([d.botId, d.recipient])).digest("hex");
+export const destinationKey = (d: Destination, group = false) => createHash("sha256").update(JSON.stringify(group ? ["group", d.botId, d.recipient] : [d.botId, d.recipient])).digest("hex");
 export function syncDestination(env: NodeJS.ProcessEnv): Destination | undefined {
   try {
     const botId = env.WECOM_BOTS ? JSON.parse(env.WECOM_BOTS)[0]?.botId : env.WECOM_BOT_ID;
     const recipient = env.WECOM_NOTIFY_USER_ID?.trim();
     if (env.WECOM_ENABLED === "true" && identifier(botId) && identifier(recipient)) return { botId, recipient };
   } catch { /* Bridge configuration errors never redirect a notification. */ }
+}
+export function syncGroupDestination(env: NodeJS.ProcessEnv): Destination | undefined {
+  try {
+    const bots = env.WECOM_BOTS ? JSON.parse(env.WECOM_BOTS) : [{ botId: env.WECOM_BOT_ID }];
+    const botId = env.WECOM_SYNC_GROUP_BOT_ID?.trim() || bots[0]?.botId;
+    const recipient = env.WECOM_SYNC_GROUP_CHAT_ID?.trim();
+    if (env.WECOM_ENABLED === "true" && identifier(botId) && identifier(recipient) && bots.some((b: any) => b.botId === botId)) return { botId, recipient };
+  } catch { /* Invalid group configuration cannot redirect a private notice. */ }
 }
 type Notice = { id: string; text: string; destination: string; claim?: string; until?: number; sent?: boolean };
 type State = { version: 1; destination: string; boundary: string; seen: string[]; notices: Notice[] };
@@ -27,14 +35,17 @@ export function costText(cost?: CostSummary) {
   if (cost.historyMissing) lines.push("区间含启用费用记录之前的时间，历史消费不完整。");
   return lines.join("\n");
 }
-export function formatSyncNotice(event: SyncCompletion, from: string, interval?: CostSummary, own?: CostSummary) {
+export function formatSyncSummary(event: SyncCompletion) {
   const counts = event.counts;
   const success = counts.published ?? 0, review = (counts.needs_review ?? 0) + (counts.awaiting_confirmation ?? 0);
   const failed = (counts.failed ?? 0) + (counts.interrupted ?? 0) + (counts.stopped ?? 0);
   const unprocessed = Math.max(0, event.total - event.items.length);
   const rows = event.items.slice(0, 8).map(item => `· ${plain(item.name)}：${labels[item.status] ?? plain(item.status)}${item.summary ? "；" + plain(item.summary) : ""}`);
   return [`Sync ${event.origin === "auto" ? "自动同步" : "同步"}结果`, `结束时间（北京时间）：${beijing(event.finished)}`, `状态：${labels[event.status] ?? plain(event.status)}`, `文件 ${event.total} 个：已入库 ${success}，失败/中断 ${failed}，待处理 ${review}，重复/跳过 ${counts.duplicate ?? 0}，未处理 ${unprocessed}。`, ...rows,
-    ...(event.items.length > rows.length ? [`其余 ${event.items.length - rows.length} 个文件请查看 Sync reports。`] : []),
+    ...(event.items.length > rows.length ? [`其余 ${event.items.length - rows.length} 个文件请查看 Sync reports。`] : [])].join("\n");
+}
+export function formatSyncNotice(event: SyncCompletion, from: string, interval?: CostSummary, own?: CostSummary) {
+  return [formatSyncSummary(event),
     "", `消费区间（北京时间）：${beijing(from)} → ${beijing(event.finished)}`, "区间模型总消费：", costText(interval), "", "本次 Sync 模型消费：", costText(own),
     "", "仅统计本系统记录的模型推理；估算金额以服务商账单为准，外部搜索/抓取收费不在此项。", `报告：${event.jobIds.join("、") || event.id}`].join("\n");
 }
@@ -46,8 +57,8 @@ export class SyncNotifications {
   private timer?: ReturnType<typeof setInterval>;
   private closed = false;
   private readonly file: string;
-  constructor(private options: { dataDir: string; destination?: Destination; latest: () => string | undefined; reconcile: () => Promise<void>; now?: () => number }) {
-    this.file = path.join(options.dataDir, "sync-notifications", "state.json");
+  constructor(private options: { dataDir: string; destination?: Destination; summaryOnly?: boolean; latest: () => string | undefined; reconcile: () => Promise<void>; now?: () => number }) {
+    this.file = path.join(options.dataDir, "sync-notifications", options.summaryOnly ? "group-state.json" : "state.json");
   }
   private now() { return this.options.now?.() ?? Date.now(); }
   private serial<T>(fn: () => Promise<T>) { const run = this.tail.then(fn); this.tail = run.catch(() => {}); return run; }
@@ -62,7 +73,7 @@ export class SyncNotifications {
     }
     const destination = this.options.destination;
     if (!destination) return;
-    const key = destinationKey(destination);
+    const key = destinationKey(destination, this.options.summaryOnly);
     if (!previous || previous.destination !== key) {
       const existing = await new CompletionJournal(this.options.dataDir).list();
       this.state = { version: 1, destination: key, boundary: this.options.latest() ?? new Date(this.now()).toISOString(), seen: existing.map(e => e.id), notices: [] };
@@ -78,10 +89,15 @@ export class SyncNotifications {
       const events = await new CompletionJournal(this.options.dataDir).list(new Set(this.state.seen));
       for (const event of events) {
         const from = this.state.boundary <= event.finished ? this.state.boundary : event.finished;
-        const ledger = new UsageLedger(this.options.dataDir);
-        const total = await ledger.summary(from, event.finished).catch(() => undefined);
-        const own = await ledger.summary(new Date(Date.parse(event.started) - 1).toISOString(), event.finished, event.scopes).catch(() => undefined);
-        const notice = { id: event.id, destination: this.state.destination, text: formatSyncNotice(event, from, total, own) };
+        let text: string;
+        if (this.options.summaryOnly) text = formatSyncSummary(event);
+        else {
+          const ledger = new UsageLedger(this.options.dataDir);
+          const total = await ledger.summary(from, event.finished).catch(() => undefined);
+          const own = await ledger.summary(new Date(Date.parse(event.started) - 1).toISOString(), event.finished, event.scopes).catch(() => undefined);
+          text = formatSyncNotice(event, from, total, own);
+        }
+        const notice = { id: event.id, destination: this.state.destination, text };
         // Snapshot money and boundary together, before delivering anything.
         const before = structuredClone(this.state);
         this.state.seen.push(event.id); this.state.notices.push(notice);

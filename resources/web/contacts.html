@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="en-US">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WeCom contacts · Product Expert</title><link rel="icon" type="image/png" href="/favicon.png?v=patrick-1"><link rel="stylesheet" href="/style.css"><script defer src="/contacts.js"></script></head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WeCom contacts &amp; groups · Product Expert</title><link rel="icon" type="image/png" href="/favicon.png?v=patrick-1"><link rel="stylesheet" href="/style.css"><script defer src="/contacts.js"></script></head>
 <body>
   <main class="contacts-page">
     <header class="contacts-page-header"><a class="brand" href="/"><span class="brand-mark">pe</span><span><strong>Product Expert</strong><small>KNOWLEDGE WORKSPACE</small></span></a><a class="contacts-back" href="/">← Back to workspace</a></header>
-    <span class="eyebrow">WECOM CONTACTS</span><h1>WeCom contacts</h1>
-    <p class="contacts-description">Add a name to a User ID to identify the sender in notifications and private chats in Recent conversations. Group conversations and custom conversation titles keep their names.</p>
+    <span class="eyebrow">WECOM CONTACTS</span><h1>WeCom contacts &amp; groups</h1>
+    <p class="contacts-description">Contacts and groups have their own cards. Add a display name to a person or group, and use User IDs or Chat IDs to identify notification recipients. Custom conversation titles keep their names.</p>
     <div class="contacts-summary" id="contacts-summary" aria-label="Contact statistics"></div>
-    <div class="contacts-toolbar"><label class="sr-only" for="contacts-search">Search by name or User ID</label><input id="contacts-search" placeholder="Search names, User IDs, or bots" type="search"><button id="contacts-refresh" type="button" class="secondary-button">Refresh</button></div>
-    <p class="contacts-notice">Questions count agent runs that actually started, including failed or stopped runs. File-only uploads and new-conversation commands are excluded. Group token usage belongs to the sender of each turn and includes shared context and model requests triggered by tools.<br>Statistics start from the upgrade and are not backfilled. Deleting or expiring a conversation does not reset totals. Only usage reported to the server is counted; missing usage is not estimated. Input includes cached tokens; output includes reasoning tokens already counted by the provider. These totals are not a bill.</p>
+    <div class="contacts-toolbar"><label class="sr-only" for="contacts-search">Search contacts or groups</label><input id="contacts-search" placeholder="Search names, User IDs, Chat IDs, or bots" type="search"><button id="contacts-refresh" type="button" class="secondary-button">Refresh</button></div>
+    <p class="contacts-notice">Questions count agent runs that actually started, including failed or stopped runs. File-only uploads and new-conversation commands are excluded. Group usage is shown on both the group and the sender cards; the overview counts each question and token only once. Usage includes shared context and model requests triggered by tools.<br>Existing group IDs are imported. Historical group usage is restored only where original run records are available; missing usage is not inferred. Deleting or expiring a conversation does not reset totals. Only usage reported to the server is counted; missing usage is not estimated. Input includes cached tokens; output includes reasoning tokens already counted by the provider. These totals are not a bill.</p>
     <p id="contacts-status" class="contacts-status" role="status"></p><div id="contacts-list" class="contacts-list"></div>
   </main>
   <div id="toast" class="toast" role="alert" hidden></div>

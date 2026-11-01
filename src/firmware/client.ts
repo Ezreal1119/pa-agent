@@ -55,7 +55,7 @@ export class LocalFirmwareClient implements FirmwareClient {
   async search(query: FirmwareQuery, signal?: AbortSignal): Promise<FirmwareSearch> {
     const criteria = validateQuery(query);
     const value = await this.json("/search", { criteria, limit: 12 }, signal, 60000);
-    if (value.matching !== "model_date_index_and") throw new Error("本机固件服务需要更新为条件匹配版本。");
+    if (value.matching !== "model_date_index_vendoren_and") throw new Error("本机固件服务需要更新为 VendorEN 筛选版本。");
     return validateSearch(value, criteria);
   }
   async submit(candidateId: string, requestId: string, signal?: AbortSignal) { return this.validateJob(await this.json("/jobs", { candidate_id: candidateId, confirmed: true, upload: true, request_id: requestId }, signal)); }

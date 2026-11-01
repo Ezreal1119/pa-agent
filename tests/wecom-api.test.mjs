@@ -320,3 +320,22 @@ test('scheduled balance reaches only the global recipient through the real machi
  assert.equal(sent.length,1);assert.equal(sent[0].target,'owner');assert.match(sent[0].body.markdown.content,/CNY：123.45/);assert.match(sent[0].body.markdown.content,/北京时间 2026-10-25 15:00/);
  await bridge.balanceNotifier.pump();assert.equal(queries,1);assert.equal(f.requestCount,0);assert.deepEqual(store.data.jobs,[]);
 });
+
+test('administrator API exposes independent groups, scopes names by bot and preserves group names after restart', {timeout:30000}, async t=>{
+ const f=await setup(t),browser=await f.browser();
+ const register=botId=>f.api.json('/contacts','POST',{botId,userId:'alice',chatType:'group',chatId:'shared-group',at:Date.now()});
+ await register('bot-a');await register('bot-b');
+ const data=await(await browser('/api/wecom-contacts')).json();assert.equal(data.contacts.length,2);assert.equal(data.groups.length,2);
+ const group=data.groups.find(g=>g.botId==='bot-a'),other=data.groups.find(g=>g.botId==='bot-b');
+ assert.equal((await fetch(`${f.base}/api/wecom-groups/${group.id}`,{method:'PATCH',headers:{'Content-Type':'application/json',Authorization:`Bearer ${TOKEN}`},body:JSON.stringify({name:'forged'})})).status,403);
+ assert.equal((await browser(`/api/wecom-groups/${group.id}`,'PATCH',{name:'Support team'})).status,200);
+ assert.equal((await browser(`/api/wecom-groups/${group.id}`,'PATCH',{name:'bad\nname'})).status,400);
+ assert.equal((await browser(`/api/wecom-groups/${'f'.repeat(64)}`,'PATCH',{name:'missing'})).status,404);
+ await f.restart();const again=await f.browser(),saved=await(await again('/api/wecom-contacts')).json();
+ assert.equal(saved.groups.find(g=>g.id===group.id).name,'Support team');assert.equal(saved.groups.find(g=>g.id===other.id).name,'');assert.ok(saved.contacts.every(c=>c.name===''));
+ const {id}=await f.api.json('/sessions','POST',{});await f.api.json(`/sessions/${id}`,'PATCH',{title:'企微 · 群 shared-group'});
+ const mapping={conversations:{[JSON.stringify(['bot-a','group','shared-group'])]:{sessionId:id,updated:Date.now()}},jobs:[]};await fs.writeFile(path.join(f.dataDir,'wecom/bridge-state.json'),JSON.stringify(mapping));
+ let sessions=(await(await again('/api/sessions')).json()).sessions;assert.equal(sessions.find(s=>s.id===id).displayTitle,'企微 · 群 Support team');
+ await f.api.json(`/sessions/${id}`,'PATCH',{title:'Custom group conversation'});sessions=(await(await again('/api/sessions')).json()).sessions;assert.equal(sessions.find(s=>s.id===id).displayTitle,undefined);
+ assert.equal(f.requestCount,0);
+});

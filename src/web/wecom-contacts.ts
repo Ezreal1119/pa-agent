@@ -9,12 +9,16 @@ export type TokenUsage = { input: number; output: number; requests: number; repo
 type Stats = { since: number; questions: number; inputTokens: number; outputTokens: number; requests: number; reportedRequests: number; finishedRuns: number; coveredRuns: number };
 type RunSnapshot = { id: string; sequence: number; startedAt: string; status: string; usage?: TokenUsage; wecom?: Observation };
 type Cursor = { sequence: number; runId: string; contactId: string; chatType?: "single" | "group"; usage: TokenUsage; finished: boolean; covered: boolean };
-type Database = { version: 1; contacts: Contact[]; cursors?: Record<string, Cursor> };
+type GroupCursor = Omit<Cursor, "contactId" | "chatType"> & { groupId: string };
+type Database = { version: 1; contacts: Contact[]; groups?: Group[]; cursors?: Record<string, Cursor>; groupCursors?: Record<string, GroupCursor> };
 type BridgeState = { conversations?: Record<string, { sessionId?: string }>; jobs?: { key?: string; botId?: string; userId?: string; created?: number; sessionId?: string; oldSessionIds?: string[]; newSessionId?: string }[] };
 const count = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0;
 const validUsage = (u: TokenUsage) => u && [u.input, u.output, u.requests, u.reportedRequests].every(count) && u.reportedRequests <= u.requests;
 type Contact = { id: string; botId: string; userId: string; name: string; firstSeen: number; lastSeen: number; types: string[]; groups: string[]; stats?: Stats };
+type Group = { id: string; botId: string; chatId: string; name: string; firstSeen: number; lastSeen: number; stats?: Stats };
+export const groupId = (botId: string, chatId: string) => createHash("sha256").update(JSON.stringify(["group", botId, chatId])).digest("hex");
 export const contactId = (botId: string, userId: string) => createHash("sha256").update(JSON.stringify([botId, userId])).digest("hex");
+const validStats = (s: Stats) => s && [s.since, s.questions, s.inputTokens, s.outputTokens, s.requests, s.reportedRequests, s.finishedRuns, s.coveredRuns].every(count) && s.coveredRuns <= s.finishedRuns && s.finishedRuns <= s.questions && s.reportedRequests <= s.requests;
 const identity = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && !/[\s\u0000-\u001f\u007f]/.test(value);
 export function observation(input: unknown): Observation {
   const value = input as Observation;
@@ -40,6 +44,12 @@ export class WecomContacts {
       const data = JSON.parse(await fs.readFile(this.file, "utf8"));
       if (data.version !== 1 || !Array.isArray(data.contacts) || data.contacts.some((c: Contact) => !c || !identity(c.botId) || !identity(c.userId) || c.id !== contactId(c.botId, c.userId) || typeof c.name !== "string" || c.name.length > 80 || /[\u0000-\u001f\u007f]/.test(c.name) || !Number.isSafeInteger(c.firstSeen) || !Number.isSafeInteger(c.lastSeen) || !Array.isArray(c.types) || c.types.some(type => !["single", "group"].includes(type)) || !Array.isArray(c.groups) || c.groups.length > 100 || c.groups.some(id => !identity(id)))) throw new Error("Invalid WeCom contact data; existing names will not be reset.");
       if (data.contacts.some((c: Contact) => c.stats && (![c.stats.since, c.stats.questions, c.stats.inputTokens, c.stats.outputTokens, c.stats.requests, c.stats.reportedRequests, c.stats.finishedRuns, c.stats.coveredRuns].every(count) || c.stats.coveredRuns > c.stats.finishedRuns || c.stats.finishedRuns > c.stats.questions || c.stats.reportedRequests > c.stats.requests))) throw new Error("Invalid WeCom statistics.");
+      if (data.groups !== undefined && (!Array.isArray(data.groups) || data.groups.some((g: Group) => !g || !identity(g.botId) || !identity(g.chatId) || g.id !== groupId(g.botId, g.chatId) || typeof g.name !== "string" || g.name.length > 80 || /[\u0000-\u001f\u007f]/.test(g.name) || !count(g.firstSeen) || !count(g.lastSeen) || g.stats && !validStats(g.stats)))) throw new Error("Invalid WeCom group data; existing names will not be reset.");
+      const groupIds = new Set((data.groups ?? []).map((g: Group) => g.id));
+      if (data.groupCursors && (typeof data.groupCursors !== "object" || Array.isArray(data.groupCursors) || Object.entries(data.groupCursors).some(([id, item]) => {
+        const c = item as GroupCursor;
+        return !identity(id) || !c || !count(c.sequence) || !identity(c.runId) || !groupIds.has(c.groupId) || !validUsage(c.usage) || typeof c.finished !== "boolean" || typeof c.covered !== "boolean";
+      }))) throw new Error("Invalid WeCom group statistics cursor.");
       const ids = new Set(data.contacts.map((contact: Contact) => contact.id));
       if (data.cursors && (typeof data.cursors !== "object" || Array.isArray(data.cursors) || Object.entries(data.cursors).some(([id, item]) => {
         const c = item as Cursor;
@@ -57,26 +67,30 @@ export class WecomContacts {
       return state;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
-  /** Presentation only: resolve exact bot/user identities without rewriting sessions or bridge state. */
+  /** Presentation only: resolve scoped person/group names without rewriting sessions or bridge state. */
   async sessionTitles(sessionIds: string[]) {
     const titles = new Map<string, { title: string; displayTitle: string }>();
     if (!sessionIds.length) return titles;
     await this.tail;
     const data = await this.read();
-    const contacts = new Map(data.contacts.map(contact => [contact.id, contact]));
-    if (!data.contacts.some(contact => contact.name)) return titles;
+    const contacts = new Map<string, Contact | Group>([...data.contacts, ...(data.groups ?? [])].map(entry => [entry.id, entry]));
+    if (![...contacts.values()].some(entry => entry.name)) return titles;
     const wanted = new Set(sessionIds);
     const owners = new Map<string, string | null>();
     const add = (id: unknown, botId: unknown, type: unknown, userId: unknown) => {
       if (typeof id !== "string" || !wanted.has(id) || !identity(botId) || !identity(userId) || !["single", "group"].includes(String(type))) return;
-      const owner = type === "single" ? contactId(botId, userId) : null;
+      const owner = type === "single" ? contactId(botId, userId) : groupId(botId, userId);
       owners.set(id, owners.has(id) && owners.get(id) !== owner ? null : owner);
     };
     for (const [id, cursor] of Object.entries(data.cursors ?? {})) {
-      const contact = contacts.get(cursor.contactId)!;
+      const contact = contacts.get(cursor.contactId) as Contact;
       // Old cursors have no scope. Infer a private chat only when the contact has never appeared in a group.
       const type = cursor.chatType ?? (contact.types.length === 1 && contact.types[0] === "single" ? "single" : undefined);
-      if (type) add(id, contact.botId, type, contact.userId);
+      if (type === "single") add(id, contact.botId, type, contact.userId);
+    }
+    for (const [id, cursor] of Object.entries(data.groupCursors ?? {})) {
+      const group = contacts.get(cursor.groupId) as Group;
+      add(id, group.botId, "group", group.chatId);
     }
     const state = await this.readBridgeState();
     const mapped = (id: unknown, key: unknown) => {
@@ -92,7 +106,10 @@ export class WecomContacts {
     }
     for (const [id, owner] of owners) {
       const contact = owner && contacts.get(owner);
-      if (contact && contact.name) titles.set(id, { title: `企微 · ${contact.userId}`.slice(0, 80), displayTitle: `企微 · ${contact.name}` });
+      if (contact && contact.name) {
+        const prefix = "chatId" in contact ? "企微 · 群 " : "企微 · ";
+        titles.set(id, { title: `${prefix}${"chatId" in contact ? contact.chatId : contact.userId}`.slice(0, 80), displayTitle: prefix + contact.name });
+      }
     }
     return titles;
   }
@@ -108,6 +125,17 @@ export class WecomContacts {
     if (item.chatId && !contact.groups.includes(item.chatId) && contact.groups.length < 100) contact.groups.push(item.chatId);
     return contact;
   }
+  private mergeGroup(data: Database, botId: string, chatId: string, at: number) {
+    if (!identity(botId) || !identity(chatId) || !count(at)) throw new Error("Invalid WeCom group identity.");
+    const groups = data.groups ??= [], id = groupId(botId, chatId);
+    let group = groups.find(g => g.id === id);
+    if (!group) {
+      if (groups.length >= 10000) throw new Error("The WeCom group limit has been reached.");
+      group = { id, botId, chatId, name: "", firstSeen: at, lastSeen: at }; groups.push(group);
+    }
+    group.firstSeen = Math.min(group.firstSeen, at); group.lastSeen = Math.max(group.lastSeen, at);
+    return group;
+  }
   private work<T>(change: (contacts: Contact[], data: Database) => Promise<T> | T): Promise<T> {
     const work = this.tail.then(async () => {
       await safeDirectory(this.directory);
@@ -121,7 +149,10 @@ export class WecomContacts {
     });
     this.tail = work.then(() => {}, () => {}); return work;
   }
-  record(input: unknown) { const value = observation(input); return this.work(contacts => structuredClone(this.merge(contacts, value))); }
+  record(input: unknown) { const value = observation(input); return this.work((contacts, data) => {
+    if (value.chatType === "group") this.mergeGroup(data, value.botId, value.chatId!, value.at);
+    return structuredClone(this.merge(contacts, value));
+  }); }
   /** Per-session monotonic cursor: retries/recovery cannot count a run or its usage twice.
    * Keep cursors after session deletion; storage grows with sessions, not tool/model requests. */
   recordRun(sender: Observation, sessionId: string, run: RunSnapshot) {
@@ -138,6 +169,7 @@ export class WecomContacts {
   private applyRun(contacts: Contact[], data: Database, sender: Observation, sessionId: string, run: RunSnapshot) {
     const who = observation(sender);
     if (!/^[a-zA-Z0-9-]{8,80}$/.test(sessionId) || !identity(run.id) || !count(run.sequence) || run.sequence < 1 || !Number.isFinite(Date.parse(run.startedAt)) || !validUsage(run.usage!)) throw new Error("Invalid WeCom run statistics.");
+    if (who.chatType === "group") this.applyGroupRun(data, who, sessionId, run);
     const contact = this.merge(contacts, who);
     const cursors = data.cursors ??= {};
     const previous = Object.hasOwn(cursors, sessionId) ? cursors[sessionId] : undefined;
@@ -160,25 +192,65 @@ export class WecomContacts {
     stats.coveredRuns += Number(covered) - Number(sameRun && previous!.covered);
     cursors[sessionId] = { sequence: run.sequence, runId: run.id, contactId: contact.id, chatType: who.chatType, usage, finished, covered };
   }
-  rename(id: string, input: unknown) {
+  private applyGroupRun(data: Database, who: Observation, sessionId: string, run: RunSnapshot) {
+    const group = this.mergeGroup(data, who.botId, who.chatId!, who.at);
+    const cursors = data.groupCursors ??= {};
+    const previous = Object.hasOwn(cursors, sessionId) ? cursors[sessionId] : undefined;
+    if (previous && run.sequence < previous.sequence) return;
+    if (previous && (previous.groupId !== group.id || run.sequence === previous.sequence && run.id !== previous.runId)) throw new Error("The WeCom group run identity conflicts with its statistics cursor.");
+    const sameRun = previous?.runId === run.id, usage = structuredClone(run.usage!);
+    if (sameRun && (usage.requests < previous!.usage.requests || usage.reportedRequests < previous!.usage.reportedRequests || usage.input < previous!.usage.input || usage.output < previous!.usage.output)) return;
+    const finished = run.status !== "running";
+    if (sameRun && previous!.finished && !finished) return;
+    const covered = finished && usage.requests > 0 && usage.reportedRequests === usage.requests;
+    const stats = group.stats ??= { since: Date.parse(run.startedAt), questions: 0, inputTokens: 0, outputTokens: 0, requests: 0, reportedRequests: 0, finishedRuns: 0, coveredRuns: 0 };
+    stats.since = Math.min(stats.since, Date.parse(run.startedAt));
+    if (!sameRun) stats.questions++;
+    stats.inputTokens += usage.input - (sameRun ? previous!.usage.input : 0);
+    stats.outputTokens += usage.output - (sameRun ? previous!.usage.output : 0);
+    stats.requests += usage.requests - (sameRun ? previous!.usage.requests : 0);
+    stats.reportedRequests += usage.reportedRequests - (sameRun ? previous!.usage.reportedRequests : 0);
+    stats.finishedRuns += Number(finished) - Number(sameRun && previous!.finished);
+    stats.coveredRuns += Number(covered) - Number(sameRun && previous!.covered);
+    cursors[sessionId] = { sequence: run.sequence, runId: run.id, groupId: group.id, usage, finished, covered };
+  }
+  renameGroup(id: string, input: unknown) {
+    const name = this.name(input);
+    return this.work((_contacts, data) => { const group = data.groups?.find(g => g.id === id); if (!group) return undefined; group.name = name; return structuredClone(group); });
+  }
+  private name(input: unknown) {
     const value = input as { name: string };
     if (!value || typeof value !== "object" || Object.keys(value).length !== 1 || typeof value.name !== "string" || value.name.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(value.name)) throw new Error("Display names must be at most 80 characters without line breaks or control characters. Leave empty to clear.");
-    return this.work(contacts => { const contact = contacts.find(c => c.id === id); if (!contact) return undefined; contact.name = value.name.trim(); return structuredClone(contact); });
+    return value.name.trim();
   }
-  list() {
-    return this.work(async contacts => {
+  rename(id: string, input: unknown) {
+    const name = this.name(input);
+    return this.work(contacts => { const contact = contacts.find(c => c.id === id); if (!contact) return undefined; contact.name = name; return structuredClone(contact); });
+  }
+  async list() { return (await this.entries()).contacts; }
+  async listGroups() { return (await this.entries()).groups; }
+  entries() {
+    return this.work(async (contacts, data) => {
       // Import identities already seen before this feature existed; never write bridge-state.json.
+      const knownGroups = new Set((data.groups ?? []).map(g => g.id));
+      for (const contact of contacts) for (const chatId of contact.groups) {
+        const id = groupId(contact.botId, chatId);
+        if (!knownGroups.has(id)) { this.mergeGroup(data, contact.botId, chatId, contact.lastSeen); knownGroups.add(id); }
+      }
       const state = await this.readBridgeState();
       for (const [key, entry] of Object.entries(state?.conversations ?? {})) {
         const [botId, type, userId] = JSON.parse(key); const at = (entry as { updated: number }).updated;
         if (type === "single") this.merge(contacts, observation({ botId, userId, chatType: "single", at }));
+        else if (type === "group") this.mergeGroup(data, botId, userId, at);
       }
       for (const job of state?.jobs ?? []) {
         if (!job.userId || !job.botId || !job.key) continue;
         const [, type, target] = JSON.parse(job.key);
-        this.merge(contacts, observation({ botId: job.botId, userId: job.userId, chatType: type, ...(type === "group" ? { chatId: target } : {}), at: job.created }));
+        const who = observation({ botId: job.botId, userId: job.userId, chatType: type, ...(type === "group" ? { chatId: target } : {}), at: job.created });
+        this.merge(contacts, who);
+        if (type === "group") this.mergeGroup(data, job.botId, target, who.at);
       }
-      return structuredClone(contacts).sort((a, b) => b.lastSeen - a.lastSeen);
+      return { contacts: structuredClone(contacts).sort((a, b) => b.lastSeen - a.lastSeen), groups: structuredClone(data.groups ?? []).sort((a, b) => b.lastSeen - a.lastSeen) };
     });
   }
 }

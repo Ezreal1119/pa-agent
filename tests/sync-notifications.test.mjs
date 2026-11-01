@@ -9,7 +9,7 @@ import {createServer} from 'node:http';
 import {createFirmwareExtractor} from '../dist/firmware/matcher.js';
 import {UsageLedger, meterSession, metered, usageScope, configureUsagePricing} from '../dist/usage/ledger.js';
 import {CompletionJournal} from '../dist/sync-notifications/journal.js';
-import {SyncNotifications, destinationKey, syncDestination, costText} from '../dist/sync-notifications/service.js';
+import {SyncNotifications, destinationKey, syncDestination, syncGroupDestination, formatSyncSummary, costText} from '../dist/sync-notifications/service.js';
 import {SyncService} from '../dist/knowledge-sync/service.js';
 import {AutoSync} from '../dist/knowledge-sync/auto-sync.js';
 import {emptyUsage, hash, PlanError} from '../dist/knowledge-sync/core.js';
@@ -17,6 +17,7 @@ import {BridgeStore} from '../integrations/wecom-bridge/store.mjs';
 import {SyncNotifier} from '../integrations/wecom-bridge/sync-notifications.mjs';
 import {WecomBridge} from '../integrations/wecom-bridge/bridge.mjs';
 import {AgentApi} from '../integrations/wecom-bridge/api.mjs';
+import {bridgeConfig} from '../integrations/wecom-bridge/config.mjs';
 import {createWebServer} from '../dist/web/server.js';
 
 const model={modelId:'deepseek-flash',baseUrl:'https://api.deepseek.com'};
@@ -124,19 +125,23 @@ test('Bridge only sends to the primary private account, resumes saved chunks and
 });
 
 test('real Web maintenance API -> completion journal -> Bridge private delivery uses no second bot or model query',async t=>{
- const root=await rootFor(t);const saved={};for(const [k,v]of Object.entries({WECOM_ENABLED:'true',WECOM_BOT_ID:'bot',WECOM_BOTS:'',WECOM_NOTIFY_USER_ID:'owner'})){saved[k]=process.env[k];process.env[k]=v;}t.after(()=>{for(const [k,v]of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
+ const root=await rootFor(t);const saved={};for(const [k,v]of Object.entries({WECOM_ENABLED:'true',WECOM_BOT_ID:'bot',WECOM_BOTS:'',WECOM_NOTIFY_USER_ID:'owner',WECOM_SYNC_GROUP_CHAT_ID:'group-chat',WECOM_SYNC_GROUP_BOT_ID:''})){saved[k]=process.env[k];process.env[k]=v;}t.after(()=>{for(const [k,v]of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
  const token='sync-test-token-'.repeat(4);
  const app=await createWebServer({cwd:root,dataDir:path.join(root,'.data'),resourcesDir:path.resolve('resources'),admin:{account:'admin',password:'fixture-pass'},bridgeToken:token,model:{apiKey:'fixture',baseUrl:'https://model.example/v1',modelId:'fixture'},fileTools:{enabled:false},sync:{converter:()=>async source=>({markdown:'# Fixture',sourceHash:hash(await fs.readFile(source)),coverage:[],visual:emptyUsage(),version:4}),planner:()=>async()=>{throw new PlanError(['Review please'],true);}}});
  app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const base=`http://127.0.0.1:${app.server.address().port}`;
  const auth=await(await fetch(base+'/api/auth/status')).json();const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':auth.token},body:JSON.stringify({account:'admin',password:'fixture-pass'})});
  const headers={Cookie:login.headers.get('set-cookie').split(';')[0],'X-Local-Token':auth.token,'Content-Type':'application/json'};
- const store=await new BridgeStore(path.join(root,'bridge')).open();const sent=[];const bridge=new WecomBridge({config:{bots:[{botId:'bot',secret:'fixture'}],notifyUserId:'owner',concurrency:2,queueLimit:5,timeoutMs:5000},store,api:new AgentApi(base,token,5000),clients:new Map([['bot',{async sendMessage(target,body){sent.push({target,body});},disconnect(){}}]]),log:{warn(){},error(){}}});
+ const store=await new BridgeStore(path.join(root,'bridge')).open();const sent=[];const bridge=new WecomBridge({config:{bots:[{botId:'bot',secret:'fixture'}],notifyUserId:'owner',syncGroup:{botId:'bot',recipient:'group-chat'},concurrency:2,queueLimit:5,timeoutMs:5000},store,api:new AgentApi(base,token,5000),clients:new Map([['bot',{async sendMessage(target,body){sent.push({target,body});},disconnect(){}}]]),log:{warn(){},error(){}}});
  t.after(async()=>{await bridge.close();await app.close();});await bridge.start();bridge.authenticated('bot');
  await fs.mkdir(path.join(root,'.data/urovo-product-expert/newly_added'),{recursive:true});await fs.writeFile(path.join(root,'.data/urovo-product-expert/newly_added/test.md'),'# Fixture');
  const incoming=await(await fetch(base+'/api/sync/incoming',{headers})).json();const response=await fetch(base+'/api/sync/jobs',{method:'POST',headers,body:JSON.stringify({ids:incoming.files.map(x=>x.id)})});assert.equal(response.status,202);const job=await response.json();
  const deadline=Date.now()+5000;while(true){const current=await(await fetch(base+'/api/sync/jobs/'+job.id,{headers})).json();if(current.finished)break;if(Date.now()>deadline)throw Error('Sync wait timeout');await new Promise(r=>setTimeout(r,10));}
- await bridge.syncNotifier.active;await bridge.syncNotifier.pump();assert.equal(sent.length,1);assert.equal(sent[0].target,'owner');assert.match(sent[0].body.markdown.content,/待处理 1/);assert.match(sent[0].body.markdown.content,/区间模型总消费/);
- await bridge.syncNotifier.pump();assert.equal(sent.length,1);
+ await bridge.syncNotifier.active;await bridge.syncNotifier.pump();await bridge.syncGroupNotifier.active;await bridge.syncGroupNotifier.pump();
+ assert.equal(sent.length,2);const full=sent.find(x=>x.target==='owner'),summary=sent.find(x=>x.target==='group-chat');
+ assert.match(full.body.markdown.content,/待处理 1/);assert.match(full.body.markdown.content,/区间模型总消费/);
+ assert.match(summary.body.markdown.content,/待处理 1/);assert.doesNotMatch(summary.body.markdown.content,/消费|余额|计价|¥|报告：/);
+ await bridge.syncNotifier.pump();await bridge.syncGroupNotifier.pump();assert.equal(sent.length,2);
+ assert.equal((await fetch(base+'/api/wecom/sync-notifications/claim',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({audience:'invalid'})})).status,400);
  assert.equal((await fetch(base+'/api/wecom/sync-notifications/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
 });
 
@@ -172,4 +177,48 @@ test('real SDK streaming usage is durably metered before a model task returns',a
  const extract=createFirmwareExtractor(()=>({apiKey:'PRIVATE KEY',baseUrl,modelId:'fixture',contextWindow:32000,maxTokens:2048}),path.join(root,'matching'),root);
  assert.deepEqual(await extract('帮我下载 SQ68MB 的 260422_01 固件',AbortSignal.timeout(5000)),criteria);
  const sum=await new UsageLedger(root).summary(first,'2099-01-01');assert.equal(sum.requests,1);assert.equal(sum.priced,1);assert.ok(sum.cny>0);
+});
+
+test('group destination is optional, accepts only a configured bot and never replaces the private account',()=>{
+ const env={WECOM_ENABLED:'true',WECOM_BOTS:'[{"botId":"first"},{"botId":"second"}]',WECOM_NOTIFY_USER_ID:'owner'};
+ assert.equal(syncGroupDestination(env),undefined);
+ assert.deepEqual(syncGroupDestination({...env,WECOM_SYNC_GROUP_CHAT_ID:'group-chat'}),{botId:'first',recipient:'group-chat'});
+ assert.deepEqual(syncGroupDestination({...env,WECOM_SYNC_GROUP_CHAT_ID:'group-chat',WECOM_SYNC_GROUP_BOT_ID:'second'}),{botId:'second',recipient:'group-chat'});
+ assert.equal(syncGroupDestination({...env,WECOM_SYNC_GROUP_CHAT_ID:'group-chat',WECOM_SYNC_GROUP_BOT_ID:'unknown'}),undefined);
+ assert.equal(syncGroupDestination({...env,WECOM_SYNC_GROUP_CHAT_ID:'bad\nchat'}),undefined);
+ assert.deepEqual(syncDestination({...env,WECOM_SYNC_GROUP_CHAT_ID:'group-chat'}),{botId:'first',recipient:'owner'});
+ const configured={...env,WECOM_BOTS:'[{"botId":"first","secret":"test"},{"botId":"second","secret":"test"}]',WECOM_SYNC_GROUP_CHAT_ID:'group-chat',WECOM_SYNC_GROUP_BOT_ID:'second'};
+ assert.deepEqual(bridgeConfig(configured,'/tmp').syncGroup,syncGroupDestination(configured));
+ assert.throws(()=>bridgeConfig({...configured,WECOM_SYNC_GROUP_BOT_ID:'unknown'},'/tmp'),/已配置/);
+ const summary=formatSyncSummary(event());assert.match(summary,/test.md/);assert.doesNotMatch(summary,/消费|余额|计价|¥|报告：/);
+});
+
+test('private and group snapshots have independent claims, retries and destinations; changing a group does not replay full notices',async t=>{
+ const root=await rootFor(t);await coverage(root);const f=await notifications(t,root),groupDestination={botId:'bot',recipient:'group-chat'};
+ let now=Date.parse(third);
+ const group=new SyncNotifications({dataDir:root,destination:groupDestination,summaryOnly:true,latest:()=>first,reconcile:async()=>{},now:()=>now});await group.init();t.after(()=>group.close());
+ const journal=new CompletionJournal(root),e=event();await charge(root,second,.4,e.scopes[0]);await journal.record(e);
+ const personal=(await f.claim()).notice,claim={...groupDestination,consumer:randomUUID()},shared=(await group.claim(claim)).notice;
+ assert.equal(personal.id,shared.id);assert.notEqual(personal.destination,shared.destination);assert.match(personal.text,/0.400000/);
+ assert.doesNotMatch(shared.text,/消费|余额|计价|¥|报告：/);assert.ok(personal.text.startsWith(shared.text));
+ assert.equal((await group.claim({...claim,recipient:'owner'})).notice,null);assert.equal((await group.ack(personal)).ok,false);
+ assert.equal((await f.service.ack(personal)).ok,true);now+=61000;
+ const retry=(await group.claim(claim)).notice;assert.equal(retry.text,shared.text);assert.notEqual(retry.claim,shared.claim);
+ await group.close();const changed=new SyncNotifications({dataDir:root,destination:{...groupDestination,recipient:'other-group'},summaryOnly:true,latest:()=>second,reconcile:async()=>{}});await changed.init();t.after(()=>changed.close());
+ assert.equal((await changed.claim({...claim,recipient:'other-group'})).notice,null);
+ assert.equal((await f.claim()).notice,null);
+ const personalState=JSON.parse(await fs.readFile(path.join(root,'sync-notifications/state.json'),'utf8'));assert.equal(personalState.boundary,second);
+});
+
+test('group send failure does not block a personal notice; group ACK loss resumes its own checkpoint',async t=>{
+ const root=await rootFor(t),store=await new BridgeStore(path.join(root,'bridge')).open();t.after(()=>store.close());
+ const groupDestination={botId:'bot',recipient:'group-chat'},id=randomUUID();let failSend=true,failAck=true;const sent=[],acks=new Set();
+ const notices={private:{id,claim:randomUUID(),destination:destinationKey(destination),text:'private total ¥0.1'},group:{id,claim:randomUUID(),destination:destinationKey(groupDestination,true),text:'Sync 结果\n文件 1 个'}};
+ const api={async json(route,_method,body){const audience=body.audience??'private';if(route.endsWith('/claim'))return{notice:acks.has(audience)?null:notices[audience]};if(audience==='group'&&failAck)throw Error('ACK lost');acks.add(audience);return{ok:true};}};
+ const clients=new Map([['bot',{async sendMessage(target,body){if(target==='group-chat'&&failSend)throw Error('group unavailable');sent.push({target,text:body.markdown.content});}}]]);
+ const personal=new SyncNotifier({store,api,clients,...destination,isConnected:()=>true,log:{warn(){}}}).start();
+ const make=()=>new SyncNotifier({store,api,clients,...groupDestination,audience:'group',isConnected:()=>true,log:{warn(){}}}).start();let group=make();
+ await Promise.all([personal.active,group.active]);assert.ok(acks.has('private'));assert.equal(sent.length,1);assert.equal(sent[0].target,'owner');
+ failSend=false;await group.pump();assert.equal(sent.length,2);assert.equal(sent[1].target,'group-chat');assert.doesNotMatch(sent[1].text,/¥|total/);await group.close();
+ failAck=false;group=make();await group.active;assert.equal(sent.length,2);assert.ok(acks.has('group'));await group.close();await personal.close();
 });

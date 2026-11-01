@@ -17,7 +17,7 @@ import { bridgeConfig } from '../integrations/wecom-bridge/config.mjs';
 
 const filename = 'SQ27M_EN_XX_WE__DS_FI_S02_U_251205_02_rel_uFWsign_VendorEN.zip';
 const criteria = { model: 'SQ27M', date: '251205', index: '02' };
-const searchResult = candidates => ({ candidates, total: candidates.length, truncated: false, complete: true, matching: 'model_date_index_and' });
+const searchResult = candidates => ({ candidates, total: candidates.length, truncated: false, complete: true, matching: 'model_date_index_vendoren_and' });
 const candidate = { id: 'b'.repeat(32), filename, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + filename, size: 1234567, modified: '20261028100000', score: 1, exact: true, differences: [] };
 const message = (text, userId = 'alice', chat) => ({ headers: { req_id: randomUUID() }, body: { msgtype: 'text', msgid: randomUUID(), chattype: chat ? 'group' : 'single', ...(chat ? { chatid: chat } : {}), from: { userid: userId }, text: { content: text } } });
 const until = async fn => { const end = Date.now() + 6000; while (!await fn()) { if (Date.now() > end) throw new Error('wait timeout'); await new Promise(r => setTimeout(r, 10)); } };
@@ -41,7 +41,7 @@ test('real Web API + Bridge enforces /firmware entry, switch, ownership, confirm
   await toggle(true); ready = false; await bridge.receive('bot', message('/firmware')); await bridge.idle(); assert.match(bot.texts.at(-1), /维护中/);
   ready = true; await bridge.receive('bot', message('/firmware')); await bridge.idle(); assert.match(bot.texts.at(-1), /请输入 OS/);
   await bridge.receive('bot', message('/firmware', 'bob')); await bridge.idle(); assert.match(bot.texts.at(-1), /任务处理中/);
-  await bridge.receive('bot', message(filename)); await bridge.idle(); assert.match(bot.texts.at(-1), /AI 提取/); assert.equal(submissions, 0);
+  await bridge.receive('bot', message(filename)); await bridge.idle(); assert.match(bot.texts.at(-1), /正在查找固件/); assert.equal(submissions, 0);
   const stateFile = path.join(root, '.data/firmware/state.json'); const state = () => fs.readFile(stateFile, 'utf8').then(JSON.parse);
   await until(async () => (await state()).active?.phase === 'confirm'); await bridge.firmwareNotifier.active; await bridge.firmwareNotifier.pump();
   assert.ok(bot.texts.some(text => text.includes('是否下载并上传')));
@@ -142,12 +142,12 @@ test('bot mention display names default compatibly and are isolated per configur
   for (const name of ['', ' ', '@Bot', 'Bot\nName', 'x'.repeat(81), 3]) assert.throws(() => bridgeConfig({ ...env, WECOM_BOT_NAME: name }, '/tmp'), /显示名/);
 });
 
-test('group Web + Bridge flow handles natural requests, mentions, owner confirmation and running cancellation', async t => {
+test('group Web + Bridge flow handles natural requests, numbered choice, mentions, owner confirmation and cancellation', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'firmware-group-'));
   const token = 'group-test-token-'.repeat(4);
-  const alternate = { ...candidate, id: 'e'.repeat(32), filename: filename.replace('VendorEN', 'VendorXX'), path: candidate.path.replace('VendorEN', 'VendorXX') };
+  const alternate = { ...candidate, id: 'e'.repeat(32), filename: filename.replace('_S02_', '_S03_'), path: candidate.path.replace('_S02_', '_S03_') };
   let job, submissions = 0, cancellations = 0, searched;
-  const local = { async ready() { return true; }, async search(query) { searched = query; return searchResult([alternate]); }, async lookup() { return job; }, async submit(id) { submissions++; assert.equal(id, alternate.id); job = { id: 'c'.repeat(32), candidate: alternate, state: 'running', stage: 'downloading', bytes: 100, total_bytes: candidate.size }; return job; }, async job() { return job; }, async cancel() { cancellations++; job.state = 'cancelled'; return job; } };
+  const local = { async ready() { return true; }, async search(query) { searched = query; return searchResult([candidate, alternate]); }, async lookup() { return job; }, async submit(id) { submissions++; assert.equal(id, alternate.id); job = { id: 'c'.repeat(32), candidate: alternate, state: 'running', stage: 'downloading', bytes: 100, total_bytes: candidate.size }; return job; }, async job() { return job; }, async cancel() { cancellations++; job.state = 'cancelled'; return job; } };
   const app = await createWebServer({ cwd: root, dataDir: path.join(root, '.data'), resourcesDir: path.resolve('resources'), admin: { account: 'admin', password: 'test-passphrase' }, bridgeToken: token, model: { apiKey: '', baseUrl: '', modelId: '' }, fileTools: { enabled: false }, firmware: { client: local, extractor: async () => criteria, pollMs: 10 } });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening'); const base = `http://127.0.0.1:${app.server.address().port}`;
   const auth = await (await fetch(base + '/api/auth/status')).json();
@@ -163,9 +163,14 @@ test('group Web + Bridge flow handles natural requests, mentions, owner confirma
   const state = () => fs.readFile(path.join(root, '.data/firmware/state.json'), 'utf8').then(JSON.parse);
   const send = async (text, user = 'alice', chat = 'g', botId = 'bot') => { await bridge.receive(botId, message(text, user, chat)); await bridge.idle(); };
   await send('/firmware @AI Patrick'); assert.match(bot.texts.at(-1), /请输入 OS/);
-  await send('帮我下载 SQ27M 的 251205_02 固件 @AI Patrick'); await until(async () => (await state()).active?.phase === 'confirm');
+  await send('帮我下载 SQ27M 的 251205_02 固件 @AI Patrick'); await until(async () => (await state()).active?.phase === 'choose');
   assert.deepEqual(searched, criteria); assert.equal(submissions, 0);
-  await bridge.firmwareNotifier.pump();
+  await bridge.firmwareNotifier.active; await bridge.firmwareNotifier.pump();
+  assert.ok(bot.texts.some(text => text.includes('找到多个固件')));
+  await send('/firmware 2 @AI Patrick', 'bob'); assert.match(bot.texts.at(-1), /任务处理中/);
+  await send('/firmware 2 @AI Patrick', 'alice', 'other-group'); assert.match(bot.texts.at(-1), /任务处理中/);
+  await send('选择 2 @AI Patrick'); assert.equal((await state()).active.selected.id, alternate.id); assert.equal(submissions, 0);
+  assert.ok(bot.texts.at(-1).includes(alternate.filename));
   const code = (await state()).active.code; assert.ok(code);
   await send(`/firmware 确认 ${code} @AI Patrick`, 'bob'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
   await send(`/firmware 确认 ${code} @AI Patrick`, 'alice', 'other-group'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
@@ -178,6 +183,7 @@ test('group Web + Bridge flow handles natural requests, mentions, owner confirma
   await send('@AI Patrick /firmware'); await send('取消 @AI Patrick'); assert.equal(bot.texts.at(-1), '已取消固件流程。');
   await send('@固件助手 (EN)+ /firmware', 'alice', 'g', 'custom'); assert.match(bot.texts.at(-1), /请输入 OS/);
   await send('取消 @固件助手 (EN)+', 'alice', 'g', 'custom'); assert.equal(bot.texts.at(-1), '已取消固件流程。');
+  for (const text of bot.texts) assert.doesNotMatch(text, /FTP|路径|R2/);
 });
 
 test('terminal notice exits only its matching input mode so ordinary chat is not swallowed', async t => {

@@ -1,4 +1,4 @@
-import { SyncNotifications, syncDestination } from "../sync-notifications/service.js";
+import { SyncNotifications, syncDestination, syncGroupDestination } from "../sync-notifications/service.js";
 import { UsageLedger, configureUsagePricing } from "../usage/ledger.js";
 import { balanceCommand, libraryCommand } from "./wecom-commands.js";
 import { firmwareConfig, LocalFirmwareClient, type FirmwareClient } from "../firmware/client.js";
@@ -168,6 +168,8 @@ export async function createWebServer(options: WebOptions = {}) {
   await autoSync.init();
   const syncNotifications = new SyncNotifications({ dataDir, destination: syncDestination(syncEnv), latest: () => synchronize.latestCompletion(), reconcile: async () => { await synchronize.reconcileCompletions(); await autoSync.recordCompletion(); } });
   await syncNotifications.init();
+  const syncGroupNotifications = new SyncNotifications({ dataDir, destination: syncGroupDestination(syncEnv), summaryOnly: true, latest: () => synchronize.latestCompletion(), reconcile: async () => { await synchronize.reconcileCompletions(); await autoSync.recordCompletion(); } });
+  await syncGroupNotifications.init();
   const autoSyncSocket = new AutoSyncSocket(autoSyncSocketPath(dataDir), () => autoSync.trigger());
   const autoSyncSchedule = options.autoSyncSchedule ?? new SftpScheduleClient(undefined, "sync");
   const library = new KnowledgeLibrary(synchronize.root, dataDir, () => synchronize.busy);
@@ -471,8 +473,9 @@ export async function createWebServer(options: WebOptions = {}) {
         if (route.startsWith("/sync-notifications/")) {
           if (method !== "POST" || url.search) throw new HttpError(400, "Sync notifications require POST without query parameters.");
           const input = await readBody(req, 4096);
-          if (route === "/sync-notifications/claim") return json(res, 200, await syncNotifications.claim(input));
-          if (route === "/sync-notifications/ack") return json(res, 200, await syncNotifications.ack(input));
+          if (input?.audience !== undefined && !["private", "group"].includes(input.audience)) throw new HttpError(400, "Invalid Sync notification audience.");
+          if (route === "/sync-notifications/claim") return json(res, 200, await (input?.audience === "group" ? syncGroupNotifications : syncNotifications).claim(input));
+          if (route === "/sync-notifications/ack") return json(res, 200, await (input?.audience === "group" ? syncGroupNotifications : syncNotifications).ack(input));
           throw new HttpError(404, "Sync notification operation not found.");
         }
         if (route.startsWith("/firmware/")) {
@@ -529,7 +532,7 @@ export async function createWebServer(options: WebOptions = {}) {
           catch (error) { throw new HttpError(400, redact(error)); }
         }
         url.pathname = `/api${route}`;
-        if (route === "/status") return json(res, 200, { firmwareSupported: true, syncNotificationsSupported: true, configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
+        if (route === "/status") return json(res, 200, { firmwareSupported: true, syncNotificationsSupported: true, syncGroupNotificationsSupported: true, configured: configured(), queue: runGate.snapshot(), retentionDays: 30, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes } });
       }
       const authenticated = machine || auth.authenticated(req);
       if (method === "GET" && url.pathname === "/api/auth/status") return json(res, 200, { token: csrf, configured: auth.configured, authenticated });
@@ -775,7 +778,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       const contactMatch = url.pathname.match(/^\/api\/wecom-contacts(?:\/([a-f0-9]{64}))?$/);
       if (contactMatch) {
-        if (!contactMatch[1] && method === "GET") return json(res, 200, { contacts: await wecomContacts.list() });
+        if (!contactMatch[1] && method === "GET") return json(res, 200, await wecomContacts.entries());
         if (contactMatch[1] && method === "PATCH") {
           let contact;
           try { contact = await wecomContacts.rename(contactMatch[1], await readBody(req)); }
@@ -784,6 +787,15 @@ export async function createWebServer(options: WebOptions = {}) {
           return json(res, 200, { contact });
         }
         throw new HttpError(405, "WeCom contacts only support listing contacts and updating display names.");
+      }
+      const groupMatch = url.pathname.match(/^\/api\/wecom-groups\/([a-f0-9]{64})$/);
+      if (groupMatch) {
+        if (method !== "PATCH") throw new HttpError(405, "WeCom groups only support updating display names.");
+        let group;
+        try { group = await wecomContacts.renameGroup(groupMatch[1]!, await readBody(req)); }
+        catch (error) { throw new HttpError(400, redact(error)); }
+        if (!group) throw new HttpError(404, "WeCom group not found.");
+        return json(res, 200, { group });
       }
       if (url.pathname === "/mcp-usage" && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/?settings=mcp" }); res.end(); return; }
       if (url.pathname === "/api/mcp/settings") {
@@ -1150,6 +1162,7 @@ export async function createWebServer(options: WebOptions = {}) {
     await autoSync.wait();
     await memoryClosing;
     await syncNotifications.refresh().catch(() => {}); await syncNotifications.close();
+    await syncGroupNotifications.refresh().catch(() => {}); await syncGroupNotifications.close();
     for (const r of records.values()) r.session?.dispose();
     runtime?.dispose();
     await auth.close(); retention.dispose();

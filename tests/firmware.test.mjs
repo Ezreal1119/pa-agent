@@ -12,7 +12,7 @@ import { validateAgentSettings } from '../dist/web/agent-settings.js';
 
 const name = 'SQ27M_EN_XX_WE__DS_FI_S02_U_251205_02_rel_uFWsign_VendorEN.zip';
 const criteria = { model: 'SQ27M', date: '251205', index: '02' };
-const searchResult = (candidates, extra = {}) => ({ candidates: candidates.slice(0, 12), total: candidates.length, truncated: candidates.length > 12, complete: true, matching: 'model_date_index_and', ...extra });
+const searchResult = (candidates, extra = {}) => ({ candidates: candidates.slice(0, 12), total: candidates.length, truncated: candidates.length > 12, complete: true, matching: 'model_date_index_vendoren_and', ...extra });
 const base = 'https://temp.patrick-shenzhen.org/firmware/';
 const candidate = (extra = {}) => ({ id: randomUUID().replaceAll('-', ''), filename: name, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name, size: 1234567, modified: '20261028090000', score: 1, exact: true, differences: [], ...extra });
 const owner = (userId = 'alice', botId = 'bot') => ({ userId, botId, target: userId, chatType: 'single' });
@@ -71,7 +71,7 @@ test('switch off after preview prevents confirmation; switch off after accepted 
   const f = await fixture(t); const flow = await f.query(); f.enabled = false;
   assert.equal((await f.service.command(input(`确认 ${flow.code}`, false))).text, FIRMWARE_MAINTENANCE); assert.equal(f.submits, 0);
   f.enabled = true; await f.confirm(flow); f.enabled = false; f.advance(60000); await f.service.tick();
-  assert.match((await f.state()).notices.at(-1).text, /从 FTP 下载/); assert.equal((await f.state()).active.jobId, [...f.jobs.values()][0].id);
+  assert.match((await f.state()).notices.at(-1).text, /下载中/); assert.equal((await f.state()).active.jobId, [...f.jobs.values()][0].id);
 });
 
 test('lost submit response reconciles by idempotency key, including service restart', async t => {
@@ -101,18 +101,48 @@ test('fixed progress milestones include both download and upload without duplica
   const before = (await f.state()).notices.filter(n => n.text.includes('当前阶段进度')).length;
   await f.service.tick(); assert.equal((await f.state()).notices.filter(n => n.text.includes('当前阶段进度')).length, before);
   assert.equal(before, 9);
-  assert.ok((await f.state()).notices.some(n => n.text.includes('上传到 R2')));
+  assert.ok((await f.state()).notices.some(n => n.text.includes('上传中')));
   await f.restart(); await f.service.tick(); assert.equal((await f.state()).notices.filter(n => n.text.includes('当前阶段进度')).length, before);
   f.advance(10 * 60000); await f.service.tick(); assert.equal((await f.state()).notices.filter(n => n.text.includes('当前阶段进度')).length, before + 1);
 });
 
-test('multiple matches terminate even when a complete filename is exact; the slot is released', async t => {
-  const c1 = candidate(), c2 = candidate({ filename: name.replace('VendorEN', 'VendorXX'), path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name.replace('VendorEN', 'VendorXX') });
+test('multiple VendorEN matches retain the slot; owner selects a candidate before confirmation', async t => {
+  const c1 = candidate(), otherName = name.replace('_S02_', '_S03_');
+  const c2 = candidate({ filename: otherName, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + otherName });
   const f = await fixture(t, { candidates: [c1, c2] });
-  await f.service.command(input(name)); await until(async () => (await f.state()).notices.length);
-  const db = await f.state(); assert.equal(db.active, undefined); assert.equal(f.submits, 0);
-  assert.match(db.notices.at(-1).text, /找到 2 个/); assert.ok(db.notices.at(-1).text.includes(c1.filename)); assert.ok(db.notices.at(-1).text.includes(c2.filename));
-  assert.equal((await f.service.command(input('', true, owner('bob')))).awaiting, true);
+  const flow = await f.query(); assert.equal(flow.phase, 'choose'); assert.equal(f.submits, 0);
+  const notice = (await f.state()).notices.at(-1); assert.equal(notice.prompt, true);
+  assert.match(notice.text, /1\. SQ27M/); assert.ok(notice.text.includes(c2.filename)); assert.doesNotMatch(notice.text, /FTP|路径/);
+  assert.match((await f.service.command(input('2', false, owner('bob')))).text, /任务处理中/);
+  for (const text of ['0', '3', '-1', '1.5', '确认', '选择 2 然后下载']) {
+    assert.match((await f.service.command(input(text, false))).text, /请输入列表中的序号/);
+    assert.equal((await f.state()).active.phase, 'choose'); assert.equal(f.submits, 0);
+  }
+  await f.restart(); assert.equal((await f.state()).active.phase, 'choose');
+  const reply = await f.service.command(input('选择 2', false));
+  assert.equal(reply.awaiting, true); assert.ok(reply.text.includes(c2.filename)); assert.doesNotMatch(reply.text, /FTP|路径|R2/);
+  const selected = (await f.state()).active; assert.equal(selected.selected.id, c2.id); assert.equal(selected.phase, 'confirm'); assert.equal(f.submits, 0);
+  await f.confirm(selected); assert.equal([...f.jobs.values()][0].candidate.id, c2.id); assert.equal(f.submits, 1);
+});
+
+test('bare candidate number selects without starting a transfer; selection expires or can be cancelled', async t => {
+  for (const action of ['2', '取消', 'expire']) {
+    const f = await fixture(t, { candidates: [candidate(), candidate({ path: '/FTP7/OS/12.0/SQ27M/EN/XX/' + name })] });
+    await f.query();
+    if (action === 'expire') { f.advance(5 * 60000 + 1); await f.service.tick(); }
+    else await f.service.command(input(action, false));
+    assert.equal(f.submits, 0);
+    if (action === '2') assert.equal((await f.state()).active.selected.path, f.candidates[1].path);
+    else { assert.equal((await f.state()).active, undefined); assert.equal((await f.service.command(input('', true, owner('bob')))).awaiting, true); }
+  }
+});
+
+test('truncated choices state the limit and only listed numbers can be selected', async t => {
+  const candidates = Array.from({ length: 15 }, (_, i) => candidate({ path: `/FTP7/OS/${i}.0/SQ27M/EN/XX/${name}` }));
+  const f = await fixture(t, { candidates }); await f.query();
+  assert.match((await f.state()).notices.at(-1).text, /共 15 个匹配，展示前 12 个/);
+  assert.match((await f.service.command(input('13', false))).text, /请输入列表中的序号/);
+  await f.service.command(input('12', false)); assert.equal((await f.state()).active.selected.id, candidates[11].id); assert.equal(f.submits, 0);
 });
 
 test('no matches and incomplete directory enumeration end without a download', async t => {
@@ -156,7 +186,7 @@ test('mismatched success URL or package retains lock and emits a single warning,
 });
 
 test('verified public link encoding agrees with the local service for parentheses and spaces', async t => {
-  const filename = name.replace('.zip', '(EU 1).zip'); const c = candidate({ filename, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + filename });
+  const filename = name.replace('WE__', 'WE (EU 1)__'); const c = candidate({ filename, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + filename });
   const f = await fixture(t, { candidates: [c] }); await f.confirm(await f.query(filename)); const job = [...f.jobs.values()][0];
   const url = base + encodeURIComponent(filename).replace(/[!'()*]/g, x => '%' + x.charCodeAt(0).toString(16).toUpperCase());
   job.state = 'succeeded'; job.result = { uploaded: true, filename, size: c.size, download_url: url };
@@ -203,6 +233,8 @@ test('query validation requires calendar dates and exact model/date-index bounda
   assert.deepEqual(validateQuery({ ...criteria, model: 'sq27m' }), criteria);
   for (const q of [{ ...criteria, date: '250230' }, { ...criteria, index: '2' }, { ...criteria, model: 'SQ27M/' }]) assert.throws(() => validateQuery(q));
   assert.equal(matchesQuery(name, criteria), true);
+  for (const filename of [name.replace('_uFWsign_VendorEN', ''), name.replace('VendorEN', 'VendorXX'), name.replace('.zip', '_extra.zip'), name.replace('VendorEN', 'VendorEN2')]) assert.equal(matchesQuery(filename, criteria), false);
+  assert.equal(matchesQuery(name.toLowerCase(), criteria), true);
   assert.equal(matchesQuery(name.replace('SQ27M_', 'SQ27MB_'), criteria), false);
   assert.equal(matchesQuery(name.replace('_251205_02_', '_251205_01_'), criteria), false);
   assert.throws(() => extractedQuery({ ...criteria, index: '01' }, name));
@@ -212,7 +244,7 @@ test('query validation requires calendar dates and exact model/date-index bounda
 test('old unconfirmed flows end on upgrade; accepted running jobs keep their identity', async t => {
   const f = await fixture(t); await f.query();
   const file = path.join(f.service.directory, 'state.json');
-  const old = await f.state(); delete old.active.matchVersion; await fs.writeFile(file, JSON.stringify(old));
+  const old = await f.state(); old.active.matchVersion = 2; await fs.writeFile(file, JSON.stringify(old));
   await f.restart(); assert.equal((await f.state()).active, undefined); assert.match((await f.state()).notices.at(-1).text, /规则已更新/);
   await f.confirm(await f.query()); const running = await f.state(), id = running.active.jobId;
   delete running.active.matchVersion; await fs.writeFile(file, JSON.stringify(running));
@@ -221,7 +253,7 @@ test('old unconfirmed flows end on upgrade; accepted running jobs keep their ide
 
 test('local client rejects legacy, hidden ambiguity and wrong-condition results', async () => {
   const config = firmwareConfig({ FIRMWARE_SERVICE_URL: 'https://service.example/firmware-api', FIRMWARE_SERVICE_TOKEN: 'secret'.repeat(8) });
-  for (const value of [{ candidates: [candidate()] }, searchResult([candidate()], { total: 2 }), searchResult([candidate({ filename: name.replace('SQ27M_', 'SQ27MB_'), path: '/FTP7/OS/13.0/SQ27MB/EN/XX/' + name.replace('SQ27M_', 'SQ27MB_') })])]) {
+  for (const value of [searchResult([candidate()], { matching: 'model_date_index_and' }), searchResult([candidate({ filename: name.replace('_uFWsign_VendorEN', ''), path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name.replace('_uFWsign_VendorEN', '') })]), { candidates: [candidate()] }, searchResult([candidate()], { total: 2 }), searchResult([candidate({ filename: name.replace('SQ27M_', 'SQ27MB_'), path: '/FTP7/OS/13.0/SQ27MB/EN/XX/' + name.replace('SQ27M_', 'SQ27MB_') })])]) {
     const client = new LocalFirmwareClient(config, async () => Response.json(value));
     await assert.rejects(client.search(criteria));
   }
