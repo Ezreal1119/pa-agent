@@ -47,7 +47,7 @@ Chat ID 从 `/wecom-contacts` 页面目标群的独立卡片复制。不要把�
 - `.data/knowledge-sync/jobs/`：保留原报告，并增加每次执行的 ID、起点、目标文件及可选自动轮次归属。
 - `.data/sync-notifications/events/`：不可变的结束快照。Re-Sync 新建执行 ID，不覆盖上一次执行结果；重启恢复新版本中断报告时生成一次中断记录。
 - `.data/sync-notifications/state.json`：接收目标指纹、已处理事件、上次完成边界和带租约的待发通知。
-- `.data/usage-ledger/`：调用来源、模型、时间、token、适用价格和估算金额；不保存 API key、提示词、回答、附件路径或图片。
+- `.data/usage-ledger/`：内部 `.accounting.lock` 统一协调 Agent 与独立导入进程；其他记录包含调用来源、模型、时间、token、适用价格和估算金额；不保存 API key、提示词、回答、附件路径或图片。
 - `.data/wecom/bridge-state.json` 的 `syncDeliveries`：成功发送的文本片段进度。ACK 丢失或正常重启后不重复发送已记录部分。
 
 文件采用权限 600，目录权限 700。通知检查点损坏时保留文件并暂停通知模块，普通聊天和 Sync 不因此停止。Bridge 离线时后台保留结果，恢复后投递；进程反复启动不重新跑 Sync。仍存在平台已接收但本地发送检查点未落盘的崩溃窗口，不承诺平台消息严格 exactly-once。
@@ -64,3 +64,8 @@ systemctl restart wecom-bridge.service
 ```
 
 继续沿用已有 `.env` 中的 `WECOM_ENABLED`、机器人凭据、`WECOM_API_TOKEN` 与余额报送使用的全局 `WECOM_NOTIFY_USER_ID`。群通知按需新增上面的两个配置项，之后同时重启 Agent 和 Bridge；无新 npm 依赖或 systemd 安装。本轮未访问或修改 VPS、未发送真实企微消息，实际主动消息权限和部署后首轮通知由管理员验收。
+
+
+## 独立 Library 导入的账本权限修复
+
+2026-11-02 修复了独立 Library 定时导入在写费用账本时出现 EROFS 的部署遗漏。该服务保持 `ProtectSystem=strict`，仅新增 `.data/usage-ledger` 的写入白名单；共享锁统一移入账本内部。升级时需先停止旧 Agent/导入进程，再构建、安装增量 drop-in 并启动，避免新旧锁位置混用。个人与群通知的格式、消费边界及余额报送不变。具体命令见 [Library 导入修复步骤](library-import.md#2026-11-02-usage-receipts-fail-with-erofs-in-the-standalone-importer)。

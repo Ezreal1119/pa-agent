@@ -47,7 +47,10 @@ export class UsageLedger {
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
   }
   private async locked<T>(task: () => Promise<T>) {
-    const release = await lockfile.lock(this.directory, { realpath: false, stale: 30000, update: 5000, retries: { retries: 60, minTimeout: 10, maxTimeout: 100 } });
+    // Both the main Agent and the sandboxed importer must lock inside the one
+    // writable ledger mount, rather than creating a sibling in read-only .data.
+    const lockfilePath = await safePath(this.directory, ".accounting.lock");
+    const release = await lockfile.lock(this.directory, { realpath: false, lockfilePath, stale: 30000, update: 5000, retries: { retries: 60, minTimeout: 10, maxTimeout: 100 } });
     try { return await task(); } finally { await release(); }
   }
   async start(source: string, model: Model) {

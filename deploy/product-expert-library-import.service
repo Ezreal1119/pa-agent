@@ -39,3 +39,5 @@ ReadWritePaths=/opt/ProductExpertCloud/.data/logs/library_sync
 # Complete-file staging stays in newly_added/.library-import-work so publication
 # links never cross these separate writable bind mounts.
 ReadWritePaths=/opt/ProductExpertCloud/.data/urovo-product-expert/newly_added
+# Shared model usage receipts and their internal cross-process accounting lock.
+ReadWritePaths=/opt/ProductExpertCloud/.data/usage-ledger

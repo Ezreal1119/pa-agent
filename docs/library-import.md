@@ -27,7 +27,7 @@ chmod 600 .env
 systemctl restart product-expert.service
 ```
 
-The service user must be able to read `.env` and write `.data/logs/library_sync/` and `.data/urovo-product-expert/newly_added/`. Existing main-service `ReadWritePaths=.../.data` is sufficient. Do not make files world-writable; if this VPS uses root, preserve that choice in the optional standalone service too.
+The service user must be able to read `.env` and write `.data/logs/library_sync/`, `.data/urovo-product-expert/newly_added/` and the shared `.data/usage-ledger/`. The standalone importer must use the same runtime account as the Agent so their private receipt files are mutually accessible. Existing main-service `ReadWritePaths=.../.data` is sufficient. Do not make files world-writable; if this VPS uses root, preserve that choice in the optional standalone service too.
 
 To run once without Web:
 
@@ -86,13 +86,14 @@ sudo install -m 644 deploy/product-expert-library-import.timer /etc/systemd/syst
 sudo nano /etc/systemd/system/product-expert-library-import.service
 ```
 
-Before starting the sandboxed service, create both writable paths (ReadWritePaths requires them to exist). Use your actual runtime account/group below; this example matches the shipped dedicated-user template:
+Before starting the sandboxed service, create all three writable paths (ReadWritePaths requires them to exist). Use your actual runtime account/group below; this example matches the shipped dedicated-user template:
 
 ```bash
 sudo mkdir -p /opt/ProductExpertCloud/.data/logs/library_sync
 sudo mkdir -p /opt/ProductExpertCloud/.data/urovo-product-expert/newly_added
-sudo chown productexpert:productexpert /opt/ProductExpertCloud/.data/logs/library_sync /opt/ProductExpertCloud/.data/urovo-product-expert/newly_added
-sudo chmod 700 /opt/ProductExpertCloud/.data/logs/library_sync /opt/ProductExpertCloud/.data/urovo-product-expert/newly_added
+sudo mkdir -p /opt/ProductExpertCloud/.data/usage-ledger
+sudo chown productexpert:productexpert /opt/ProductExpertCloud/.data/logs/library_sync /opt/ProductExpertCloud/.data/urovo-product-expert/newly_added /opt/ProductExpertCloud/.data/usage-ledger
+sudo chmod 700 /opt/ProductExpertCloud/.data/logs/library_sync /opt/ProductExpertCloud/.data/urovo-product-expert/newly_added /opt/ProductExpertCloud/.data/usage-ledger
 sudo systemctl daemon-reload
 ```
 
@@ -156,3 +157,43 @@ systemctl restart product-expert.service
 Refresh the page, open Library **Settings**, and compare with `systemctl list-timers product-expert-library-import.timer`. The default template is Monday 06:00 Beijing, but the dialog uses the installed timer, not that default. `Persistent=true` retains a possible missed-run catch-up on enabling/restarting a timer; saving does not directly start/stop the importer and does not cancel an active download. To edit on the VPS manually, change its timer/drop-in, run daemon-reload and restart that timer; then use Reload schedule in the dialog. Non-root Web socket access uses the existing restricted-group override in [SFTP helper instructions](sftp-sync.md#one-time-timer-settings-helper-installation-existing-root-deployment).
 
 Local validation for this addition uses Node 22.23.2, isolated HTTP/Unix socket requests, simulated systemctl and actual UI-handler execution in a minimal DOM. It covers Library/SFTP isolation, daily/weekly/pause, conflict/CSRF/Origin/auth rejection, rollback, unavailable helper, unsaved drafts and stale UI reads. It is not a real model/download, real browser visual inspection or Ubuntu systemd activation test. No production files, credentials or installed timers were modified.
+
+
+### 2026-11-02: usage receipts fail with EROFS in the standalone importer
+
+The classification call now writes a usage receipt before contacting the model. The standalone unit had `ProtectSystem=strict` and only the importer-log/inbox write mounts, so `.data/usage-ledger/*.tmp` failed with EROFS. This happens before the model request or file download; remaining items become Not attempted because a read-only filesystem is a batch-level failure. This is distinct from corrupt PDFs, model errors and format skips.
+
+The fresh-install service template now grants only the additional ledger directory. Both Agent and CLI accounting use `.data/usage-ledger/.accounting.lock`; the previous default created `.data/usage-ledger.lock` outside that writable directory. Receipt formats, accounting cutoffs, pricing, import state, classification cache and source dedup remain unchanged. Accounting errors still propagate; the importer does not silently skip usage recording or invent zero cost.
+
+For an existing installation, **do not replace the installed service unit**: preserve its User/Group, resource limits, custom paths and timer. After syncing the project code, wait for active Sync/import operations to finish. Pause the Library timer, then stop the Agent and standalone importer before building; old and new accounting processes must not overlap during this lock-path change. Also stop any manually launched old Agent/importer CLI processes, if present.
+
+```bash
+sudo systemctl stop product-expert-library-import.timer
+sudo systemctl stop product-expert-library-import.service product-expert.service
+cd /opt/ProductExpertCloud
+npm run build
+```
+
+Verify that `.data/usage-ledger` exists and the installed Agent/importer use the same runtime account. The reported EROFS case already has this directory; preserve its existing receipts and ownership. On a fresh installation, use the three-directory initialization above with the actual runtime account. Do not delete ledger files, the accounting cutoff or importer state, and do not use chmod 777.
+
+Install the additive drop-in supplied in the repository:
+
+```bash
+sudo mkdir -p /etc/systemd/system/product-expert-library-import.service.d
+sudo install -m 644 deploy/product-expert-library-import-usage-ledger.conf /etc/systemd/system/product-expert-library-import.service.d/30-usage-ledger.conf
+sudo systemctl daemon-reload
+sudo systemctl show product-expert-library-import.service -p ReadWritePaths -p ProtectSystem -p User -p Group
+```
+
+`ReadWritePaths` must include `/opt/ProductExpertCloud/.data/usage-ledger`; `ProtectSystem` remains `strict`. If the installation uses a custom `AGENT_DATA_DIR`, adjust the drop-in to the corresponding ledger directory. Restart all accounting callers on the same build, then rerun the failed import:
+
+```bash
+sudo systemctl start product-expert.service
+sudo systemctl start --no-block product-expert-library-import.service
+sudo systemctl start product-expert-library-import.timer
+sudo journalctl -u product-expert-library-import.service -n 80 --no-pager
+```
+
+Only restart the timer if it was active before maintenance; do not enable a previously disabled schedule. The Bridge and local firmware service require no change for this fix. New runs retry incomplete entries of the latest upstream report while retaining completed-entry and content dedup. Existing failed reports stay in history.
+
+Validation: build and 42 related tests passed. New tests run real Library classifier/ledger code in separate Node processes with actual filesystem write permissions restricted to paths derived from the shipped unit or old-unit-plus-drop-in. They cover successful metered classification under a read-only parent, refusal before model invocation when ledger access is missing, cross-process mutual exclusion/cutoff preservation, and lock-symlink rejection. These are enforced local filesystem-permission tests, not an actual Ubuntu systemd mount-namespace test. No real model, download, VPS or installed service was used.
