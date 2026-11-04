@@ -53,6 +53,8 @@
             <label class="field"><span>文档编号 <small>Document Number</small><em>必填</em></span><input name="documentNumber" placeholder="例如 CKD-001" maxlength="200" required></label>
             <label class="field"><span>SOP 名称 <small>SOP Name</small><em>必填</em></span><input name="sopName" placeholder="例如 Assembly Activate Device SOP" maxlength="200" required></label>
             <label class="field"><span>作者 <small>Author</small><em>必填</em></span><input name="author" placeholder="填写编制人姓名" maxlength="200" required autocomplete="name"></label>
+            <label class="field" id="revision-reason-field" hidden><span>修订原因 <small>Revision Reason</small></span><textarea name="revisionReason" rows="3" maxlength="1000" disabled placeholder="例如：调整装配流程"></textarea><span class="field-help">选填，写入封面首条修订记录。</span></label>
+            <label class="field" id="revision-content-field" hidden><span>修订内容 <small>Revision Content</small></span><textarea name="revisionContent" rows="3" maxlength="4000" disabled placeholder="填写本次新增或调整的内容"></textarea><span class="field-help">选填，支持多行文字。</span></label>
             <label class="field" id="factory-field" hidden><span>工厂测试工序 <small>Factory Test Processes</small><em>必填</em></span><textarea name="factoryTestProcesses" rows="5" placeholder="Camera Test&#10;Key Test"></textarea><span class="field-help">每行一个工序，按 SOP 执行顺序填写，共 1–30 项。</span></label>
           </div>
           <div class="form-footer"><p class="muted small">下一步会让你选择流程来源并确认匹配。</p><button class="button primary" type="submit" id="start-button">开始生成 <span>→</span></button></div>

@@ -31,7 +31,9 @@ function source(root: string, id: string, bomCount: number, toolsCount: number, 
 }
 async function generate(root: string, ids: string[], language = 'English') {
   const output = path.join(root, `${language}-${ids.join('-')}.xlsx`);
-  const result = await buildCkdSop({ output, projectDir: path.join(root, 'processes'), projectName: 'P', documentNo: 'D', sopName: 'S', author: 'Author', processList: ids, sopType: 'assemble', templateLanguage: language });
+  // Explicit custom templates retain the legacy layout; default customer layouts have separate coverage.
+  const template = path.join(assets, language === '中文' ? 'urovo-sop-template-zh.xlsx' : 'urovo-sop-template.xlsx');
+  const result = await buildCkdSop({ template, output, projectDir: path.join(root, 'processes'), projectName: 'P', documentNo: 'D', sopName: 'S', author: 'Author', processList: ids, sopType: 'assemble', templateLanguage: language });
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(output);
   return { result, workbook };
 }

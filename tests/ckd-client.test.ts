@@ -51,6 +51,22 @@ test('client clarification survives backend restart, rejects stale/invalid answe
  assert.equal((await app.request(`/api/client/runs/${id}/answer`,{questionId:q.id,text:'手动输入 SOP Processes'})).status,400);
  assert.equal((await app.request(`/api/client/runs/${id}/resume`,{})).status,202);assert.equal((await app.request(`/api/client/runs/${id}/cancel`,{})).status,200);assert.equal((await app.wait(id)).status,'cancelled');
 });
+
+test('client API keeps optional Assembly revision fields across backend restart', async t => {
+ const app=await fixture(t),library=app.service().libraryPath;
+ fs.mkdirSync(path.join(library,'processes_lib/assemble'),{recursive:true});
+ write(path.join(library,'product_lib/TARGET/assemble/processes/step/metadata.txt'),'Assembly step');
+ write(path.join(library,'product_lib/TARGET/assemble/processes/step/Operation_Instruction.txt'),'Install the part.');
+ await app.login();
+ const response=await app.request('/api/client/runs',{...input,sopType:'assemble',revisionReason:' 调整流程 ',revisionContent:'新增图片\n补充操作要求'});
+ assert.equal(response.status,202);const run=await app.wait((await response.json()).run.id);
+ assert.notEqual(run.status,'failed',run.error);assert.equal(run.inputs.revisionReason,'调整流程');
+ await app.restart();await app.login();
+ const saved=(await (await app.request('/api/client/runs/'+run.id)).json()).run;
+ assert.equal(saved.inputs.revisionContent,'新增图片\n补充操作要求');
+ assert.equal((await app.request('/api/client/runs',{...input,sopType:'assembly_test',revisionContent:'invalid scope'})).status,400);
+ await app.request('/api/client/runs/'+run.id+'/cancel',{});
+});
 test('client creates scored Excel artifacts, streams authenticated downloads and rejects tampered external paths',async t=>{
  const app=await fixture(t);await app.login();const response=await app.request('/api/client/runs',{...input,sopType:'factory_test',factoryTestProcesses:['Camera Test']});
  const run=await app.wait((await response.json()).run.id);assert.equal(run.status,'completed',run.error);assert.ok(run.result.output.processReviews);assert.equal(run.result.output.imageQuality.status,'no_images');

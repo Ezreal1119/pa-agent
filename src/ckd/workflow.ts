@@ -308,6 +308,14 @@ export const createCkdSopV3GraphWorkflow: GraphWorkflowDefinition<CreateCkdSopGr
         description: "The author name written on the Cover and every generated Process sheet.",
         minLength: 1,
         maxLength: 200
+      },
+      revisionReason: {
+        type: "string", title: "Revision Reason", maxLength: 1000,
+        description: "Optional reason for the first cover revision record, assemble only."
+      },
+      revisionContent: {
+        type: "string", title: "Revision Content", maxLength: 4000,
+        description: "Optional content of the first cover revision record, assemble only."
       }
     },
     required: ["projectName", "documentNumber", "sopName", "author"],
@@ -660,6 +668,10 @@ async function executeProcesses(context: GraphNodeExecutionContext): Promise<boo
         documentNumber: run.inputs.documentNumber!,
         sopName: run.inputs.sopName!,
         author: run.inputs.author ?? "",
+        ...(run.inputs.sopType === "assemble" ? {
+          revisionReason: run.inputs.revisionReason ?? "",
+          revisionContent: run.inputs.revisionContent ?? "",
+        } : {}),
         processList: selection.processList as JsonValue,
         projectMatchResult: run.sharedState.projectMatchResult!,
         sopProcessSelection: selection as JsonValue
@@ -802,6 +814,15 @@ function validateInputs(input: CreateCkdSopGraphInput): Record<string, JsonValue
       : rawValue;
     if (!value) throw new Error(`${label} is required.`);
     if (value.length > 200) throw new Error(`${label} must not exceed 200 characters.`);
+    values[key] = value;
+  }
+  for (const [key, max] of [["revisionReason", 1000], ["revisionContent", 4000]] as const) {
+    const value = input[key]?.trim() ?? "";
+    if (sopType !== "assemble") {
+      if (value) throw new Error(`${key} is only supported for assemble.`);
+      continue;
+    }
+    if (value.length > max) throw new Error(`${key} must not exceed ${max} characters.`);
     values[key] = value;
   }
   if (sopType === "factory_test") {

@@ -21,7 +21,7 @@ const ASSEMBLY_FILES = Object.freeze({
   previousStationCheckPhoto: "previous_station_check_photo.png",
   selfCheck: "Self_Check.txt"
 });
-const ASSEMBLY_TABLE_ROW_LIMIT = 5;
+const ASSEMBLY_TABLE_ROWS = { material: 7, tools: 5 };
 const LEGACY_PREVIOUS_STATION_PHOTO_DIRECTORY = "Previous_Station_Check_Photos";
 
 function normalizeSopType(value) {
@@ -360,11 +360,11 @@ function scanAssemblyLayer(libraryRoot, layerPath, sourceType, projectId) {
   const toolsFixturesEquipment = toolsEntry
     ? readJsonl(toolsEntry.path, `${relativePath}/${toolsEntry.name}`)
     : [];
-  if (materialDetails.length > ASSEMBLY_TABLE_ROW_LIMIT) {
-    warnings.push(`${relativePath}/${materialEntry.name} contains ${materialDetails.length} rows; only the first ${ASSEMBLY_TABLE_ROW_LIMIT} fit AssemblyTemplate.`);
+  if (materialDetails.length > ASSEMBLY_TABLE_ROWS.material) {
+    warnings.push(`${relativePath}/${materialEntry.name} contains ${materialDetails.length} rows, above the standard ${ASSEMBLY_TABLE_ROWS.material}; the Assembly generator expands readable rows and retains overflow in continuation sheets.`);
   }
-  if (toolsFixturesEquipment.length > ASSEMBLY_TABLE_ROW_LIMIT) {
-    warnings.push(`${relativePath}/${toolsEntry.name} contains ${toolsFixturesEquipment.length} rows; only the first ${ASSEMBLY_TABLE_ROW_LIMIT} fit AssemblyTemplate.`);
+  if (toolsFixturesEquipment.length > ASSEMBLY_TABLE_ROWS.tools) {
+    warnings.push(`${relativePath}/${toolsEntry.name} contains ${toolsFixturesEquipment.length} rows, above the standard ${ASSEMBLY_TABLE_ROWS.tools}; the Assembly generator expands readable rows and retains overflow in continuation sheets.`);
   }
   const operationEntry = assemblyEntry(layerPath, ASSEMBLY_FILES.operation);
   const previousStationEntry = assemblyEntry(layerPath, ASSEMBLY_FILES.previousStationCheck);

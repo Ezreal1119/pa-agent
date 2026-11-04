@@ -24,11 +24,14 @@ async function call(method,...args) {
   offline=false;return result.value;
 }
 function safely(action) { return async(...args)=>{try{await action(...args);}catch(error){notice(error.message,error.code==='offline');}}; }
-function factoryVisibility() { const enabled=$('sop-type').value==='factory_test';$('factory-field').hidden=!enabled;$('create-form').elements.factoryTestProcesses.required=enabled; }
+function factoryVisibility() {
+  const type=$('sop-type').value,form=$('create-form');$('factory-field').hidden=type!=='factory_test';form.elements.factoryTestProcesses.required=type==='factory_test';
+  for(const [id,key] of [['revision-reason-field','revisionReason'],['revision-content-field','revisionContent']]) {$(id).hidden=type!=='assemble';form.elements[key].disabled=type!=='assemble';}
+}
 function newTask(input) {
   cropDialog.close();renderedReview='';
   generation++;current=null;selected=null;shownQuestion=null;notice();$('run-view').hidden=true;$('create-view').hidden=false;$('create-form').reset();
-  if(input) { for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author'])if(input[key]!==undefined)$('create-form').elements[key].value=input[key];$('create-form').elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
+  if(input) { for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent'])if(input[key]!==undefined)$('create-form').elements[key].value=input[key];$('create-form').elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
   factoryVisibility();
 }
 async function refreshList() {
@@ -54,7 +57,7 @@ function render(run) {
   const index=displayStages.findIndex(([id])=>id===activeStage);
   $('steps').classList.toggle('with-image-review',!!run.imagePhase);
   $('steps').replaceChildren(...displayStages.map(([id,label],i)=>{const n=el('li',`${i+1}. ${label}`,run.status==='completed'||i<index?'done':id===activeStage?'active':'');if(id===activeStage)n.setAttribute('aria-current','step');return n;}));
-  $('run-details').replaceChildren();for(const [label,value]of [['项目名称',run.inputs.projectName],['文档编号',run.inputs.documentNumber],['作者',run.inputs.author],['创建时间',new Date(run.createdAt).toLocaleString('zh-CN')]]) {const group=el('div');group.append(el('dt',label),el('dd',value));$('run-details').append(group);}
+  $('run-details').replaceChildren();for(const [label,value]of [['项目名称',run.inputs.projectName],['文档编号',run.inputs.documentNumber],['作者',run.inputs.author],...(run.inputs.sopType==='assemble'?[['修订原因',run.inputs.revisionReason||'未填写'],['修订内容',run.inputs.revisionContent||'未填写']]:[]),['创建时间',new Date(run.createdAt).toLocaleString('zh-CN')]]) {const group=el('div');group.append(el('dt',label),el('dd',value));$('run-details').append(group);}
   const q=run.pendingQuestion,canAnswer=!!q&&!run.busy&&!pending&&run.status==='awaiting_clarification';$('question-panel').hidden=!q;
   if(q){$('question-title').textContent=q.question;const ordered=q.inputUi?.widget==='ordered-string-list-dialog';$('question-help').textContent=ordered?'每行一个工序，按希望的顺序排列。':q.allowFreeText?'选择选项，或填写回答。':'请点击一个选项继续。';$('answer-label').textContent=ordered?'有序工序列表':'你的回答';
     if(shownQuestion!==q.id){$('answer-text').value='';shownQuestion=q.id;}
@@ -174,6 +177,7 @@ $('login-form').addEventListener('submit',safely(async event=>{
 $('create-form').addEventListener('submit',safely(async event=>{
   event.preventDefault();if(pending)return;const data=Object.fromEntries(new FormData(event.currentTarget));for(const key of ['projectName','documentNumber','sopName','author'])data[key]=data[key].trim();
   if(data.sopType==='factory_test')data.factoryTestProcesses=data.factoryTestProcesses.split(/\r?\n/u).map(s=>s.trim()).filter(Boolean);else delete data.factoryTestProcesses;
+  for(const key of ['revisionReason','revisionContent']) {if(data.sopType==='assemble')data[key]=(data[key]||'').trim();else delete data[key];}
   const ticket=generation;pending=true;$('start').disabled=true;notice();
   try{const {run}=await call('start',data);if(ticket!==generation||!logged)return;selected=run.id;remember(selected);pending=false;render(run);await refreshList();}
   finally{pending=false;$('start').disabled=false;}

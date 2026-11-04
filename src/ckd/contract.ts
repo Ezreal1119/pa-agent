@@ -19,6 +19,9 @@ export interface CreateCkdSopGraphInput {
   sopName: string;
   /** Optional only so an already-started pre-Author Run can still resume. New Runs require it. */
   author?: string;
+  /** Optional cover revision metadata, supported only by assemble. */
+  revisionReason?: string;
+  revisionContent?: string;
   factoryTestProcesses?: string[];
 }
 
