@@ -2,7 +2,7 @@
   "sourceRepository": "patrick-agent",
   "sourceCommit": "91622774791cd69c2907dff98a2282ceb6dea915",
   "copiedAt": "2026-10-08",
-  "note": "Working-tree content, including pre-existing local modifications. sha256 is the original; copiedSha256 is the migrated version. TS imports/host contracts and test fixtures were adapted; generator package type is explicitly commonjs. The business Library inventory is retained locally and is excluded from Git; this manifest covers code and reusable templates only.",
+  "note": "Working-tree content, including pre-existing local modifications. sha256 is the original; copiedSha256 is the migrated version. TS imports/host contracts and test fixtures were adapted; generator package type is explicitly commonjs. Library data hashes are in library-manifest.json.",
   "files": {
     "scripts_addition/workflows/create-ckd-sop-v3/build-ckd-catalog-v3/index.cjs": {
       "destination": "resources/workflows/create-ckd-sop/build-ckd-catalog-v3/index.cjs",

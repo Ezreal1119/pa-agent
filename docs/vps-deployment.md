@@ -78,6 +78,39 @@ Mac 现有 Web 仍操作 Mac 数据，并不会自动改连服务器。当前固
 
 ## 后续代码更新
 
+### 当前方式：在 VPS 手动 Git 更新
+
+`/opt/pi-patrick` 使用 GitHub `Ezreal1119/pa-agent` 的 `create-ckd-sop` 分支，采用快进拉取，不使用 Actions 或自动上线。开发者在自己的电脑提交并 push，服务器由管理员手动更新。服务器不要直接开发代码或提交业务资料。
+
+先确认生成、图片检查和 Library 维护已结束，再在 VPS 执行：
+
+```bash
+cd /opt/pi-patrick
+umask 022
+git status --short
+```
+
+有未提交代码时先查明原因，不强行覆盖。确认更新窗口后执行下列整段；任一步失败都会停止后续步骤，修复或回退后再启动服务：
+
+```bash
+systemctl stop ckd-sop &&
+git pull --ff-only &&
+npm ci --include=dev --no-audit --no-fund &&
+npm run build &&
+systemctl start ckd-sop &&
+systemctl is-active ckd-sop
+```
+
+停止服务期间网页和桌面连接暂时不可用。TypeScript 必须重新构建，只 pull/restart 不会更新已编译的后端。`--include=dev` 保证构建所需的 TypeScript 已安装；`umask 022` 保证独立服务账号能读取新代码和依赖。普通更新不需要重装 Electron、修改 Nginx 或触发整库同步；评分 Python 依赖发生变化时，按对应版本说明更新现有独立虚拟环境后再启动服务。
+
+`.env`、`.data`（含 Library/任务/缓存）、`.venv-scoring` 和旧安装包不由 Git 管理，正常 pull 不覆盖它们；不要执行 `git clean -fdx`。服务器保留的旧资源目录 `resources/legacy/` 在本机 `.git/info/exclude` 中忽略，原始业务迁移清单也继续本机保存。它们不提交、不删除，不影响正常拉取。
+
+首次切换 Git 管理时保留原提交、代码归档及工作树 Hash 供回退。旧任务的资源 Hash 会包含工作流目录中的说明/清单文件，因此本次对齐保留 `source-manifest.json` 原始字节和服务器现有的忽略清单；后续任何工作流资源变化仍遵守原有任务恢复校验，不强行改写旧快照。
+
+下面的 rsync 章节保留为历史部署记录，日常代码更新使用上面的 Git 流程。
+
+### 历史方式：rsync 更新
+
 开始正式使用后，服务器 `.data` 是业务数据来源，不能再被 Mac 旧 `.data` 全量覆盖。密钥也不随代码更新覆盖。先等生成/维护结束，再停止服务并备份服务器数据和当前代码，保留可回滚版本。
 
 Mac 仅上传代码；反斜线后不要加空格：
