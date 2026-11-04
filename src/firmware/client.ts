@@ -2,7 +2,7 @@ import { validateQuery, matchesQuery, type FirmwareQuery } from "./query.js";
 export const FIRMWARE_MAINTENANCE = "固件功能维护中，请稍后再试。";
 export interface FirmwareConfig { baseUrl: string; token: string; publicBase: string; }
 export interface Candidate { id: string; filename: string; path: string; size: number; modified: string | null; score: number; exact: boolean; differences: string[]; }
-export interface LocalJob { id: string; state: string; stage: string; bytes: number; total_bytes: number; speed_bytes_per_second?: number; error?: string; candidate: Candidate; result?: { uploaded: boolean; filename: string; size: number; download_url: string | null }; }
+export interface LocalJob { id: string; state: string; stage: string; bytes: number; total_bytes: number; speed_bytes_per_second?: number; library_state?: string; error?: string; candidate: Candidate; result?: { uploaded: boolean; filename: string; size: number; download_url: string | null }; }
 export interface FirmwareClient {
   ready(signal?: AbortSignal): Promise<boolean>;
   search(query: FirmwareQuery, signal?: AbortSignal): Promise<FirmwareSearch>;

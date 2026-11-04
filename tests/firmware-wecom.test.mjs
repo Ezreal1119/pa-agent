@@ -48,6 +48,10 @@ test('real Web API + Bridge enforces /firmware entry, switch, ownership, confirm
   assert.equal((await state()).active.code, undefined);
   await bridge.receive('bot', message('确认', 'bob')); await bridge.idle(); assert.equal(submissions, 0);
   await bridge.receive('bot', message('确认')); await bridge.idle(); await until(() => submissions === 1);
+  job.stage = 'uploading'; job.library_state = 'server_copy'; job.bytes = 0; job.speed_bytes_per_second = 123456;
+  await until(async () => (await state()).active?.snapshot?.library_state === 'server_copy');
+  await bridge.receive('bot', message('/firmware 状态')); await bridge.idle();
+  assert.match(bot.texts.at(-1), /上传完成，正在发布到资料库/); assert.doesNotMatch(bot.texts.at(-1), /%|速度|MiB|https:/); assert.equal(submissions, 1);
   await toggle(false); job.stage = 'uploading'; job.state = 'succeeded'; job.result = { uploaded: true, filename, size: candidate.size, download_url: 'https://temp.patrick-shenzhen.org/firmware/' + filename };
   await until(async () => !(await state()).active); await bridge.firmwareNotifier.active; await bridge.firmwareNotifier.pump();
   assert.ok(bot.texts.some(text => text.includes(job.result.download_url)));

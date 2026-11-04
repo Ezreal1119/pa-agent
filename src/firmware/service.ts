@@ -232,10 +232,16 @@ export class FirmwareService {
   }
   private progress(flow: Flow) {
     const job = flow.snapshot;
+    const title = `固件任务：${flow.selected?.filename ?? flow.query ?? "等待文件名"}`;
+    const publishing = job && ["running", "cancelling"].includes(job.state) && (
+      job.stage === "uploading" && ["server_copy", "object_verified"].includes(job.library_state ?? "") ||
+      job.stage === "verifying_upload" && ["checking_object", "object_verified", "verifying_web", "visible"].includes(job.library_state ?? "")
+    );
+    if (publishing) return `${title}\n阶段：${flow.phase === "cancelling" || job.state === "cancelling" ? "正在取消" : "上传完成，正在发布到资料库……"}`;
     const stages: Record<string, string> = { queued: "排队中", finding: "查找文件", downloading: "下载中", verifying: "校验下载文件", uploading: "上传中", verifying_upload: "校验上传文件", retry_wait: "等待自动重试", interrupted: "等待恢复", failed: "失败" };
     const total = job?.total_bytes ?? flow.selected?.size ?? 0, bytes = job?.bytes ?? 0;
     const percent = total ? Math.max(0, Math.min(100, bytes / total * 100)).toFixed(1) + "%" : "未知";
-    return `固件任务：${flow.selected?.filename ?? flow.query ?? "等待文件名"}\n阶段：${flow.phase === "cancelling" ? "正在取消" : stages[job?.stage ?? ""] ?? "正在提交任务"}\n当前阶段进度：${percent}（${(bytes / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MiB）${job?.speed_bytes_per_second ? `\n速度：${(job.speed_bytes_per_second / 1024 / 1024).toFixed(2)} MiB/s` : ""}`;
+    return `${title}\n阶段：${flow.phase === "cancelling" ? "正在取消" : stages[job?.stage ?? ""] ?? "正在提交任务"}\n当前阶段进度：${percent}（${(bytes / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MiB）${job?.speed_bytes_per_second ? `\n速度：${(job.speed_bytes_per_second / 1024 / 1024).toFixed(2)} MiB/s` : ""}`;
   }
   async claim(input: unknown) {
     const { botIds, consumer } = input as {botIds: string[]; consumer: string};

@@ -224,6 +224,7 @@ test('local client preserves auth, short requests and upload=true, validates dat
   assert.equal(await client.ready(), true); assert.equal((await client.search(criteria)).candidates[0].filename, name);
   assert.deepEqual(JSON.parse(calls.at(-1).init.body), { criteria, limit: 12 });
   await client.submit(c.id, 'firmware:one'); assert.equal(JSON.parse(calls.at(-1).init.body).upload, true);
+  job.library_state = 'server_copy'; assert.equal((await client.job(job.id)).library_state, 'server_copy');
   const bad = new LocalFirmwareClient(config, async () => new Response('private secret credentials', { status: 503 }));
   assert.equal(await bad.ready(), false); await assert.rejects(bad.search(criteria), e => !e.message.includes('secret'));
   await assert.rejects(client.job('../shutdown'), /Invalid/);
@@ -297,4 +298,43 @@ test('an existing confirmation flow with a legacy code keeps its candidate and e
   assert.equal(restored.id, old.active.id); assert.equal(restored.selected.id, old.active.selected.id); assert.equal(restored.expiresAt, old.active.expiresAt);
   const preview = await f.service.command(input('状态', true)); assert.match(preview.text, /回复“确认”开始/); assert.doesNotMatch(preview.text, /E4630C|确认码/);
   await f.service.command(input('确认', false)); await f.service.tick(); await until(() => f.submits === 1);
+});
+
+test('library publication progress hides reset byte counters through copy and visibility checks without changing the job', async t => {
+  const f = await fixture(t); await f.confirm(await f.query()); const job = [...f.jobs.values()][0], jobId = job.id;
+  job.stage = 'uploading'; job.bytes = Math.round(job.total_bytes * .8); job.speed_bytes_per_second = 1048576;
+  await f.service.tick(); const uploading = await f.service.command(input('状态'));
+  assert.match(uploading.text, /阶段：上传中/); assert.match(uploading.text, /80.0%/); assert.match(uploading.text, /速度：1.00 MiB\/s/);
+  for (const [stage, library_state] of [['verifying_upload', 'checking_object'], ['uploading', 'server_copy'], ['uploading', 'object_verified'], ['verifying_upload', 'object_verified'], ['verifying_upload', 'verifying_web'], ['verifying_upload', 'visible']]) {
+    Object.assign(job, { stage, library_state, bytes: library_state === 'server_copy' ? 0 : job.total_bytes });
+    const before = structuredClone(job); f.advance(60000); await f.service.tick();
+    const reply = await f.service.command(input('状态')); assert.match(reply.text, /上传完成，正在发布到资料库……/);
+    assert.doesNotMatch(reply.text, /%|速度|MiB|https:/); assert.ok(reply.text.includes(name));
+    assert.deepEqual(job, before); const flow = (await f.state()).active; assert.equal(flow.jobId, jobId); assert.deepEqual(flow.snapshot, before); assert.equal(f.submits, 1);
+    const notice = (await f.state()).notices.at(-1);
+    if (notice.text.includes('正在发布到资料库')) assert.doesNotMatch(notice.text, /%|速度|MiB|https:/);
+  }
+  await f.restart(); await f.service.tick(); assert.match((await f.service.command(input('状态'))).text, /正在发布到资料库/); assert.equal(f.submits, 1);
+  job.state = 'succeeded'; job.result = { uploaded: true, filename: name, size: job.candidate.size, download_url: base + name };
+  await f.service.tick(); const db = await f.state(); assert.equal(db.active, undefined); assert.ok(db.notices.at(-1).text.includes(base + name)); assert.equal(f.submits, 1);
+});
+
+test('stale or unknown library state cannot hide real transfer, queued, retry or recovery stages', async t => {
+  const f = await fixture(t); await f.confirm(await f.query()); const job = [...f.jobs.values()][0];
+  for (const [stage, library_state, label] of [['uploading', undefined, '上传中'], ['uploading', 'future-state', '上传中'], ['downloading', 'server_copy', '下载中'], ['queued', 'server_copy', '排队中'], ['retry_wait', 'server_copy', '等待自动重试'], ['interrupted', 'verifying_web', '等待恢复'], ['verifying_upload', 'server_copy', '校验上传文件']]) {
+    Object.assign(job, { stage, library_state, bytes: Math.round(job.total_bytes * .8) });
+    await f.service.tick(); const reply = await f.service.command(input('状态'));
+    assert.ok(reply.text.includes('阶段：' + label)); assert.doesNotMatch(reply.text, /正在发布到资料库/); assert.match(reply.text, /80.0%/); assert.equal(f.submits, 1);
+  }
+  job.state = 'failed'; await f.service.tick(); const db = await f.state(); assert.equal(db.active, undefined); assert.match(db.notices.at(-1).text, /失败，未生成下载链接/); assert.doesNotMatch(db.notices.at(-1).text, /正在发布到资料库/);
+});
+
+test('cancellation during library publication retains cancellation status instead of reporting publishing progress', async t => {
+  const f = await fixture(t); await f.confirm(await f.query()); const job = [...f.jobs.values()][0];
+  Object.assign(job, { stage: 'uploading', library_state: 'server_copy', bytes: 0, speed_bytes_per_second: 1048576 });
+  f.client.cancel = async () => { job.state = 'cancelling'; return job; };
+  await f.service.command(input('取消')); await f.service.tick();
+  const reply = await f.service.command(input('状态'));
+  assert.match(reply.text, /阶段：正在取消/); assert.doesNotMatch(reply.text, /正在发布到资料库|%|速度|MiB/); assert.equal(f.submits, 1);
+  job.state = 'cancelled'; await f.service.tick(); const db = await f.state(); assert.equal(db.active, undefined); assert.match(db.notices.at(-1).text, /任务已取消/);
 });
