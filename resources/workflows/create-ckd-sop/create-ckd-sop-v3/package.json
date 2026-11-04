@@ -1,0 +1,8 @@
+{
+  "name": "sop-fill-v3",
+  "private": true,
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  },
+  "type": "commonjs"
+}

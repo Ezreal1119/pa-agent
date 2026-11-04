@@ -1,0 +1,66 @@
+{
+  "name": "ckd-sop-desktop",
+  "version": "0.1.6",
+  "private": true,
+  "description": "CKD SOP 用户桌面客户端",
+  "author": "Patrick Xu",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "pack:mac": "electron-builder --mac zip --arm64 --publish never",
+    "pack:win": "electron-builder --win nsis --x64 --publish never",
+    "prepack:mac:cloud": "node node_modules/electron/install.js",
+    "pack:mac:cloud": "electron-builder --mac zip --arm64 --publish never --config electron-builder.cloud.cjs",
+    "prepack:win:cloud": "node node_modules/electron/install.js",
+    "pack:win:cloud": "electron-builder --win nsis --x64 --publish never --config electron-builder.cloud.cjs",
+    "test": "node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.patrick.ckdsop",
+    "productName": "CKD SOP",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "backend.cjs",
+      "saved-files.cjs",
+      "config.json",
+      "ui/**/*"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true
+    },
+    "artifactName": "CKD-SOP-${version}-${os}-${arch}.${ext}"
+  }
+}

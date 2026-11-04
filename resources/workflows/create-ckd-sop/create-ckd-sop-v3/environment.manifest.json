@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "mode": "authoritative",
+  "requirements": [
+    {
+      "id": "executable:node",
+      "kind": "executable",
+      "name": "Node.js",
+      "required": true,
+      "reason": "Node.js is required by a bundled Skill script.",
+      "evidence": [
+        "scripts/fill_sop_sheet.js"
+      ],
+      "version": ">=22.13.0",
+      "command": "node",
+      "installRecipeId": "node"
+    },
+    {
+      "id": "node_package:exceljs",
+      "kind": "node_package",
+      "name": "exceljs",
+      "required": true,
+      "reason": "exceljs is declared or imported by the Skill package.",
+      "evidence": [
+        "scripts/fill_sop_sheet.js: Node import exceljs",
+        "scripts/package.json: dependencies: ^4.4.0"
+      ],
+      "version": "^4.4.0",
+      "packageName": "exceljs"
+    },
+    {
+      "id": "runtime_capability:skill-script:node-offline",
+      "kind": "runtime_capability",
+      "name": "Controlled local Node.js Skill runner",
+      "required": true,
+      "reason": "The Skill bundles an analyzed offline Node.js script and requires the controlled local executor.",
+      "evidence": [
+        "scripts/fill_sop_sheet.js"
+      ],
+      "capability": "skill-script:node-offline"
+    }
+  ],
+  "scripts": [
+    {
+      "runtime": "node",
+      "entrypoint": "scripts/fill_sop_sheet.js",
+      "arguments": [],
+      "needsNetwork": false,
+      "needsWriteAccess": true,
+      "capability": "skill-script:node-offline"
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,146 @@
+{
+  "sourceRepository": "patrick-agent",
+  "sourceCommit": "91622774791cd69c2907dff98a2282ceb6dea915",
+  "copiedAt": "2026-10-08",
+  "note": "Working-tree content, including pre-existing local modifications. sha256 is the original; copiedSha256 is the migrated version. TS imports/host contracts and test fixtures were adapted; generator package type is explicitly commonjs. The business Library inventory is retained locally and is excluded from Git; this manifest covers code and reusable templates only.",
+  "files": {
+    "scripts_addition/workflows/create-ckd-sop-v3/build-ckd-catalog-v3/index.cjs": {
+      "destination": "resources/workflows/create-ckd-sop/build-ckd-catalog-v3/index.cjs",
+      "sha256": "b041d8386756e7601b570d53ec0bc9f69b943c42bc022bde7f6f996601a02fe0",
+      "bytes": 37961,
+      "copiedSha256": "b041d8386756e7601b570d53ec0bc9f69b943c42bc022bde7f6f996601a02fe0"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/build-ckd-catalog-v3/script.json": {
+      "destination": "resources/workflows/create-ckd-sop/build-ckd-catalog-v3/script.json",
+      "sha256": "f62b804c4bbb20d89bd06c7365b76463beac974b06e776210fcb077af3a40e42",
+      "bytes": 326,
+      "copiedSha256": "f62b804c4bbb20d89bd06c7365b76463beac974b06e776210fcb077af3a40e42"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/build-ckd-catalog-v3/test/overview.test.cjs": {
+      "destination": "resources/workflows/create-ckd-sop/build-ckd-catalog-v3/test/overview.test.cjs",
+      "sha256": "8ad1b1b5aecbd1241eb41d75faf5291722ee66a1ab2359c2f0ca49477a3f549b",
+      "bytes": 4609,
+      "copiedSha256": "8ad1b1b5aecbd1241eb41d75faf5291722ee66a1ab2359c2f0ca49477a3f549b"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/RoHS-pic.png": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/RoHS-pic.png",
+      "sha256": "c380cd65e7bfb91bf8d585e088260f0a5e76cd52968f80cc312e2ea4f327ee8d",
+      "bytes": 72514,
+      "copiedSha256": "c380cd65e7bfb91bf8d585e088260f0a5e76cd52968f80cc312e2ea4f327ee8d"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/ckd-sop-模版中文版.xlsx": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/ckd-sop-模版中文版.xlsx",
+      "sha256": "8b3c8f88e77a5602d278bcf5cfcdc45f4c83ffc11590c8c78fb56be02b865610",
+      "bytes": 293876,
+      "copiedSha256": "8b3c8f88e77a5602d278bcf5cfcdc45f4c83ffc11590c8c78fb56be02b865610"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/environment.manifest.json": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/environment.manifest.json",
+      "sha256": "d4ce40858e0cb46e6767e0f39f164d72895cf65d029ca28a95a2cc77846ed5eb",
+      "bytes": 1481,
+      "copiedSha256": "d4ce40858e0cb46e6767e0f39f164d72895cf65d029ca28a95a2cc77846ed5eb"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/fill_sop_sheet.js": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/fill_sop_sheet.js",
+      "sha256": "22f57d43186b8d9b5437fa00b1111a6d0cc4e4d30c1f2143cd3152a0b28e2fbf",
+      "bytes": 75426,
+      "copiedSha256": "22f57d43186b8d9b5437fa00b1111a6d0cc4e4d30c1f2143cd3152a0b28e2fbf"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/index.cjs": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/index.cjs",
+      "sha256": "7616014ebc626cd246a6c0f78b3f23b974a41c9ec7886b4eb45ed420ad2da565",
+      "bytes": 49729,
+      "copiedSha256": "7616014ebc626cd246a6c0f78b3f23b974a41c9ec7886b4eb45ed420ad2da565"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/package.json": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/package.json",
+      "sha256": "2266dd3fe18bd6f2553dc1318ec244746ac56f25006c05771a0b28e5e8f737e7",
+      "bytes": 96,
+      "copiedSha256": "e437203f81239d587692061bb2c983b7daf28fa6385446e1dc83ab2f0d309212"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/script.json": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/script.json",
+      "sha256": "b70cacce59778c8678bee3ea7ab86584da6feca90acb18145aced12910dc9ce3",
+      "bytes": 289,
+      "copiedSha256": "b70cacce59778c8678bee3ea7ab86584da6feca90acb18145aced12910dc9ce3"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/urovo-logo.png": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/urovo-logo.png",
+      "sha256": "cf9a08e54b65496bd0a4bce86ba45a9b9804d0510b764e987b074468837a3d5b",
+      "bytes": 10197,
+      "copiedSha256": "cf9a08e54b65496bd0a4bce86ba45a9b9804d0510b764e987b074468837a3d5b"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/urovo-sop-template-zh.xlsx": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/urovo-sop-template-zh.xlsx",
+      "sha256": "8b3c8f88e77a5602d278bcf5cfcdc45f4c83ffc11590c8c78fb56be02b865610",
+      "bytes": 293876,
+      "copiedSha256": "8b3c8f88e77a5602d278bcf5cfcdc45f4c83ffc11590c8c78fb56be02b865610"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/create-ckd-sop-v3/urovo-sop-template.xlsx": {
+      "destination": "resources/workflows/create-ckd-sop/create-ckd-sop-v3/urovo-sop-template.xlsx",
+      "sha256": "8a77c50a8a075e0fd963bf014ecec9934786030f3a4b4ddb277dd917aca3e0ac",
+      "bytes": 293420,
+      "copiedSha256": "8a77c50a8a075e0fd963bf014ecec9934786030f3a4b4ddb277dd917aca3e0ac"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/normalize-ckd-inputs-v3/index.cjs": {
+      "destination": "resources/workflows/create-ckd-sop/normalize-ckd-inputs-v3/index.cjs",
+      "sha256": "cbc291a093c0f57ca92d131212469ccd5624ea3bded05e5d52a844481a195c2b",
+      "bytes": 5984,
+      "copiedSha256": "cbc291a093c0f57ca92d131212469ccd5624ea3bded05e5d52a844481a195c2b"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/normalize-ckd-inputs-v3/script.json": {
+      "destination": "resources/workflows/create-ckd-sop/normalize-ckd-inputs-v3/script.json",
+      "sha256": "332f51d03c79977e90a970a68030b3bb4108d3c60ffe85b9f761d5f9a9f4c870",
+      "bytes": 330,
+      "copiedSha256": "332f51d03c79977e90a970a68030b3bb4108d3c60ffe85b9f761d5f9a9f4c870"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/resolve-ckd-reference-processes-v3/index.cjs": {
+      "destination": "resources/workflows/create-ckd-sop/resolve-ckd-reference-processes-v3/index.cjs",
+      "sha256": "a8b2f0f54d9a92d409ad83757a643fa5f886b9a97c87be9c7a5e50972183a07e",
+      "bytes": 5443,
+      "copiedSha256": "a8b2f0f54d9a92d409ad83757a643fa5f886b9a97c87be9c7a5e50972183a07e"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/resolve-ckd-reference-processes-v3/script.json": {
+      "destination": "resources/workflows/create-ckd-sop/resolve-ckd-reference-processes-v3/script.json",
+      "sha256": "44d77ad5fc50a9655a0f13b2336666b5d655e2df50fbd7a252f3c45ab42fd4d7",
+      "bytes": 275,
+      "copiedSha256": "44d77ad5fc50a9655a0f13b2336666b5d655e2df50fbd7a252f3c45ab42fd4d7"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/resolve-ckd-transplant-reference-processes-v3/index.cjs": {
+      "destination": "resources/workflows/create-ckd-sop/resolve-ckd-transplant-reference-processes-v3/index.cjs",
+      "sha256": "1e7dd71664025dc9160ccce58e2dbb228bf783a8a4e63fc73df09e5650b7b4de",
+      "bytes": 5630,
+      "copiedSha256": "1e7dd71664025dc9160ccce58e2dbb228bf783a8a4e63fc73df09e5650b7b4de"
+    },
+    "scripts_addition/workflows/create-ckd-sop-v3/resolve-ckd-transplant-reference-processes-v3/script.json": {
+      "destination": "resources/workflows/create-ckd-sop/resolve-ckd-transplant-reference-processes-v3/script.json",
+      "sha256": "cda0fe2e94d536b092d6e31b396c19274e2bc37560ebe15eddb37f65d1243063",
+      "bytes": 326,
+      "copiedSha256": "cda0fe2e94d536b092d6e31b396c19274e2bc37560ebe15eddb37f65d1243063"
+    },
+    "src/graphWorkflows/createCkdSopGraphContractV3.ts": {
+      "destination": "src/ckd/contract.ts",
+      "sha256": "c8cdd2e8a5df9e88523cb6a5c7e97b6eb5b66aa8b0bfdd67705d5f272aa6b167",
+      "bytes": 5112,
+      "copiedSha256": "631b713a3140f6a25d0ce49f90fd9c66e756516dc47dde4a47e7202fe4882089"
+    },
+    "src/graphWorkflows/createCkdSopGraphPromptsV3.ts": {
+      "destination": "src/ckd/prompts.ts",
+      "sha256": "5a3ba299946e0de0a7c397596d37a517adef81858067d682a852da0d9d1a003a",
+      "bytes": 5917,
+      "copiedSha256": "94c324acbaf9fb1a8db8a631a8e75725c50cb260534ebe28b5d038d654352d78"
+    },
+    "src/graphWorkflows/workflows/createCkdSopWorkflowV3.ts": {
+      "destination": "src/ckd/workflow.ts",
+      "sha256": "c7590e0bd357150d2f851e5e7d253ef16817e2b7bb529cca242063a8a528fc9f",
+      "bytes": 39754,
+      "copiedSha256": "71982cca71179c975ae305e1f60c90943ab56ad7678edbe745fe82bcfb26046d"
+    },
+    "tests/createCkdSopGraphV3.test.ts": {
+      "destination": "tests/ckd-business.test.ts",
+      "sha256": "112a4329ff34424a3f3aa8fdc1ba19ce70097f0d7bb5a09d5315eadb8a78b507",
+      "bytes": 80344,
+      "copiedSha256": "ce71c6d3faa6005014577acc373a0615162f078340890ef62905ed2179f77dea"
+    }
+  }
+}

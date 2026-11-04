@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "build-ckd-catalog-v3",
+  "title": "Build Process-Centered CKD Catalog V3",
+  "description": "Scan one isolated ckd-library-v2 SOP type and freeze Project SOP order, typed Process identities, shared layers, project overrides, and source hashes.",
+  "runtime": "node",
+  "entrypoint": "index.cjs"
+}

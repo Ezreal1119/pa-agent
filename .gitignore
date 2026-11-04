@@ -4,4 +4,21 @@ web/dist/
 .data/
 .env
 .DS_Store
+desktop/release/
+.venv-scoring/
+__pycache__/
 
+# Local credentials, runtime data and workstation-only exports.
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.venv/
+venv/
+*.py[cod]
+*.log
+coverage/
+# This migration inventory contains real Library paths and hashes.
+/resources/workflows/create-ckd-sop/library-manifest.json

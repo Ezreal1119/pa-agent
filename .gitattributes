@@ -1,0 +1,4 @@
+# Keep the customer reference scorer/config byte-identical across checkouts.
+resources/image-quality/v1.23.0/* -text
+# This supplied JSON uses CRLF; preserve it rather than changing its hash.
+resources/image-quality/v1.23.0/calibration_curves.json whitespace=cr-at-eol

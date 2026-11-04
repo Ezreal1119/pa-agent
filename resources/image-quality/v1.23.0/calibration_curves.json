@@ -1,0 +1,32 @@
+{
+  "version": "1.23.0",
+  "exported_at": "2026-10-26",
+  "_note": "V1.23.0 生效校准曲线。仅 clarity 一条可信（raw_slope=+0.7808, R²=0.379, n=10）；其余六个维度走恒等映射 y=x。V1.22.1 的另外 5 条曲线是把越界 raw 斜率 clamp 成 slope=0.2 造出来的，V1.23.0 起拟合不可信（R²<0.10 或 raw 斜率越界）即不出曲线。",
+  "curves": {
+    "clarity": {
+      "slope": 0.7808,
+      "intercept": 21.97,
+      "x_min": 31.7,
+      "x_max": 75.1,
+      "beta": -0.2192,
+      "r2": 0.379,
+      "samples": 10
+    }
+  },
+  "identity_dimensions": [
+    "resolution",
+    "composition",
+    "completeness",
+    "color",
+    "damage",
+    "exposure"
+  ],
+  "_identity_note": "这些维度没有拟合出可信曲线（样本<5 / R²<0.10 / raw 斜率越界），按恒等映射 y=x 处理，不得自行拟造斜率。",
+  "apply_curve": {
+    "formula": "y = slope * x + intercept",
+    "below_range": "y = x + dev_at_xmin * (x / x_min)   # dev_at_xmin = slope*x_min + intercept - x_min",
+    "above_range": "y = x + dev_at_xmax * ((100 - x) / (100 - x_max))   # dev_at_xmax = slope*x_max + intercept - x_max",
+    "clamp": "y = clamp(y, 0, 100)",
+    "note": "区间外偏差线性收敛到 0：分数越极端，Agent 判断越可靠，人工干预越小。"
+  }
+}

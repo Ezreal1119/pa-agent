@@ -1,0 +1,36 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {planMigration,applyMigration} from '../deploy/migrate-data.mjs';
+import {CkdStore} from '../src/ckd/store.js';
+const sha=(x:string|Buffer)=>createHash('sha256').update(x).digest('hex');
+const id='11111111-1111-4111-8111-111111111111',from='/Users/test/pi-patrick';
+function put(p:string,x:unknown){fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,Buffer.isBuffer(x)||typeof x==='string'?x:JSON.stringify(x,null,2)+'\n');}
+function fixture(t:{after(fn:()=>void):void}){
+ const parent=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'ckd-relocation-'))),root=path.join(parent,'app'),run=path.join(root,'.data/ckd/runs',id),oldLib=from+'/.data/ckd/library/ckd-library-v2',lib=path.join(root,'.data/ckd/library/ckd-library-v2');t.after(()=>fs.rmSync(parent,{recursive:true,force:true}));
+ put(path.join(lib,'product_lib/P/project.json'),{version:1,projectId:'P'});put(path.join(root,'.env'),`API_KEY="${from}/secret-literal"\nCKD_LIBRARY="${oldLib}"\n`);
+ const content={schemaVersion:3,source:{ckdLibraryRoot:oldLib},projects:[]},catalogHash=sha(JSON.stringify(content));put(path.join(run,'ckd-catalog-v3.json'),{...content,generatedAt:'date',catalogHash});
+ const catalogName=id+'/ckd-catalog-v3.json',workbook=id+'/outputs/file.xlsx';put(path.join(run,'outputs/file.xlsx'),Buffer.from('PK\x03\x04workbook'));
+ const state={schemaVersion:1,id,workspaceRoot:from+'/.data/ckd/runs',workspaceRelative:id,libraryPath:oldLib,status:'awaiting_clarification',scriptHashes:{},pendingQuestion:{id:'keep-question'},agentCheckpoint:{sessionFile:from+'/.data/ckd/runs/'+id+'/sessions/session.jsonl'},nodeOutputs:{'prepare-catalog':{output:{catalogHash,catalogPath:catalogName}}}};put(path.join(run,'state.json'),state);
+ put(path.join(run,'sessions/session.jsonl'),JSON.stringify({type:'session',cwd:from+'/.data/ckd/runs/'+id})+'\n'+JSON.stringify({type:'message',content:from+'/historical-message'})+'\n');
+ const script='create-ckd-sop-v3',values={catalogHash,catalogPath:catalogName},key=sha(JSON.stringify({id:'generate-sop',script,values,assets:{}})),cache=path.join(run,'scripts',key);put(path.join(cache,'input.json'),{inputs:values,workflow:{stepId:'generate-sop'},paths:{workspaceRoot:state.workspaceRoot}});put(path.join(cache,'result.json'),{result:{output:{catalogHash},artifacts:[catalogName,workbook]},hashes:{[catalogName]:sha(fs.readFileSync(path.join(run,'ckd-catalog-v3.json'))),[workbook]:sha(fs.readFileSync(path.join(run,'outputs/file.xlsx')))}});
+ put(path.join(root,'.data/ckd/library-cache',sha(oldLib),'managed-translations.json'),{target:{source:'source',sourceHash:'keep-source',targetHash:'keep-target'}});put(path.join(root,'.data/ckd/library-cache',sha(oldLib),'sync-baseline.json'),{schemaVersion:1,libraryPath:oldLib,pairs:{}});
+ put(path.join(root,'.data/ckd/image-quality/v4/hash.json'),{original:'observation'});put(path.join(root,'.data/ckd/image-quality-failures/v4/hash.json'),{score:0});put(path.join(root,'.data/ckd/library-jobs/job/state.json'),{libraryPath:oldLib,status:'running',ownerPid:123});
+ return {parent,root,run,lib,oldLib,key,cache};
+}
+test('offline relocation preserves business data, rebinds catalog checksums/receipts, sessions and translation registry, and is idempotent',t=>{
+ const f=fixture(t),beforeWorkbook=fs.readFileSync(path.join(f.run,'outputs/file.xlsx')),beforeLibrary=fs.readFileSync(path.join(f.lib,'product_lib/P/project.json')),plan=planMigration({root:f.root,fromRoot:from});assert.ok(plan.changes.length);assert.equal(plan.moves.length,1);
+ const report=applyMigration(plan,{reportDir:path.join(f.parent,'backup')});assert.equal(report.status,'completed');const run=new CkdStore(path.join(f.root,'.data')).get(id);assert.equal(run.pendingQuestion!.id,'keep-question');assert.equal(run.libraryPath,f.lib);assert.ok(run.agentCheckpoint!.sessionFile!.startsWith(f.root));
+ const catalog=JSON.parse(fs.readFileSync(path.join(f.run,'ckd-catalog-v3.json'),'utf8'));const {generatedAt,catalogHash,...content}=catalog;assert.equal(catalogHash,sha(JSON.stringify(content)));assert.equal((run.nodeOutputs['prepare-catalog']!.output as any).catalogHash,catalogHash);
+ const next=plan.moves[0]!.to;assert.equal(fs.existsSync(f.cache),false);const receipt=JSON.parse(fs.readFileSync(path.join(next,'result.json'),'utf8'));for(const [name,h]of Object.entries(receipt.hashes))assert.equal(sha(fs.readFileSync(path.join(f.root,'.data/ckd/runs',name))),h);
+ assert.deepEqual(fs.readFileSync(path.join(f.run,'outputs/file.xlsx')),beforeWorkbook);assert.deepEqual(fs.readFileSync(path.join(f.lib,'product_lib/P/project.json')),beforeLibrary);
+ const lines=fs.readFileSync(path.join(f.run,'sessions/session.jsonl'),'utf8').trim().split('\n');assert.equal(JSON.parse(lines[0]!).cwd,f.run);assert.equal(JSON.parse(lines[1]!).content,from+'/historical-message');
+ const registry=path.join(f.root,'.data/ckd/library-cache',sha(f.lib));assert.equal(JSON.parse(fs.readFileSync(path.join(registry,'sync-baseline.json'),'utf8')).libraryPath,f.lib);assert.equal(JSON.parse(fs.readFileSync(path.join(registry,'managed-translations.json'),'utf8')).target.sourceHash,'keep-source');assert.ok(fs.existsSync(path.join(f.root,'.data/ckd/library-cache',sha(f.oldLib))));
+ assert.match(fs.readFileSync(path.join(f.root,'.env'),'utf8'),new RegExp('API_KEY="'+from+'/secret-literal"'));const job=JSON.parse(fs.readFileSync(path.join(f.root,'.data/ckd/library-jobs/job/state.json'),'utf8'));assert.equal(job.status,'interrupted');assert.equal(job.ownerPid,undefined);assert.equal(planMigration({root:f.root,fromRoot:from}).changes.length,0);
+});
+test('migration dry run has no writes and rejects tampered source artifacts',t=>{const f=fixture(t),state=fs.readFileSync(path.join(f.run,'state.json'));planMigration({root:f.root,fromRoot:from});assert.deepEqual(fs.readFileSync(path.join(f.run,'state.json')),state);fs.appendFileSync(path.join(f.run,'outputs/file.xlsx'),'tampered');assert.throws(()=>planMigration({root:f.root,fromRoot:from}),/Artifact checksum mismatch/u);assert.deepEqual(fs.readFileSync(path.join(f.run,'state.json')),state);});
+test('migration rejects copied locks and pending Library transactions',t=>{const f=fixture(t),lock=path.join(f.run,'run.lock/owner.json');put(lock,{pid:12});assert.throws(()=>planMigration({root:f.root,fromRoot:from}),/locks exist/u);fs.rmSync(path.dirname(lock),{recursive:true});put(path.join(path.dirname(f.lib),'.ckd-library-v2.pi-pending.json'),{});assert.throws(()=>planMigration({root:f.root,fromRoot:from}),/Interrupted Library/u);});
+test('failed migration rolls back committed metadata and refuses stale plans',t=>{const f=fixture(t),file=path.join(f.run,'state.json'),before=fs.readFileSync(file),plan=planMigration({root:f.root,fromRoot:from});let n=0;assert.throws(()=>applyMigration(plan,{reportDir:path.join(f.parent,'rollback'),afterWrite:()=>{if(++n===3)throw new Error('injected');}}),/injected/u);assert.deepEqual(fs.readFileSync(file),before);assert.ok(fs.existsSync(f.cache));fs.appendFileSync(file,' ');assert.throws(()=>applyMigration(plan,{reportDir:path.join(f.parent,'stale')}),/Source changed/u);});

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CKD SOP · 工作台</title><link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="./" aria-label="CKD SOP 首页"><span class="brand-icon">C</span> CKD <span class="brand-light">SOP 工作台</span></a><span id="library-status" class="connection">正在检查资料库…</span><button id="admin-logout" class="text-button" type="button">退出管理员</button></header>
+  <main class="layout">
+    <aside class="sidebar"><button class="button primary full" id="new-task">＋ 新建 SOP</button><button class="button secondary full" id="sync-library" type="button">同步更新 Library</button><button class="button secondary full" id="open-reference-calibration" type="button">参考图片校准</button><button class="button secondary full" id="check-library" type="button">检查资料库</button><button class="button secondary full" id="image-settings" type="button">图片评分与设置</button><div class="sidebar-heading"><h2>最近任务</h2><button id="refresh" class="icon-button" title="刷新任务" aria-label="刷新任务">↻</button></div><div id="task-list" class="task-list"><p class="muted small">正在加载…</p></div><p class="sidebar-note">任务自动保存在本机。<br>关闭页面后，可回来继续。</p></aside>
+    <section class="main-column">
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <section id="library-sync-panel" class="panel" hidden aria-labelledby="library-sync-title">
+        <div class="panel-heading"><div><div class="eyebrow">LIBRARY ADMINISTRATION</div><h2 id="library-sync-title">同步更新 Library</h2></div><button id="close-library-sync" class="text-button" type="button">收起</button></div>
+        <p class="muted">修改、上传或删除资料后，执行语法检查 → 中英文同步 → 图片评分 → 图片描述与摘要更新。中英文同时变化时以中文为准并记录覆盖。参考图片校准独立执行。</p>
+        <p class="muted small">首次保留无法判断修改来源的既有双语资料并建立基线；之后根据 Hash 同步。自动生成的对应文件可跟随删除，人工内容保留并报告。执行期间请暂停编辑 Library；开始前保存评分参数，任务使用参数快照。</p>
+        <div class="run-actions"><button id="start-library-sync" class="button primary" type="button">开始同步更新</button><button id="plan-library-sync" class="button secondary" type="button">只检查与预览</button><button id="resume-library-sync" class="button secondary" type="button" hidden>恢复同步</button><button id="cancel-library-sync" class="button secondary" type="button" hidden>取消同步</button></div>
+        <p id="library-sync-status" role="status" class="muted">准备就绪。预览不调用模型、不修改 Library 或同步基线。</p>
+        <div id="library-sync-stages"></div><div id="library-sync-results"></div>
+        <details><summary>同步任务历史</summary><div id="library-sync-history"></div></details>
+      </section>
+      <section id="image-settings-panel" class="panel image-settings-panel" hidden aria-labelledby="image-settings-title">
+        <div class="panel-heading"><div><div class="eyebrow">IMAGE QUALITY</div><h2 id="image-settings-title">图片评分与设置</h2></div><button id="close-image-settings" class="text-button" type="button">收起</button></div>
+        <p id="image-scoring-description" class="muted small">模型提取指标，程序按规则算分。设置用于后续评估，已完成任务保留原报告。当前采用保守复核：宁可低估、多提醒。两次视觉判断取较低结果，分项按档位下限计分；证据不足也提醒，仍需人工复核。</p>
+        <form id="image-policy-form">
+          <h3>七项评分权重 <small id="weight-total"></small></h3><div id="image-weights" class="policy-grid"></div>
+          <h3>条件分数上限</h3><p id="image-caps-description" class="muted small">留空表示关闭该上限；同时触发多个条件时取最低值。</p><div id="image-caps" class="policy-grid"></div>
+          <label class="field threshold-field"><span id="image-threshold-label">警告阈值（含等于）</span><input id="image-threshold" type="number" min="0" max="100" step="1" required></label>
+          <div class="run-actions"><button class="button primary" id="save-image-policy" type="submit">保存设置</button><button class="button secondary" id="reset-image-policy" type="button">填入默认值</button></div>
+        </form><p id="image-policy-message" class="muted small" role="status" aria-live="polite"></p>
+        <hr><h3>基准图片校准</h3><p id="image-calibration-description" class="muted small">在下方文件夹放入 70-P1.png 等参考图，再触发校准。已导入的需求方复评分优先于旧文件名分数；显式改名改分会覆盖旧标签。相同 Hash 复用当前规则分析，人工分数和 offset 不进入模型提示词。</p><code id="sample-directory" class="path-line"></code><p id="calibration-status" class="muted small" role="status" aria-live="polite"></p>
+        <div class="run-actions"><button id="calibrate-images" class="button secondary" type="button">重新校准</button><button id="resume-image-calibration" class="text-button" type="button" hidden>恢复校准</button><button id="cancel-image-calibration" class="text-button" type="button" hidden>取消校准</button></div><div id="calibration-errors" class="small"></div>
+        <hr><h3>单张图片测试</h3><form id="image-test-form"><label class="field"><span>选择 PNG / JPEG（最多 10 MiB）</span><input id="image-test-file" type="file" accept="image/png,image/jpeg" required></label><label class="field"><span>操作说明（可选，用于检查操作重点）</span><textarea id="image-test-context" maxlength="4000" placeholder="例如：确认排线已插到底。没有说明时只评估图片通用质量。"></textarea></label><button id="test-image-button" class="button primary" type="submit">检测图片</button></form><p id="image-test-message" class="muted small" role="status" aria-live="polite"></p><img id="image-test-preview" class="quality-preview" alt="待评估图片" hidden><div id="image-test-result"></div>
+      </section>
+      <section id="validation-panel" class="panel validation-panel" hidden aria-labelledby="validation-title">
+        <div class="panel-heading"><h2 id="validation-title">资料库语法检查</h2><button id="close-validation" class="text-button" type="button">收起</button></div>
+        <form id="validation-form"><div class="fields two-columns">
+          <label class="field"><span>SOP 类型</span><select id="validation-type"><option value="all">全部类型（含归档）</option><option value="assemble">Assembly</option><option value="assembly_test">Assembly Test</option><option value="pcba_test">PCBA Test</option><option value="aging_test">Aging Test</option><option value="factory_test">Factory Test</option></select></label>
+          <label class="field"><span>资料语言</span><select id="validation-language"><option value="all">全部语言</option><option value="English">English</option><option value="中文">中文</option></select></label>
+        </div><p class="muted small">检查 JSON / JSONL 语法，不修改资料。通过语法检查不代表业务字段完整。</p><button class="button primary" id="validate-button" type="submit">开始检查</button></form>
+        <p id="validation-summary" role="status" aria-live="polite"></p><div id="validation-errors" class="validation-errors"></div>
+      </section>
+      <section id="create-view">
+        <div class="eyebrow">CREATE CKD SOP V3</div><h1>创建你的 SOP</h1><p class="intro">填写基本信息，然后确认工序流程。完成后即可下载 Excel。</p>
+        <form id="create-form" class="panel">
+          <div class="panel-heading"><h2>基本信息</h2><button class="text-button" id="fill-example" type="button">填写示例</button></div>
+          <div class="fields two-columns">
+            <label class="field"><span>SOP 类型 <small>SOP Type</small></span><select name="sopType" id="sop-type"><option value="assembly_test">Assembly Test · 整机测试</option><option value="assemble">Assembly · 装配</option><option value="pcba_test">PCBA Test · 主板测试</option><option value="aging_test">Aging Test · 老化测试</option><option value="factory_test">Factory Test · 工厂测试</option></select></label>
+            <label class="field"><span>模板语言 <small>Template Language</small></span><select name="templateLanguage"><option value="English">English · 英文</option><option value="中文">中文</option></select><span class="field-help">使用对应语言资料，不自动翻译。</span></label>
+          </div>
+          <div class="fields">
+            <label class="field"><span>项目名称 <small>Project Name</small><em>必填</em></span><input name="projectName" placeholder="例如 GPOS730" maxlength="200" required autocomplete="off"><span class="field-help">填写本次要生成 SOP 的产品项目。</span></label>
+            <label class="field"><span>文档编号 <small>Document Number</small><em>必填</em></span><input name="documentNumber" placeholder="例如 CKD-001" maxlength="200" required></label>
+            <label class="field"><span>SOP 名称 <small>SOP Name</small><em>必填</em></span><input name="sopName" placeholder="例如 Assembly Activate Device SOP" maxlength="200" required></label>
+            <label class="field"><span>作者 <small>Author</small><em>必填</em></span><input name="author" placeholder="填写编制人姓名" maxlength="200" required autocomplete="name"></label>
+            <label class="field" id="factory-field" hidden><span>工厂测试工序 <small>Factory Test Processes</small><em>必填</em></span><textarea name="factoryTestProcesses" rows="5" placeholder="Camera Test&#10;Key Test"></textarea><span class="field-help">每行一个工序，按 SOP 执行顺序填写，共 1–30 项。</span></label>
+          </div>
+          <div class="form-footer"><p class="muted small">下一步会让你选择流程来源并确认匹配。</p><button class="button primary" type="submit" id="start-button">开始生成 <span>→</span></button></div>
+        </form>
+      </section>
+      <section id="run-view" hidden>
+        <div class="eyebrow">CKD SOP V3</div><div class="run-heading"><h1 id="run-title"></h1><span id="run-status" class="badge"></span></div><p id="run-subtitle" class="intro"></p>
+        <ol id="steps" class="steps" aria-label="生成进度"></ol>
+        <div class="panel run-info"><dl id="run-details"></dl></div>
+        <section id="question-panel" class="panel question-panel" hidden><div class="eyebrow">需要你的确认</div><h2 id="question-title"></h2><p id="question-help" class="muted"></p><div id="question-options" class="option-list"></div><form id="answer-form" hidden><label class="field"><span id="answer-label">你的回答</span><textarea id="answer-text" rows="5" maxlength="12000"></textarea></label><button id="answer-button" class="button primary" type="submit">确认并继续 →</button></form></section>
+        <section id="working-panel" class="panel working" hidden><span class="spinner" aria-hidden="true"></span><div><h2 id="working-title">正在处理…</h2><p id="working-detail" class="muted">任务在服务端执行，进度会自动更新。</p></div></section>
+        <section id="result-panel" class="panel" hidden><div class="eyebrow">已生成</div><h2>文件与检查报告</h2><p id="delivery-status" role="status"></p><div id="downloads" class="downloads"></div><div id="reviews"></div></section>
+        <div id="run-error" class="notice" hidden></div>
+        <div class="run-actions"><button id="resume-button" class="button primary" hidden>继续任务</button><button id="cancel-button" class="button secondary" hidden>取消任务</button><button id="reuse-button" class="text-button">按此信息新建 SOP</button></div>
+      </section>
+      <footer>CKD SOP · 本地工作台</footer>
+    </section>
+  </main>
+</body>
+</html>

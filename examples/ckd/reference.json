@@ -1,0 +1,8 @@
+{
+  "sopType": "assembly_test",
+  "templateLanguage": "English",
+  "projectName": "GPOS710",
+  "documentNumber": "CKD-001",
+  "sopName": "Assembly Activate Device SOP",
+  "author": "Patrick Xu"
+}

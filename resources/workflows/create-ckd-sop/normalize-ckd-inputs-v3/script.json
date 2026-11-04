@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "normalize-ckd-inputs-v3",
+  "title": "Normalize CKD Inputs V3",
+  "description": "Normalize the selected SOP type, template language, and project identifier and create filesystem-safe CKD output names without changing the original business values.",
+  "runtime": "node",
+  "entrypoint": "index.cjs"
+}

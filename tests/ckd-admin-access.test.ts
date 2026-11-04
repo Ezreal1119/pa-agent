@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { once } from "node:events";
+import { AdminAccess, hashAdminPassword } from "../src/ckd/admin-access.js";
+import { createCkdUiServer } from "../src/ckd/ui-server.js";
+
+test("admin password, session expiry, logout and rate limit", () => {
+  let now = 0;
+  const access = new AdminAccess("UrovoAdmin", hashAdminPassword("sample-password"), () => now);
+  assert.throws(() => access.login({ account: "UrovoAdmin", password: "bad" }, "one"), /错误/u);
+  const cookie = access.cookie(access.login({ account: "UrovoAdmin", password: "sample-password" }, "one"), "/admin", false);
+  assert.match(cookie, /HttpOnly; SameSite=Strict; Path=\/admin; Max-Age=43200/u);
+  assert.ok(access.authenticate(cookie));
+  now = 12 * 60 * 60 * 1000;
+  assert.equal(access.authenticate(cookie), false);
+  for (let i = 0; i < 10; i++) assert.throws(() => access.login({ account: "bad", password: "bad" }, "two"), /错误/u);
+  assert.throws(() => access.login({ account: "UrovoAdmin", password: "sample-password" }, "two"), /次数过多/u);
+  const token = access.login({ account: "UrovoAdmin", password: "sample-password" }, "three");
+  access.logout(access.cookie(token, "/admin", false));
+  assert.equal(access.authenticate(access.cookie(token, "/admin", false)), false);
+});
+
+test("prefixed administrator UI and APIs require login while desktop client stays independent", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ckd-admin-"));
+  const oldOrigin = process.env.CKD_ADMIN_ORIGIN;
+  process.env.CKD_ADMIN_ORIGIN = "http://8.133.254.83";
+  const app = createCkdUiServer({ dataDir: path.join(root, "data"), libraryPath: path.join(root, "library"), adminAuth: new AdminAccess("UrovoAdmin", hashAdminPassword("sample-password")) });
+  app.server.listen(0, "127.0.0.1"); await once(app.server, "listening");
+  const address = app.server.address(); assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { await new Promise<void>(resolve => app.server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); if (oldOrigin === undefined) delete process.env.CKD_ADMIN_ORIGIN; else process.env.CKD_ADMIN_ORIGIN = oldOrigin; });
+  const get = (route: string, cookie?: string) => fetch(base + route, { headers: cookie ? { Cookie: cookie } : {}, redirect: "manual" });
+  const post = (route: string, data: unknown, cookie?: string, origin = "http://8.133.254.83") => fetch(base + route, { method: "POST", headers: { "Content-Type": "application/json", "X-CKD-UI": "1", Origin: origin, ...(cookie ? { Cookie: cookie } : {}) }, body: JSON.stringify(data) });
+  assert.equal((await get("/admin/")).status, 302);
+  assert.equal((await get("/admin/api/status")).status, 401);
+  assert.equal((await get("/admin/api/runs")).status, 401);
+  assert.equal((await get("/admin/api/images/policy")).status, 401);
+  assert.equal((await get("/admin/api/library/jobs")).status, 401);
+  assert.equal((await get("/admin/login")).status, 200);
+  assert.equal((await get("/admin/login.js")).status, 200);
+  assert.equal((await post("/admin/api/auth/login", { account: "UrovoAdmin", password: "wrong" })).status, 401);
+  assert.equal((await post("/admin/api/auth/login", { account: "UrovoAdmin", password: "sample-password" }, undefined, "http://evil.example")).status, 403);
+  const login = await post("/admin/api/auth/login", { account: "UrovoAdmin", password: "sample-password" });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get("set-cookie")!;
+  assert.equal((await get("/admin/").then(response => response.status)), 302);
+  assert.equal((await get("/admin/", cookie)).status, 200);
+  assert.equal((await get("/admin/app.js", cookie)).status, 200);
+  assert.equal((await get("/admin/api/status", cookie)).status, 200);
+  assert.equal((await get("/admin/api/client/status", cookie)).status, 404);
+  assert.equal((await get("/api/client/status")).status, 401);
+  assert.equal((await post("/admin/api/auth/logout", {}, cookie)).status, 200);
+  assert.equal((await get("/admin/api/status", cookie)).status, 401);
+});

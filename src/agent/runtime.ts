@@ -7,6 +7,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import {
   resolveConfig,
@@ -18,6 +19,14 @@ import { loadSystemPrompt } from "../prompts/index.js";
 
 // ModelRuntime uses this ID to connect the provider, model, and API key.
 const PROVIDER_ID = "openai-compatible";
+
+export interface AgentSessionOptions {
+  tools?: string[];
+  extensions?: { name: string; factory: ExtensionFactory }[];
+  cwd?: string;
+  systemPrompt?: string;
+  skillPaths?: string[];
+}
 
 // Prepares a shared model environment and uses it to create independent AgentSessions.
 // 1. static async create() -> returns Promise<AgentRuntime> which encapsulates the AgentConfig & ModelRuntime.
@@ -99,11 +108,11 @@ export class AgentRuntime {
   // Creates an independent session using the shared model environment.
   // Creates a new session by default when no SessionManager is provided.
   async createSession(
-    sessionManager = SessionManager.create(
-      this.config.cwd,
-      this.config.sessionsDir,
-    ),
+    sessionManager?: SessionManager,
+    options: AgentSessionOptions = {},
   ): Promise<AgentSession> {
+    const cwd = path.resolve(options.cwd ?? this.config.cwd);
+    sessionManager ??= SessionManager.create(cwd, this.config.sessionsDir);
     // Gets the model registered during create().
     const model = this.modelRuntime.getModel(
       PROVIDER_ID,
@@ -113,7 +122,7 @@ export class AgentRuntime {
       throw new Error(`Model ${this.config.model.modelId} was not registered`);
 
     // Loads only the system prompt explicitly maintained by this project.
-    const systemPrompt = await loadSystemPrompt(this.config.resourcesDir);
+    const systemPrompt = options.systemPrompt ?? await loadSystemPrompt(this.config.resourcesDir);
 
     // Keeps session behavior independent from global or project settings files.
     const settingsManager = SettingsManager.inMemory({
@@ -150,7 +159,7 @@ export class AgentRuntime {
 
     // Disables automatic resource discovery while retaining explicit resources.
     const resourceLoader = new DefaultResourceLoader({
-      cwd: this.config.cwd, // Where the Agent is working at.
+      cwd,
       agentDir: this.config.agentDir, // Where the Agent's configuration is loaded
       settingsManager,
 
@@ -162,8 +171,8 @@ export class AgentRuntime {
 
       systemPrompt, // The original main prompt. In resources/prompts/system.md
       appendSystemPrompt: [], // Append extra system prompts after the main system prompt, not very meaningful.
-      extensionFactories: [{ name: "agent-core", factory: agentExtension }], // All tools, commands, and hooks are registered in this extension.
-      additionalSkillPaths: [path.join(this.config.resourcesDir, "skills")], // The specified path of skills discovery is resources/skills
+      extensionFactories: [{ name: "agent-core", factory: agentExtension }, ...(options.extensions ?? [])],
+      additionalSkillPaths: options.skillPaths ?? [path.join(this.config.resourcesDir, "skills")],
     });
 
     // Loads the configured resources from disk.
@@ -175,7 +184,7 @@ export class AgentRuntime {
     // 2. User&Assistant...: User -> Assistant(tool_calling_results + final_llm_response) -> User -> ...
     // 3. Tools: read, bash, edit, write, ...
     const { session } = await createAgentSession({
-      cwd: this.config.cwd,
+      cwd,
       agentDir: this.config.agentDir,
       model,
       modelRuntime: this.modelRuntime,
@@ -183,7 +192,7 @@ export class AgentRuntime {
       sessionManager,
       settingsManager,
       // Explicitly enables every built-in tool currently used by this Agent Core.
-      tools: ["read", "bash", "edit", "write"],
+      tools: options.tools ?? ["read", "bash", "edit", "write"],
       // Uses the SDK's default reasoning level, clamped when the model supports less.
       thinkingLevel: "medium",
     });

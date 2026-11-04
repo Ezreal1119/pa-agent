@@ -1,0 +1,9 @@
+{
+  "sopType": "factory_test",
+  "templateLanguage": "English",
+  "projectName": "GPOS710",
+  "documentNumber": "FT-001",
+  "sopName": "Factory Camera and Key Test",
+  "author": "Patrick Xu",
+  "factoryTestProcesses": ["Camera Test", "Key Test"]
+}

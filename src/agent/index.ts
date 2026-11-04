@@ -1,5 +1,6 @@
 export {
   AgentRuntime,
+  type AgentSessionOptions,
   createAgent,
   createAgentRuntime,
 } from "./runtime.js";

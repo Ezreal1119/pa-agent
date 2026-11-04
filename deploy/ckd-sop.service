@@ -1,0 +1,22 @@
+[Unit]
+Description=CKD SOP backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ckd-sop
+Group=ckd-sop
+WorkingDirectory=/opt/pi-patrick
+ExecStart=/usr/bin/node /opt/pi-patrick/dist/ckd/ui.js --port 4317
+Environment=NODE_ENV=production
+Environment=CKD_DATA_DIR=/opt/pi-patrick/.data
+Environment=CKD_LIBRARY=/opt/pi-patrick/.data/ckd/library/ckd-library-v2
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

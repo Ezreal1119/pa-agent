@@ -9,18 +9,38 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./ckd": {
+      "types": "./dist/ckd/index.d.ts",
+      "import": "./dist/ckd/index.js"
     }
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ckd": "tsx src/ckd/cli.ts",
+    "test": "tsx --test --test-timeout=30000 tests/*.test.ts resources/workflows/create-ckd-sop/build-ckd-catalog-v3/test/*.cjs desktop/test/*.test.cjs",
+    "desktop:install": "npm ci --prefix desktop",
+    "desktop:start": "npm --prefix desktop start",
+    "desktop:pack:mac": "npm --prefix desktop run pack:mac",
+    "desktop:pack:win": "npm --prefix desktop run pack:win",
+    "desktop:pack:mac:cloud": "npm --prefix desktop run pack:mac:cloud",
+    "desktop:pack:win:cloud": "npm --prefix desktop run pack:win:cloud",
+    "ckd:ui": "tsx src/ckd/ui.ts",
+    "ckd:images:review": "tsx src/ckd/image-review.ts",
+    "ckd:images:prewarm": "tsx src/ckd/image-prewarm.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
-    "dotenv": "^17.2.2"
+    "ajv": "^8.20.0",
+    "dotenv": "^17.2.2",
+    "exceljs": "^4.4.0",
+    "sharp": "0.35.5",
+    "typebox": "^1.3.7"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.2"
   },
   "engines": {

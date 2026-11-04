@@ -1,0 +1,8 @@
+{
+  "version": "1.23.0",
+  "weights": {"clarity": 20, "resolution": 15, "composition": 20, "completeness": 12, "color": 15, "damage": 10, "exposure": 5},
+  "caps": {"key_content_unrecognizable": 100, "subject_blurrable": 100, "blank_or_tiny_subject": 100, "detail_unacceptable": 90},
+  "alertThreshold": 80,
+  "goodThreshold": 95,
+  "offset": 0
+}

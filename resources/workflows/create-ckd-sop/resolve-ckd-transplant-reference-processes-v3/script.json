@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "resolve-ckd-transplant-reference-processes-v3",
+  "title": "Resolve Cross-Project SOP Sequence V3",
+  "description": "Resolve exact Process IDs from a cross-project SOP while leaving content selection to the target-Project/common materializer.",
+  "runtime": "node",
+  "entrypoint": "index.cjs"
+}

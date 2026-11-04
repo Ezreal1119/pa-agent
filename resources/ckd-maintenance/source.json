@@ -1,0 +1,5 @@
+{
+  "source": "patrick-agent/library/ckd-library-v2/summary-sync-core.mjs",
+  "sha256": "6814fbbfd7d0ab5eb9502e83a9eaabbec6cfcd48f37388db90b3bb7d13bf0de9",
+  "adaptation": "ESM imports/exports converted to CommonJS; source resolution rules retained."
+}

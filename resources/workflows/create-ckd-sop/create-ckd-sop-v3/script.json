@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "create-ckd-sop-v3",
+  "title": "Create CKD SOP V3",
+  "description": "Materialize same-type target-Project/shared Process overlays and generate the final SOP Excel workbook in the current Session Workspace.",
+  "runtime": "node",
+  "entrypoint": "index.cjs"
+}

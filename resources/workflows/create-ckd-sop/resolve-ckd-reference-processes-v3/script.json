@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "resolve-ckd-reference-processes-v3",
+  "title": "Resolve Referenced CKD Processes V3",
+  "description": "Resolve exact Process IDs from a selected same-project Library SOP without an LLM call.",
+  "runtime": "node",
+  "entrypoint": "index.cjs"
+}

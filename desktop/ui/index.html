@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>CKD SOP</title><link rel="stylesheet" href="style.css"><script src="image-crop.js" defer></script><script src="app.js" defer></script>
+</head>
+<body>
+  <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="retry" type="button" hidden>重试连接</button></div>
+  <section id="login-view" class="login-layout">
+    <div class="intro"><div class="brand">CKD SOP <span>V3</span></div><h1>从工序到<br>作业指导书。</h1><p>填写信息，确认流程，<br>生成附有质量评分的 SOP 工作簿。</p><div class="intro-steps">01 填写　→　02 确认　→　03 交付</div></div>
+    <form id="login-form" class="login-card"><div class="eyebrow">欢迎使用</div><h2>登录工作台</h2><p class="muted">使用你的账号继续。</p><label>账号<input id="account" name="account" required autocomplete="username" autofocus></label><label>密码<input id="password" name="password" type="password" required autocomplete="off"></label><button class="primary" id="login-submit">登录 →</button><p class="muted small">任务保存在服务端，关闭应用后可继续。</p></form>
+  </section>
+  <div id="workspace" class="workspace" hidden>
+    <aside><div class="brand">CKD SOP <span>V3</span></div><button id="new-task" class="primary">＋ 新建 SOP</button><div class="sidebar-heading"><h3>最近任务</h3><button id="refresh" class="quiet" aria-label="刷新任务">↻</button></div><nav id="task-list" aria-label="最近任务"></nav><div class="sidebar-bottom"><span id="account-label"></span><button id="logout" class="quiet">退出登录</button><p class="small muted">关闭应用不会中断生成。</p></div></aside>
+    <main>
+      <section id="create-view"><div class="eyebrow">CREATE CKD SOP</div><h1>创建你的 SOP</h1><p class="muted">填写基本信息，然后确认工序流程。</p>
+        <form id="create-form" class="card form-grid">
+          <label>SOP 类型<select name="sopType" id="sop-type"><option value="assembly_test">Assembly Test · 整机测试</option><option value="assemble">Assembly · 装配</option><option value="pcba_test">PCBA Test · 主板测试</option><option value="aging_test">Aging Test · 老化测试</option><option value="factory_test">Factory Test · 工厂测试</option></select></label>
+          <label>模板语言<select name="templateLanguage"><option value="English">English · 英文</option><option value="中文">中文</option></select><span class="hint">使用对应语言资料。</span></label>
+          <label>项目名称<input name="projectName" required maxlength="200" placeholder="例如 GPOS730"></label><label>文档编号<input name="documentNumber" required maxlength="200"></label>
+          <label>SOP 名称<input name="sopName" required maxlength="200"></label><label>作者<input name="author" required maxlength="200"></label>
+          <label id="factory-field" class="full" hidden>Factory Test 工序<textarea name="factoryTestProcesses" rows="5" placeholder="每行一个工序，按照 SOP 顺序填写"></textarea><span class="hint">每行一个工序，顺序会保留。</span></label>
+          <div class="full form-footer"><span class="muted small">下一步确认流程来源与工序。</span><button id="start" class="primary">开始生成 →</button></div>
+        </form>
+      </section>
+      <section id="run-view" hidden><div class="eyebrow">CKD SOP V3</div><div class="title-row"><h1 id="run-title"></h1><span id="run-status" class="badge"></span></div><p id="run-subtitle" class="muted"></p><ol id="steps" class="steps" aria-label="流程进度"></ol><dl id="run-details" class="card metadata"></dl>
+        <div id="working" class="card working" role="status" hidden><span class="spinner"></span><div><strong id="working-title">正在处理</strong><p id="working-detail" class="small muted">任务在服务端执行，请稍候。</p></div></div>
+        <section id="question-panel" class="card" hidden><div class="eyebrow">需要你的确认</div><h2 id="question-title"></h2><p id="question-help" class="muted"></p><div id="question-options" class="options"></div><form id="answer-form" hidden><label id="answer-label">你的回答</label><textarea id="answer-text" rows="5" maxlength="12000"></textarea><button class="primary" id="answer-submit">确认并继续 →</button></form></section>
+        <section id="image-review-panel" hidden><div class="eyebrow">生成前确认</div><h2>检查图片，按需裁剪</h2><p class="muted">下面是原图评分。可以裁剪部分图片，也可以直接生成；裁剪后不重新评分。</p><div id="image-review-scores"></div><button id="generate-sop" class="primary">生成 SOP →</button></section>
+        <p id="run-error" class="error" role="alert" hidden></p>
+        <div class="actions"><button id="resume" class="primary" hidden>继续任务</button><button id="cancel" hidden>取消任务</button><button id="reuse" class="quiet">按此信息新建 SOP</button></div>
+        <section id="result-panel" hidden><div class="eyebrow">生成结果</div><h2>文件与质量报告</h2><p id="delivery-status" role="status"></p><div id="downloads" class="downloads"></div><div id="scores"></div></section>
+      </section>
+      <footer>CKD SOP · 用户工作台</footer>
+    </main>
+  </div>
+</body></html>
