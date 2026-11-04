@@ -76,9 +76,11 @@ function buildAssemblyWorkbook(workbook, options, h) {
     }
     return lines * size * 1.4 + 10;
   }
-  function writeText(sheet, text, range, processName, label) {
+  function writeText(sheet, text, range, processName, label, preserveAlignment = false) {
     const [first, last, left, right] = range, cell = sheet.getCell(first, left);
-    cell.alignment = { ...cell.alignment, horizontal: "left", vertical: "top", wrapText: true };
+    // Imported cells can share a style object. Detach before changing alignment.
+    cell.style = { ...cell.style, alignment: { ...cell.alignment,
+      ...(preserveAlignment ? {} : { horizontal: "left", vertical: "top" }), wrapText: true } };
     if (!text) { cell.value = null; return; }
     if (textHeight(sheet, text, first, left, right) <= blockHeight(sheet, first, last) - 4) { cell.value = text; return; }
     const name = freshName(labels.continuation);
@@ -160,7 +162,8 @@ function buildAssemblyWorkbook(workbook, options, h) {
   }
 
   // The customer's cover has a different revision-history/footer height in each language.
-  cover.getCell("A4").value = `${options.projectName} ${options.sopName}`;
+  const documentName = `${options.projectName} ${options.sopName}`;
+  cover.getCell("A4").value = documentName;
   cover.getCell("G4").value = options.documentNo;
   cover.getCell("E4").value = 1;
   const now = new Date(), today = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000) + 25569;
@@ -169,9 +172,10 @@ function buildAssemblyWorkbook(workbook, options, h) {
   for (const cell of ["B7", "F4"]) cover.getCell(cell).numFmt = "yyyy/m/d";
   // First record describes this generation even when no original version was supplied.
   cover.getCell("C7").value = options.author || null;
-  cover.getCell("C7").alignment = { ...cover.getCell("C7").alignment, vertical: "top", wrapText: true };
+  cover.getCell("C7").style = { ...cover.getCell("C7").style, alignment: { ...cover.getCell("C7").alignment, wrapText: true } };
   for (let row = 8; row < names.authorRow; row++) formula(cover, `C${row}`, `IF(A${row}="","","${literal(options.author || "")}")`, "");
-  const revisionHeight = Math.ceil(Math.max(rowHeight(cover, 7), textHeight(cover, options.author, 7, 3, 3),
+  const nameHeight = Math.ceil(textHeight(cover, documentName, 4, 1, 2) + 4);
+  const revisionHeight = Math.ceil(Math.max(textHeight(cover, options.author, 7, 3, 3),
     textHeight(cover, options.revisionReason, 7, 4, 5), textHeight(cover, options.revisionContent, 7, 6, 8)) + 4);
   const blankRows = [];
   for (let row = 8; row < names.authorRow; row++) {
@@ -179,15 +183,25 @@ function buildAssemblyWorkbook(workbook, options, h) {
     const blank = [1, 2, 4, 5, 6, 7, 8, 9].map(col => cover.getCell(row, col).value).every(value => value == null || value === "" || typeof value === "object" && value.result === "");
     if (blank) blankRows.push({ row, spare: Math.max(0, rowHeight(cover, row) - 24) });
   }
-  const available = blankRows.reduce((sum, item) => sum + item.spare, 0);
-  const extra = Math.max(0, Math.min(revisionHeight - rowHeight(cover, 7), available, 400 - rowHeight(cover, 7)));
-  if (extra) {
-    cover.getRow(7).height += extra;
-    for (const item of blankRows) cover.getRow(item.row).height -= extra * item.spare / available;
+  let available = blankRows.reduce((sum, item) => sum + item.spare, 0);
+  function growCoverRow(row, needed) {
+    const extra = Math.max(0, Math.min(needed - rowHeight(cover, row), available, 400 - rowHeight(cover, row)));
+    if (!extra) return;
+    cover.getRow(row).height += extra;
+    for (const item of blankRows) {
+      const borrowed = extra * item.spare / available;
+      cover.getRow(item.row).height -= borrowed;
+      item.spare -= borrowed;
+    }
+    available = Math.max(0, available - extra);
   }
+  // Name and revision rows share the same blank-space budget; never shrink fonts.
+  growCoverRow(4, nameHeight);
+  growCoverRow(7, revisionHeight);
+  writeText(cover, documentName, [4, 4, 1, 2], documentName, chinese ? "文件名称" : "Document name", true);
   const revisionTitle = `${options.projectName} ${options.sopName}`;
-  writeText(cover, options.revisionReason, [7, 7, 4, 5], revisionTitle, chinese ? "修订原因" : "Revision reason");
-  writeText(cover, options.revisionContent, [7, 7, 6, 8], revisionTitle, chinese ? "修订内容" : "Revision content");
+  writeText(cover, options.revisionReason, [7, 7, 4, 5], revisionTitle, chinese ? "修订原因" : "Revision reason", true);
+  writeText(cover, options.revisionContent, [7, 7, 6, 8], revisionTitle, chinese ? "修订内容" : "Revision content", true);
   cover.getCell(`A${names.authorRow}`).value = `${labels.author}${options.author || ""}`;
   paper(cover, `A1:I${names.authorRow}`, "portrait"); h.setSheetZoom(cover, 100);
 

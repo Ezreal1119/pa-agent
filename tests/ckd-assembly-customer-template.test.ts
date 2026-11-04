@@ -213,6 +213,55 @@ test('Assembly long revision text is retained on bounded continuation pages with
   validReferences(workbook);
 });
 
+test('Assembly cover wraps document names and preserves centered template styles without leaking to other cells', async t => {
+  const root = fixture(t); source(root, 'cover-style', 1);
+  const templatePath = path.join(assets, 'assemble-sop-template.xlsx'), before = hash(fs.readFileSync(templatePath));
+  const template = new ExcelJS.Workbook(); await template.xlsx.readFile(templatePath);
+  for (const language of ['中文', 'English']) {
+    const original = template.getWorksheet(language === '中文' ? '封面' : 'Cover')!;
+    const sopName = language === '中文' ? 'SQ68mini装配模板测试及螺丝位置确认' : 'Assembly Work Instruction and New Layout Verification';
+    const revisionReason = language === '中文' ? '调整装配流程' : 'Update the assembly procedure';
+    const revisionContent = language === '中文' ? '新增装配图片。\n补充螺丝位置说明。' : 'Update assembly pictures.\nClarify screw positions.';
+    const output = path.join(root, `${language}-cover.xlsx`);
+    const result = await buildCkdSop({ output, projectDir: path.join(root, 'processes'), projectName: 'SQ68mini', documentNo: 'TEST-ASM-20261105-01', sopName, author: 'Patrick', processList: ['cover-style'], sopType: 'assemble', templateLanguage: language, revisionReason, revisionContent });
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(output); const cover = workbook.worksheets[0]!;
+    assert.deepEqual(result.warnings, []);
+    assert.equal(cover.getCell('A4').value, `SQ68mini ${sopName}`);
+    assert.ok(cover.getRow(4).height! > original.getRow(4).height!);
+    for (const ref of ['A4', 'C7', 'D7', 'F7']) {
+      assert.deepEqual(cover.getCell(ref).alignment, { ...original.getCell(ref).alignment, wrapText: true });
+      assert.deepEqual(cover.getCell(ref).font, original.getCell(ref).font);
+      assert.deepEqual(cover.getCell(ref).border, original.getCell(ref).border);
+    }
+    assert.equal(cover.getCell('C7').value, 'Patrick');
+    assert.equal(cover.getCell('D7').value, revisionReason); assert.equal(cover.getCell('F7').value, revisionContent);
+    for (const ref of ['A3', 'B7', 'C8', 'D8', 'F8']) assert.deepEqual(cover.getCell(ref).alignment, original.getCell(ref).alignment);
+    const last = language === '中文' ? 22 : 26;
+    assert.ok(Math.abs(height(cover, last) - height(original, last)) < .001);
+    for (let row = 8; row < last; row++) assert.ok(cover.getRow(row).height! >= 24 - .001);
+    assert.equal(workbook.worksheets[2]!.getCell('G30').alignment.horizontal, 'left');
+    assert.equal(workbook.worksheets[2]!.getCell('G30').alignment.vertical, 'top');
+    validReferences(workbook);
+  }
+  assert.equal(hash(fs.readFileSync(templatePath)), before);
+});
+
+test('Assembly exceptionally long cover names and revisions share space and retain full text in continuations', async t => {
+  const root = fixture(t); source(root, 'long-cover', 1);
+  const sopName = '装配'.repeat(100), content = '补充图文要求。'.repeat(300), output = path.join(root, 'long-cover.xlsx');
+  await buildCkdSop({ output, projectDir: path.join(root, 'processes'), projectName: 'SQ68mini', documentNo: 'D', sopName, author: 'Patrick', processList: ['long-cover'], sopType: 'assemble', templateLanguage: '中文', revisionReason: '调整流程', revisionContent: content });
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(output); const cover = workbook.worksheets[0]!;
+  for (const [label, text] of [['文件名称', `SQ68mini ${sopName}`], ['修订内容', content]]) {
+    assert.equal(workbook.worksheets.filter(sheet => sheet.getCell('A2').value === label).map(sheet => sheet.getCell('A5').value).join(''), text);
+  }
+  for (const ref of ['A4', 'C7', 'D7', 'F7']) {
+    assert.equal(cover.getCell(ref).alignment.horizontal, 'center'); assert.equal(cover.getCell(ref).alignment.vertical, 'middle');
+  }
+  for (let row = 8; row < 22; row++) assert.ok(cover.getRow(row).height! >= 24 - .001);
+  assert.ok(cover.getRow(4).height! <= 400); assert.ok(cover.getRow(7).height! <= 400);
+  validReferences(workbook);
+});
+
 test('Assembly chart supports 30 ordered processes, reserved sheet names and no stale template rows', async t => {
   const root = fixture(t), ids = ['封面', '排位图', ...Array.from({ length: 28 }, (_, i) => `工序${i + 3}`)];
   for (const id of ids) source(root, id, 1);
