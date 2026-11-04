@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { atomic, readJson, safePath, type Job } from "../knowledge-sync/core.js";
+import { briefSyncSummary } from "./summary.js";
 
 export interface SyncCompletion {
   version: 1; id: string; origin: "manual" | "auto"; started: string; finished: string;
@@ -24,7 +25,7 @@ export class CompletionJournal {
     if (!items.length) return;
     await this.record({ version: 1, id: job.execution.id, origin: "manual", started: job.execution.started, finished: job.finished, status: job.status,
       total: items.length, counts: items.reduce((out, item) => { out[item.status] = (out[item.status] ?? 0) + 1; return out; }, {} as Record<string, number>),
-      scopes: [job.execution.id], jobIds: [job.id], items: items.map(item => ({ name: item.name, status: item.status, summary: item.summary?.slice(0,400) })) });
+      scopes: [job.execution.id], jobIds: [job.id], items: items.map(item => ({ name: item.name, status: item.status, summary: briefSyncSummary(item.summary).join("\n") || undefined })) });
   }
   async list(exclude = new Set<string>()) {
     await safePath(this.directory);

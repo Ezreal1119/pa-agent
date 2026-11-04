@@ -229,7 +229,7 @@ test('notification layout turns the screenshot summary into readable clauses wit
  const text=formatSyncSummary(e);
  assert.ok(text.startsWith('✅ **自动同步完成**\n2026/11/04 07:01（北京时间）\n\n'));
  assert.match(text,/📊 共 1 个文件，已入库 1，无失败。\n\n📄 \*\*SQ68_A13_GO修改记录.xlsx\*\*/);
- assert.match(text,/状态：已入库\n\n更新摘要：\n- i9200 相关资料更新\n- 注明 WUZL/);
+ assert.match(text,/状态：已入库\n\n更新摘要：\n- 注明 WUZL/);
  assert.match(text,/2025-10-21、2026-11-03/);
  assert.doesNotMatch(text,/firmware-release-notes|202610212352|i9200\/|Hub|暂存|后端校验|①|②|路径|失败\/中断 0|待处理 0/);
  assert.deepEqual(e,original,'notification formatting must not rewrite the source report');
@@ -246,21 +246,84 @@ test('readable overviews retain nonzero failure, review, skip and missing-file c
  }
 });
 
-test('summary length and file count are bounded; technical-only summaries defer to the full web report',()=>{
+test('summary length and file count are bounded; technical-only summaries retain status without a web-report footer',()=>{
  const summary='更新产品规格'+ '参数说明'.repeat(60)+'；补充接口信息；补充电源信息';
  const e=event(second,{total:10,counts:{published:10},items:Array.from({length:10},(_,i)=>({name:`file_${i}.xlsx`,status:'published',summary}))});
  const text=formatSyncSummary(e),bullets=text.split('\n').filter(line=>line.startsWith('- '));
- assert.equal((text.match(/📄 /g)||[]).length,8);assert.equal(bullets.length,16);assert.ok(bullets.every(line=>[...line.slice(2)].length<=72));
- assert.match(text,/其余 2 个文件及完整内容请查看网页 Sync reports/);
+ assert.equal((text.match(/📄 /g)||[]).length,8);assert.equal(bullets.length,16);assert.ok(bullets.every(line=>[...line.slice(2)].length<=140));
+ assert.doesNotMatch(text,/参数说明|…/,'overlong statements are omitted whole, not cut into fragments');
+ assert.match(text,/另有 2 个文件未逐项列出/);assert.doesNotMatch(text,/完整内容请查看网页|Sync reports/);
  const technical=formatSyncSummary(event(second,{items:[{name:'source.xlsx',status:'published',summary:'路径 /opt/ProductExpertCloud/.data/urovo-product-expert/index.md；sourceKey firmware-release-notes 202611040700；无新增 Hub/shared 节点；修改 SKILL.md；中文目录/内部条目；/绝对目录'}]}));
  assert.doesNotMatch(technical,/\/opt\/|sourceKey|firmware-release-notes|index.md|SKILL.md|Hub|shared|中文目录|内部条目|绝对目录|更新摘要/);
  assert.match(formatSyncSummary(event(second,{items:[{name:'dates.xlsx',status:'published',summary:'更新生效日期为2026/11/04'}]})),/更新生效日期为2026\/11\/04/);
- assert.match(technical,/状态：已入库/);assert.match(technical,/完整内容请查看网页/);
+ assert.match(technical,/状态：已入库/);assert.doesNotMatch(technical,/完整内容请查看网页|Sync reports/);
+});
+
+test('conversion and original-cleanup logs never become a business update in either audience',()=>{
+ const e=event(second,{items:[{name:'RFG91 Accessories Guide.pdf',status:'published',summary:'Original 记「Converted; original removed after successful sync」；按管理员决定；文件已转换；同步完成；未提取到可核实的业务变化。'}]});
+ const before=structuredClone(e);
+ for(const text of [formatSyncSummary(e),formatSyncNotice(e,first)]){
+  assert.match(text,/RFG91 Accessories Guide.pdf\*\*\n状态：已入库/);
+  assert.doesNotMatch(text,/更新摘要|Original|Converted|original removed|管理员决定|文件已转换|Sync reports/);
+ }
+ assert.deepEqual(e,before);
+});
+
+test('legacy specification summaries keep unchanged facts and unresolved differences in readable Chinese',()=>{
+ const e=event(second,{items:[{name:'i5300L-EN Spec-FS.pdf',status:'published',summary:'按管理员决定；补充说明格式替换未改规格值、未解决客显与后摄 F vs FS 差异'}]});
+ const text=formatSyncSummary(e);
+ assert.match(text,/更新摘要：\n- 未修改规格参数\n- 未解决客户显示屏与后置摄像头 F 与 FS 差异/);
+ assert.doesNotMatch(text,/管理员决定|补充说明格式替换|差异已解决|规格已升级/);
+});
+
+test('complete statements retain comma qualifiers, uncertainty, quoted punctuation and specification pairs',()=>{
+ const summary='尚未确认，不能认定电池容量已经更新为5000mAh。新增配件说明（含充电座、手柄；不含主机），其他规格未变。';
+ const text=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary}]}));
+ assert.match(text,/- 尚未确认，不能认定电池容量已经更新为5000mAh/);
+ assert.match(text,/- 新增配件说明（含充电座、手柄；不含主机），其他规格未变/);
+ assert.equal((text.match(/^- /gm)||[]).length,2);
+ const pairs=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary:'补充 F/FS 版本差异说明，生效日期为2026/11/04；新增 NFC/RFID 选配说明。'}]}));
+ assert.match(pairs,/F\/FS 版本差异说明，生效日期为2026\/11\/04/);assert.match(pairs,/NFC\/RFID 选配说明/);
+ const wording=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary:'顾客显示屏配置未修改；补充后摄像头规格说明。'}]}));
+ assert.match(wording,/顾客显示屏配置未修改/);assert.match(wording,/补充后置摄像头规格说明/);assert.doesNotMatch(wording,/顾客户|像头像头/);
+});
+
+test('unresolved issues are retained after multiple changes while incomplete fragments are withheld',()=>{
+ const text=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary:'按管理员决定；新增接口说明；补充电源参数；更新外壳颜色说明；客户显示屏的版本差异仍待确认。'}]}));
+ assert.match(text,/- 新增接口说明\n- 客户显示屏的版本差异仍待确认/);
+ assert.doesNotMatch(text,/管理员决定|电源参数|外壳颜色/);
+ const facts=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary:'电池容量由4000mAh提升至5000mAh，标准版配置仍有两种颜色可选；新增充电说明；后置摄像头的版本差异仍待确认。'}]}));
+ assert.match(facts,/由4000mAh提升至5000mAh，标准版配置仍有两种颜色可选/);assert.match(facts,/后置摄像头的版本差异仍待确认/);
+ assert.doesNotMatch(facts,/新增充电说明/);
+ for(const summary of ['更新产品参数及','更新产品参数，','Original 记「Converted','新增说明（尚未完整','更新接口…']){
+  const incomplete=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary}]}));
+  assert.match(incomplete,/状态：已入库/);assert.doesNotMatch(incomplete,/更新摘要/);
+ }
+ const oversized=formatSyncSummary(event(second,{items:[{name:'spec.pdf',status:'published',summary:'新增接口说明；'+'参数说明'.repeat(3000)}]}));
+ assert.match(oversized,/- 新增接口说明/);assert.doesNotMatch(oversized,/参数说明|…/);
+});
+
+test('manual and recovered automatic completion snapshots select complete facts before the old 400-character cutoff',async t=>{
+ const root=await rootFor(t),summary='文件转换完成；'.repeat(65)+'新增充电座兼容说明；手柄的版本适用范围仍待确认。';
+ assert.ok(summary.indexOf('新增')>400);
+ const job={id:randomUUID(),kind:'sync',started:first,finished:second,status:'completed',execution:{id:randomUUID(),started:first,itemIds:['file']},items:[{id:'file',name:'accessories.pdf',status:'published',summary}]};
+ const journal=new CompletionJournal(root);await journal.job(job);
+ const run={id:randomUUID(),started:first,finished:second,status:'completed',selected:1,jobIds:[job.id]};
+ job.execution.autoRunId=run.id;
+ const sync={directory:root,options:{dataDir:root},summary:()=>job};
+ await new AutoSync(sync,()=>true,e=>String(e)).recordCompletion(run);
+ const events=await journal.list();assert.equal(events.length,2);
+ for(const e of events){
+  assert.equal(e.items[0].summary,'新增充电座兼容说明\n手柄的版本适用范围仍待确认');
+  const text=formatSyncSummary(e);assert.match(text,/新增充电座兼容说明/);assert.match(text,/适用范围仍待确认/);assert.doesNotMatch(text,/文件转换|…/);
+ }
+ assert.equal(job.items[0].summary,summary,'the full report must remain unchanged');
 });
 
 test('personal usage is a separate section after the shared summary and retains all accounting caveats',()=>{
  const e=event(),cost={cny:.123456,requests:5,priced:2,unpriced:1,missingUsage:2,pending:1,historyMissing:true};
  const group=formatSyncSummary(e),personal=formatSyncNotice(e,first,cost,cost);
+ assert.doesNotMatch(group+personal,/完整内容请查看网页|Sync reports/);
  assert.ok(personal.startsWith(group+'\n\n💰 **模型消费**\n\n'));
  assert.match(personal,/\n\n\*\*区间模型总消费\*\*\n/);assert.match(personal,/\n\n\*\*本次 Sync 模型消费\*\*\n/);
  assert.match(personal,/0.123456/);assert.match(personal,/已计价 2\/5/);assert.match(personal,/缺价格 1 次，缺用量 2 次/);assert.match(personal,/1 次请求未结算/);assert.match(personal,/历史消费不完整/);

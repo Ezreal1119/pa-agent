@@ -119,7 +119,9 @@ export class FirmwareService {
           }
         }
         if (flow) {
-          if (/^(取消|cancel)$/i.test(text)) {
+          // Also tolerate invisible copy/paste separators from older Bridges.
+          // Match the complete control, never arbitrary text containing “取消”.
+          if (/^(取消|cancel)$/i.test(text.replace(/[\u200b\u2060\ufeff]/gu, '').trim())) {
             this.clearPrompts(db, flow.id);
             if (["starting", "running", "cancelling"].includes(flow.phase)) { flow.phase = "cancelling"; answer = { text: "已请求取消，正在确认本机任务停止。", awaiting: false, flowId: flow.id }; }
             else { delete db.active; answer = { text: "已取消固件流程。", awaiting: false }; }

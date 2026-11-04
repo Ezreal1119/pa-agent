@@ -1,4 +1,7 @@
 import { SyncNotifications, syncDestination, syncGroupDestination } from "../sync-notifications/service.js";
+import { QuestionReviewService } from "../question-review/service.js";
+import { questionReviewRoute } from "../question-review/routes.js";
+import { ReviewError } from "../question-review/types.js";
 import { UsageLedger, configureUsagePricing } from "../usage/ledger.js";
 import { balanceCommand, libraryCommand } from "./wecom-commands.js";
 import { firmwareConfig, LocalFirmwareClient, type FirmwareClient } from "../firmware/client.js";
@@ -446,6 +449,8 @@ export async function createWebServer(options: WebOptions = {}) {
     if (!machine && !["GET", "HEAD"].includes(req.method ?? "") && req.headers["x-local-token"] !== csrf) throw new HttpError(403, "This page has expired. Refresh and try again.");
     return secureCookies;
   }
+  const questionReview = new QuestionReviewService({ dataDir, resourcesDir, model: () => ({ ...settings }), pricing: () => process.env.RESEARCH_PRICING_JSON ?? diskEnv.RESEARCH_PRICING_JSON });
+  await questionReview.init();
   const server = http.createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -553,6 +558,10 @@ export async function createWebServer(options: WebOptions = {}) {
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
       if (method === "POST" && url.pathname === "/api/auth/logout") {
         await auth.signOut(req, res, secureCookies); return json(res, 200, { ok: true });
+      }
+      if (url.pathname.startsWith("/api/question-review/")) {
+        if (machine) throw new HttpError(403, "Question review requires administrator login.");
+        return await questionReviewRoute(req, res, url, questionReview, readBody);
       }
       if (url.pathname.startsWith("/api/research/")) {
         if (machine) throw new HttpError(403, "Research requires administrator login.");
@@ -1138,11 +1147,12 @@ export async function createWebServer(options: WebOptions = {}) {
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
-      json(res, error instanceof HttpError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError ? error.status : 500, { error: redact(error) });
+      json(res, error instanceof HttpError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError || error instanceof ReviewError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;
   async function close() {
+    await questionReview.close();
     for (const controller of commandControllers) controller.abort();
     await firmware.close();
     await autoSync.close();

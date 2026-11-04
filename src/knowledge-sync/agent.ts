@@ -544,7 +544,7 @@ export function createPlanner(options: {
               ["add", "update", "review", "delete", "associate"].map((v) => Type.Literal(v)),
             ),
             reason: Type.String(),
-            summary: Type.String(),
+            summary: Type.String({ description: "A concise Chinese reader-facing summary, at most two complete sentences (about 100 Chinese characters each): actual product/document changes and any remaining business uncertainty. State unchanged specifications or unresolved differences honestly. Exclude paths, internal keys, conversion/cleanup logs and administrator-decision boilerplate. Put technical details and the complete rationale in reason; never invent an update or claim backend publication has already succeeded." }),
             products: Type.Array(Type.String()),
             sourceScope: Type.Optional(Type.Literal("organization")),
             slot: Type.String(),

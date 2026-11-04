@@ -199,6 +199,42 @@ test('owner cancels running task and global slot is released only after confirme
   assert.match((await f.state()).notices.at(-1).text, /已取消/); assert.equal([...f.jobs.values()][0].state, 'cancelled');
 });
 
+test('invisible separators in a complete cancel control exit confirmation without starting a transfer', async t => {
+  for (const invisible of ['\u200b', '\u2060', '\ufeff']) {
+    const f = await fixture(t); await f.query();
+    const command = input(`${invisible}取${invisible}消${invisible}`, false);
+    const reply = await f.service.command(command);
+    assert.equal(reply.text, '已取消固件流程。');
+    assert.equal((await f.state()).active, undefined); assert.equal(f.submits, 0);
+    assert.deepEqual(await f.service.command(command), reply, 'duplicate callback reuses the cancellation reply');
+  }
+});
+
+test('invisible cancellation preserves ownership checks and requires the complete control', async t => {
+  const f = await fixture(t), group = { botId: 'bot', userId: 'alice', chatType: 'group', target: 'g' };
+  await f.query(name, group);
+  for (const stranger of [{ ...group, userId: 'bob' }, { ...group, target: 'other-group' }, { ...group, botId: 'other-bot' }]) {
+    assert.match((await f.service.command(input('取\u200b消', false, stranger))).text, /任务处理中/);
+    assert.equal((await f.state()).active.phase, 'confirm');
+  }
+  for (const text of ['不要取消', '取\u200b消不了', '取消 @Other Bot', 'cancel later']) {
+    assert.match((await f.service.command(input(text, false, group))).text, /尚未开始/);
+    assert.equal((await f.state()).active.phase, 'confirm'); assert.equal(f.submits, 0);
+  }
+  assert.equal((await f.service.command(input('取\u200b消', false, group))).text, '已取消固件流程。');
+});
+
+test('invisible cancellation of a running transfer waits for local cancellation confirmation', async t => {
+  const f = await fixture(t); await f.confirm(await f.query());
+  let cancellations = 0;
+  f.client.cancel = async id => { cancellations++; const job = [...f.jobs.values()].find(j => j.id === id); job.state = 'cancelling'; return job; };
+  assert.match((await f.service.command(input('取\u200b消\u2060', true))).text, /已请求取消/);
+  await f.service.tick(); assert.ok((await f.state()).active, 'slot stays occupied until the local job stops');
+  assert.equal([...f.jobs.values()][0].state, 'cancelling'); assert.ok(cancellations >= 1); assert.equal(f.submits, 1);
+  [...f.jobs.values()][0].state = 'cancelled'; await f.service.tick();
+  assert.equal((await f.state()).active, undefined); assert.equal(f.submits, 1);
+});
+
 test('durable notification leases bind claims; acknowledged items do not reappear', async t => {
   const f = await fixture(t); await f.query(); const consumer = randomUUID();
   assert.equal((await f.service.claim({ botIds: ['wrong'], consumer })).notice, null);

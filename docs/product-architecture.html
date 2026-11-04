@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Product Expert 产品架构图：多入口 AI 问答、知识维护、文档处理、行业研究及可选固件分发的模块与工作流程。">
+  <title>Product Expert · 产品架构图</title>
+  <style>
+    :root{--bg:#f6f7f3;--paper:#fff;--ink:#20362f;--muted:#66756e;--line:#dce4dc;--green:#27694e;--soft:#edf4ec;--blue:#385b7d;--blue-bg:#eff4fa;--amber:#94682d;--amber-bg:#fbf5e9;--radius:18px}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;scroll-padding-top:28px}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
+    button,a{-webkit-tap-highlight-color:transparent}
+    a{color:inherit;text-underline-offset:4px}
+    button{font:inherit;cursor:pointer}
+    button:focus-visible,a:focus-visible{outline:3px solid #89af96;outline-offset:4px}
+    .page{max-width:1192px;margin:auto;padding:0 40px 48px}
+    .topbar{min-height:92px;display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line)}
+    .brand{display:flex;align-items:center;gap:12px;font-weight:750;font-size:17px;letter-spacing:-.3px}
+    .brand svg{width:34px;height:34px;flex-shrink:0}
+    .topnote{font-size:12px;color:var(--muted);letter-spacing:1.3px;text-transform:uppercase}
+    .hero{display:grid;grid-template-columns:1fr auto;align-items:end;gap:30px;padding:48px 0 32px}
+    .eyebrow{margin:0 0 12px;color:var(--green);font-size:12px;letter-spacing:2px;font-weight:750}
+    h1{font-size:clamp(32px,4.1vw,48px);line-height:1.22;letter-spacing:-1.8px;margin:0 0 18px;font-weight:750}
+    .lead{margin:0;color:var(--muted);font-size:16px;max-width:720px;line-height:1.9}
+    .print-button{border:1px solid var(--line);border-radius:10px;background:var(--paper);padding:10px 16px;white-space:nowrap;font-size:13px;color:var(--ink);box-shadow:0 2px 3px #20362f03}
+    .print-button:hover{border-color:#8aa88d;background:var(--soft)}
+    .jumpnav{display:flex;flex-wrap:wrap;gap:8px 24px;padding:16px 0 22px;font-size:13px;color:var(--muted)}
+    .jumpnav a{text-decoration:none}
+    .jumpnav a:hover{color:var(--green)}
+    section{margin-top:38px}
+    .section-heading{display:flex;align-items:baseline;gap:13px;margin-bottom:16px}
+    .section-number{color:var(--green);font-size:12px;letter-spacing:1px;font-weight:750}
+    h2{font-size:23px;letter-spacing:-.5px;line-height:1.4;margin:0}
+    h3{font-size:16px;line-height:1.6;margin:0 0 7px;font-weight:700}
+    p{margin:0}
+    .section-intro{color:var(--muted);font-size:14px;margin:-4px 0 20px}
+    .diagram{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:26px 28px 22px;box-shadow:0 8px 32px #20362f03}
+    .diagram-caption{display:flex;justify-content:space-between;align-items:center;gap:16px;padding-bottom:20px;margin-bottom:22px;border-bottom:1px solid #e7ece6;font-size:12px;color:var(--muted)}
+    .legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+    .legend-item{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+    .dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:#519267}
+    .dot.blue{background:#6488ae}.dot.amber{background:#c9a05c}
+    .layer{display:grid;grid-template-columns:94px minmax(0,1fr);gap:18px;align-items:start}
+    .layer-label{font-size:12px;color:var(--muted);padding-top:16px;line-height:1.6}
+    .layer-label b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px}
+    .layer-content{min-width:0}
+    .grid-three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .node{padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:#fbfcfa;min-width:0}
+    .node h3{font-size:15px;margin-bottom:3px}
+    .node p{font-size:12px;color:var(--muted);line-height:1.8}
+    .node .node-overline{display:block;font-size:10px;font-weight:750;letter-spacing:1.1px;color:var(--green);margin-bottom:5px}
+    .connector{display:flex;align-items:center;justify-content:center;gap:12px;margin:12px 0 12px 112px;font-size:11px;letter-spacing:.5px;color:var(--muted)}
+    .connector::before,.connector::after{content:"";width:35px;height:1px;background:var(--line)}
+    .connector .arrow{color:var(--green);font-size:19px;line-height:1}
+    .core{border:1px solid #abc4ae;background:#f5f9f2;border-radius:15px;overflow:hidden}
+    .core-top{display:flex;justify-content:space-between;gap:16px;padding:13px 18px;background:#eaf2e6;border-bottom:1px solid #d7e3d0;align-items:center}
+    .core-top strong{font-size:14px}.core-top small{font-size:11px;color:#54704c}
+    .core-grid{display:grid;grid-template-columns:1.12fr 1fr 1fr;gap:0}
+    .core-module{padding:17px 18px;border-right:1px solid #dce6d5;min-width:0}
+    .core-module:last-child{border-right:0}
+    .module-num{font-size:10px;letter-spacing:1.5px;color:#6d8765;margin-bottom:5px}
+    .core-module p{font-size:12px;color:#5c7056;line-height:1.9}
+    .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px}
+    .chip{display:inline-block;border:1px solid #d8e2d2;background:#fff9;border-radius:5px;padding:1px 6px;color:#527048;font-size:10px;line-height:1.9}
+    .core-footer{padding:10px 18px;border-top:1px solid #d7e3d0;font-size:11px;color:#5c7056;line-height:1.9;background:#edf4e9}
+    .support .node{background:var(--blue-bg);border-color:#d8e2ed}
+    .support .node h3{color:var(--blue)}
+    .resource-strip{margin-top:12px;background:#f7f8f5;border:1px solid var(--line);border-radius:9px;padding:10px 14px;font-size:11px;color:var(--muted)}
+    .extension{border:1px dashed #d5bd94;background:var(--amber-bg);border-radius:12px;padding:14px 18px;margin:21px 0 0 112px}
+    .extension-title{display:flex;gap:9px;align-items:center;margin-bottom:7px;font-size:13px;font-weight:700;color:#80591f}
+    .optional{border:1px solid #decaa7;border-radius:4px;font-size:10px;padding:0 5px;line-height:1.7;font-weight:500}
+    .extension p{font-size:12px;color:#816b4a;line-height:1.9}
+    .mono{font-family:"SFMono-Regular",Consolas,monospace;font-size:.94em}
+    .diagram-note{margin-top:20px;font-size:11px;color:var(--muted);line-height:1.8}
+    .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    .card{border:1px solid var(--line);background:var(--paper);border-radius:var(--radius);padding:21px 22px;min-width:0}
+    .card-no{display:inline-flex;align-items:center;justify-content:center;width:27px;height:27px;border-radius:7px;background:var(--soft);color:var(--green);font-size:12px;font-weight:750;margin-bottom:13px}
+    .card p{font-size:13px;color:var(--muted);line-height:1.9}
+    .card .detail{margin-top:11px;padding-top:10px;border-top:1px solid #edf0e9;font-size:12px;color:#426b52}
+    .flow-list{border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);overflow:hidden}
+    .flow{display:grid;grid-template-columns:140px 1fr;gap:18px;padding:21px 24px;border-bottom:1px solid #e7ece6}
+    .flow:last-child{border-bottom:0}
+    .flow-label{font-size:14px;font-weight:700;padding-top:1px}
+    .flow-label span{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:4px}
+    .steps{display:flex;align-items:center;flex-wrap:wrap;gap:5px 7px;margin-bottom:7px;font-size:12px}
+    .step{border-radius:5px;background:#f0f4ec;padding:3px 8px;color:#345d3f}
+    .step-arrow{color:#91a08c}
+    .flow p{color:var(--muted);font-size:12px;line-height:1.9}
+    .deployment{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}
+    .deploy-box{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:23px}
+    .deploy-box.local{border-style:dashed;border-color:#d8c5a3;background:#fdfaf4}
+    .deploy-label{font-size:10px;letter-spacing:1.7px;color:var(--green);font-weight:750;margin-bottom:8px}
+    .deploy-label.local{color:var(--amber)}
+    .deploy-box h3{margin-bottom:12px}
+    .deploy-row{display:grid;grid-template-columns:105px 1fr;gap:13px;font-size:12px;padding:8px 0;border-top:1px solid #e8ede5}
+    .deploy-row strong{font-weight:600}.deploy-row span{color:var(--muted)}
+    .tech-note{margin-top:15px;padding:14px 18px;background:#ecf1e8;border-radius:10px;color:#53674e;font-size:12px;line-height:1.9}
+    .build-path{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;padding:23px 0 5px}
+    .build-step{padding-left:18px;border-left:2px solid #afc5a5}
+    .build-step b{display:block;font-size:13px;margin-bottom:5px}.build-step p{font-size:12px;color:var(--muted);line-height:1.9}
+    footer{border-top:1px solid var(--line);margin-top:39px;padding-top:19px;display:flex;justify-content:space-between;gap:15px;font-size:11px;line-height:1.9;color:var(--muted)}
+    @media(max-width:800px){.page{padding:0 24px 32px}.hero{padding-top:32px}.topnote{display:none}.diagram{padding:20px 18px}.layer{grid-template-columns:1fr;gap:9px}.layer-label{padding-top:0;display:flex;gap:8px;align-items:baseline}.layer-label b{margin:0}.connector{margin-left:0}.extension{margin-left:0}.core-module{padding:14px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.deployment{grid-template-columns:1fr}.flow{grid-template-columns:110px 1fr;padding:18px}.build-path{gap:16px}}
+    @media(max-width:560px){body{font-size:14px}.page{padding:0 16px 26px}.topbar{min-height:72px}.hero{display:block;padding-bottom:18px}h1{letter-spacing:-1px;font-size:34px}.lead{font-size:14px}.print-button{margin-top:18px}.jumpnav{gap:8px 16px;padding-bottom:4px}section{margin-top:30px}h2{font-size:21px}.diagram{padding:18px 14px;border-radius:15px}.diagram-caption{display:block;padding-bottom:13px;margin-bottom:16px}.legend{margin-top:9px}.grid-three{grid-template-columns:1fr;gap:8px}.node{padding:12px 14px}.node h3{font-size:14px}.core-top{display:block;padding:12px 14px}.core-top small{display:block;margin-top:3px}.core-grid{grid-template-columns:1fr}.core-module{border-right:0;border-bottom:1px solid #dce6d5}.core-module:last-child{border-bottom:0}.module-num{display:none}.chips{margin-top:8px}.core-footer{padding:10px 14px}.extension{padding:12px 14px}.cards{grid-template-columns:1fr;gap:10px}.card{padding:18px}.card-no{margin-bottom:9px}.flow{grid-template-columns:1fr;gap:9px}.flow-label span{display:inline;margin-left:8px}.steps{font-size:11px;gap:5px}.deployment{gap:12px}.deploy-box{padding:18px}.deploy-row{grid-template-columns:90px 1fr;gap:10px}.build-path{grid-template-columns:1fr;gap:19px;padding-top:15px}footer{display:block}footer span{display:block;margin-top:4px}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+    @page{size:A4;margin:13mm}
+    @media print{body{background:#fff;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{max-width:none;padding:0}.topbar{min-height:45px}.brand{font-size:14px}.brand svg{width:27px;height:27px}.topnote{display:block;font-size:9px}.hero{display:block;padding:22px 0 9px}h1{font-size:29px;margin-bottom:10px}.lead{font-size:11px;line-height:1.7;max-width:none}.print-button,.jumpnav{display:none}section{margin-top:24px}.section-heading{margin-bottom:11px}h2{font-size:18px}.section-intro{font-size:11px;margin-bottom:12px}.diagram{padding:16px;border-radius:12px;box-shadow:none;break-inside:avoid}.diagram-caption{font-size:9px;padding-bottom:11px;margin-bottom:12px}.layer{grid-template-columns:63px minmax(0,1fr);gap:12px}.layer-label{font-size:9px;padding-top:10px}.layer-label b{font-size:10px}.grid-three{gap:8px}.node{padding:9px 10px;border-radius:8px}.node h3{font-size:11px}.node p{font-size:9px;line-height:1.7}.node .node-overline{font-size:8px;margin-bottom:2px}.connector{margin:6px 0 6px 75px;font-size:8px}.connector .arrow{font-size:15px}.core-top{padding:8px 11px}.core-top strong{font-size:11px}.core-top small{font-size:8px}.core-module{padding:10px 11px}.core-module h3{font-size:11px}.core-module p{font-size:9px;line-height:1.75}.module-num{font-size:8px;margin-bottom:3px}.chips{gap:4px;margin-top:7px}.chip{font-size:8px;padding:0 4px}.core-footer{font-size:8px;padding:7px 11px}.resource-strip{margin-top:8px;font-size:8px;padding:7px 10px}.extension{margin:12px 0 0 75px;padding:9px 11px}.extension-title{font-size:10px;margin-bottom:4px}.optional{font-size:8px}.extension p{font-size:9px}.diagram-note{font-size:8px;margin-top:11px}.cards{gap:10px}.card{padding:13px 14px;border-radius:10px;break-inside:avoid}.card-no{width:21px;height:21px;font-size:9px;margin-bottom:8px}h3{font-size:12px}.card p{font-size:10px}.card .detail{font-size:9px;margin-top:8px;padding-top:7px}.flow{padding:13px 15px;grid-template-columns:98px 1fr;gap:12px;break-inside:avoid}.flow-label{font-size:11px}.flow-label span{font-size:8px}.steps{font-size:9px;gap:4px}.step{padding:2px 6px}.flow p{font-size:9px}.deployment{gap:11px}.deploy-box{padding:15px;border-radius:10px;break-inside:avoid}.deploy-box h3{margin-bottom:8px}.deploy-label{font-size:8px}.deploy-row{grid-template-columns:77px 1fr;font-size:9px;padding:6px 0;gap:8px}.tech-note{font-size:9px;padding:10px 13px;margin-top:11px}.build-path{padding-top:13px;gap:17px}.build-step{padding-left:12px;break-inside:avoid}.build-step b{font-size:10px}.build-step p{font-size:9px}footer{font-size:8px;margin-top:24px;padding-top:12px}.section-heading{break-after:avoid}}
+    @media print{
+      #capabilities,#deployment{break-before:page}
+      .layer-label{display:block}
+      .cards{grid-template-columns:repeat(3,minmax(0,1fr))}
+      .deployment{grid-template-columns:1.55fr 1fr}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="10" fill="#244d3a"/><path d="M10 10.5h7a5 5 0 0 1 0 10h-3.5V26H10V10.5Zm3.5 3.2v3.6H17a1.8 1.8 0 1 0 0-3.6h-3.5Z" fill="#f5f7ee"/><circle cx="24" cy="24" r="3" fill="#bdd5a6"/></svg>
+        <span>Product Expert</span>
+      </div>
+      <div class="topnote">Product architecture · Overview</div>
+    </header>
+
+    <main>
+      <div class="hero">
+        <div>
+          <p class="eyebrow">产品知识工作台</p>
+          <h1>产品架构图</h1>
+          <p class="lead">将产品资料整理成持续更新的知识库，通过网页、企业微信和 MCP 提供 AI 问答，并扩展文档处理、行业研究与固件分发。</p>
+        </div>
+        <button class="print-button" type="button" id="print-document">打印 / 保存 PDF ↗</button>
+      </div>
+      <nav class="jumpnav" aria-label="文档目录">
+        <a href="#overview">01 架构总览</a><a href="#capabilities">02 核心能力</a><a href="#workflows">03 工作流程</a><a href="#deployment">04 部署关系</a><a href="#build">05 搭建顺序</a>
+      </nav>
+
+      <section id="overview" aria-labelledby="overview-title">
+        <div class="section-heading"><span class="section-number">01</span><h2 id="overview-title">一张图看清产品</h2></div>
+        <p class="section-intro">多种入口连接同一套知识服务；知识维护与研究使用各自的任务流程。</p>
+        <figure class="diagram" style="margin:0" aria-label="产品分层架构图，从上至下为使用入口、产品主服务、数据与外部依赖，另有可选的本机固件服务">
+          <figcaption class="diagram-caption">
+            <span>PRODUCT EXPERT / 逻辑架构</span>
+            <span class="legend"><span class="legend-item"><i class="dot"></i>核心产品</span><span class="legend-item"><i class="dot blue"></i>数据与依赖</span><span class="legend-item"><i class="dot amber"></i>可选扩展</span></span>
+          </figcaption>
+
+          <div class="layer">
+            <div class="layer-label"><b>使用入口</b>用户与集成</div>
+            <div class="layer-content grid-three">
+              <div class="node"><span class="node-overline">WEB</span><h3>网页工作台</h3><p>对话、附件、知识维护<br>研究与管理设置</p></div>
+              <div class="node"><span class="node-overline">WECOM</span><h3>企业微信机器人</h3><p>Bridge 接收私聊与群聊<br>回传回答、文件与通知</p></div>
+              <div class="node"><span class="node-overline">MCP</span><h3>外部 AI 客户端</h3><p>文本问答、任务查询与取消<br>只读知识能力</p></div>
+            </div>
+          </div>
+          <div class="connector"><span class="arrow" aria-hidden="true">↓</span>身份校验 · 请求路由 · 会话与任务管理</div>
+          <div class="layer">
+            <div class="layer-label"><b>产品主服务</b>应用与执行</div>
+            <div class="layer-content core">
+              <div class="core-top"><strong>产品知识与 AI 工作流</strong><small>同一主服务中的不同模块</small></div>
+              <div class="core-grid">
+                <div class="core-module"><div class="module-num">A / CONVERSATION</div><h3>AI 问答与工具执行</h3><p>组织提示词、技能与记忆<br>检索知识、调用模型与工具<br>处理附件并交付回答或文件</p><div class="chips"><span class="chip">独立会话</span><span class="chip">受控工具</span><span class="chip">按需检索</span></div></div>
+                <div class="core-module"><div class="module-num">B / KNOWLEDGE</div><h3>知识导入与维护</h3><p>接收上传与外部来源<br>转换文档、判断版本与归属<br>校验并发布知识更新</p><div class="chips"><span class="chip">Sync</span><span class="chip">版本校验</span><span class="chip">维护报告</span></div></div>
+                <div class="core-module"><div class="module-num">C / RESEARCH</div><h3>行业研究工作区</h3><p>发现线索、读取公开正文<br>结合产品资料分析<br>独立审核后保存研究条目</p><div class="chips"><span class="chip">独立任务</span><span class="chip">证据审核</span><span class="chip">预算控制</span></div></div>
+              </div>
+              <div class="core-footer">共用支撑：能力开关与权限 · 有界队列 · 文件处理 · 执行记录与用量 · 完成通知</div>
+            </div>
+          </div>
+          <div class="connector"><span class="arrow" aria-hidden="true">↕</span>读取知识 · 模型推理 · 工具调用 · 保存结果</div>
+          <div class="layer support">
+            <div class="layer-label"><b>数据与依赖</b>内容与基础设施</div>
+            <div class="layer-content">
+              <div class="grid-three">
+                <div class="node"><h3>知识库与长期记忆</h3><p>Markdown 原文与产品索引<br>专家技能、主记忆与额外记忆</p></div>
+                <div class="node"><h3>运行数据与文件</h3><p>会话、附件、生成文件<br>报告、任务检查点与用量账本</p></div>
+                <div class="node"><h3>模型与外部服务</h3><p>文本 / 视觉模型、搜索与网页<br>资料来源、文件库与 R2 存储</p></div>
+              </div>
+              <div class="resource-strip">资料来源 → 导入待处理区 → Sync 校验发布 → 正式知识库 → 后续问答按需读取</div>
+            </div>
+          </div>
+          <div class="extension">
+            <div class="extension-title">本机固件服务 <span class="optional">可选 · 独立进程</span></div>
+            <p>企业微信 <span class="mono">/firmware</span> → 主服务匹配与确认 → 安全隧道调用本机服务 → 下载与上传 → 资料库发布校验 → 返回链接、清理本机缓存。</p>
+          </div>
+          <p class="diagram-note">箭头表示主要调用和数据关系；图中的模块不等于独立微服务。模型、搜索与对象存储通过外部接口接入，启用范围由配置决定。</p>
+        </figure>
+      </section>
+
+      <section id="capabilities" aria-labelledby="capabilities-title">
+        <div class="section-heading"><span class="section-number">02</span><h2 id="capabilities-title">六个核心能力</h2></div>
+        <div class="cards">
+          <article class="card"><span class="card-no">1</span><h3>产品知识问答</h3><p>根据问题读取相关产品资料、专家技能和记忆，支持跨资料比较、多轮追问及资料链接查询。</p><p class="detail">知识依据来自已整理的文件与索引。</p></article>
+          <article class="card"><span class="card-no">2</span><h3>知识持续更新</h3><p>手动上传或导入外部资料，经文档转换、产品归属与版本判断、发布校验后，更新正式知识库。</p><p class="detail">保留报告；歧义与特定覆盖操作交由管理员确认。</p></article>
+          <article class="card"><span class="card-no">3</span><h3>文档读取与生成</h3><p>处理 PDF、Word、PPT、Excel、图片与文本附件，按已启用的工具读取内容、填写模板或生成新文件。</p><p class="detail">原件、临时处理和输出分别管理。</p></article>
+          <article class="card"><span class="card-no">4</span><h3>行业研究</h3><p>围绕产品业务发现公开信息，保留正文证据，结合内部资料分析，经独立审核形成可追溯的情报库。</p><p class="detail">使用独立研究上下文、预算和历史记录。</p></article>
+          <article class="card"><span class="card-no">5</span><h3>固件分发</h3><p>从用户描述提取型号、日期和版本序号，匹配候选，选包与确认后由本机服务执行传输。</p><p class="detail">专用命令进入，任务进度与完成链接回传。</p></article>
+          <article class="card"><span class="card-no">6</span><h3>管理与运行反馈</h3><p>集中管理提示词、记忆、工具开关、联系人与群组，并查看工具记录、任务报告和模型用量。</p><p class="detail">Sync 完成通知可分别投递个人完整版与群摘要。</p></article>
+        </div>
+      </section>
+
+      <section id="workflows" aria-labelledby="workflows-title">
+        <div class="section-heading"><span class="section-number">03</span><h2 id="workflows-title">四条主要工作流程</h2></div>
+        <div class="flow-list">
+          <article class="flow"><div class="flow-label">一次知识问答<span>用户发起</span></div><div><div class="steps"><span class="step">接收问题</span><span class="step-arrow">→</span><span class="step">加载技能与记忆</span><span class="step-arrow">→</span><span class="step">检索 / 工具 / 推理</span><span class="step-arrow">→</span><span class="step">回答或文件</span></div><p>每个会话独立保存历史。模型根据问题选择已开放的工具；同一轮可多次检索，最后交付结果并记录执行情况。</p></div></article>
+          <article class="flow"><div class="flow-label">一份资料入库<span>手动或定时触发</span></div><div><div class="steps"><span class="step">导入待处理区</span><span class="step-arrow">→</span><span class="step">转换与 AI 判断</span><span class="step-arrow">→</span><span class="step">后端校验 / 必要确认</span><span class="step-arrow">→</span><span class="step">发布与通知</span></div><p>导入和 Sync 是两个步骤。AI 提出更新方案，后端检查内容、路径、索引及版本关系，再提交正式更新；存在业务歧义时保留报告等待处理。</p></div></article>
+          <article class="flow"><div class="flow-label">一次行业研究<span>管理员发起</span></div><div><div class="steps"><span class="step">发现线索</span><span class="step-arrow">→</span><span class="step">读取并核实正文</span><span class="step-arrow">→</span><span class="step">独立审核</span><span class="step-arrow">→</span><span class="step">保存 / 导出条目</span></div><p>搜索结果作为线索，实际正文与内部资料构成依据。通过审核的条目逐条保存，研究进度和消费单独记录。</p></div></article>
+          <article class="flow"><div class="flow-label">一次固件分发<span>专用命令触发</span></div><div><div class="steps"><span class="step">提取条件并匹配</span><span class="step-arrow">→</span><span class="step">选择与确认</span><span class="step-arrow">→</span><span class="step">本机下载 / 上传</span><span class="step-arrow">→</span><span class="step">发布校验与交付</span></div><p>同一时间处理一个固件请求，按任务状态定时反馈进度。上传、资料库发布及校验全部成功后删除本机缓存；失败重试所需文件保留。</p></div></article>
+        </div>
+      </section>
+
+      <section id="deployment" aria-labelledby="deployment-title">
+        <div class="section-heading"><span class="section-number">04</span><h2 id="deployment-title">部署时各部分放在哪里</h2></div>
+        <p class="section-intro">以一台应用服务器承载核心服务，再按需连接外部模型、资料来源和本机执行端。</p>
+        <div class="deployment">
+          <article class="deploy-box"><div class="deploy-label">APPLICATION SERVER</div><h3>应用服务器</h3><div class="deploy-row"><strong>主应用进程</strong><span>网页与 API、MCP 接口、问答运行时、知识维护、研究与管理功能。</span></div><div class="deploy-row"><strong>企微 Bridge</strong><span>独立进程，负责接收消息、调用主服务和投递回答、文件与通知。</span></div><div class="deploy-row"><strong>定时与导入</strong><span>定时器触发资料导入进程或 Sync 调度；Sync 使用主服务的维护流程。</span></div><div class="deploy-row"><strong>持久化目录</strong><span>存放正式知识、记忆、会话、附件、报告与任务状态，独立于代码管理。</span></div></article>
+          <article class="deploy-box local"><div class="deploy-label local">OPTIONAL LOCAL WORKER</div><h3>本机固件执行端</h3><div class="deploy-row"><strong>本机服务</strong><span>Python 服务执行固件下载、上传、校验及成功后的缓存清理。</span></div><div class="deploy-row"><strong>连接方式</strong><span>通过 Cloudflare Tunnel 与独立凭证供主服务调用；上传按配置走代理。</span></div><div class="deploy-row"><strong>状态与交付</strong><span>本机 SQLite 保存任务检查点；R2 保存文件并提供下载链接。服务离线时入口显示维护中。</span></div></article>
+        </div>
+        <div class="tech-note"><strong>当前技术组成：</strong>主服务为 Node.js + TypeScript，Agent 基于 Pi SDK；网页使用 HTML / CSS / JavaScript；文档处理结合转换工具与可选视觉模型；主服务以 Markdown、JSON / JSONL 与文件目录保存内容和状态。模型通过兼容接口接入，文件分发使用对象存储。</div>
+      </section>
+
+      <section id="build" aria-labelledby="build-title">
+        <div class="section-heading"><span class="section-number">05</span><h2 id="build-title">参考搭建的推荐顺序</h2></div>
+        <div class="build-path">
+          <div class="build-step"><b>第一步 · 跑通知识问答</b><p>准备模型接口、专家技能与最小知识库，先让网页完成“提问 → 检索 → 回答”。明确知识、记忆和会话历史各自的保存位置。</p></div>
+          <div class="build-step"><b>第二步 · 建立更新闭环</b><p>增加资料上传、文档转换、Sync 校验与报告，再接入企业微信。按需配置定时导入、自动 Sync 和完成通知。</p></div>
+          <div class="build-step"><b>第三步 · 扩展业务能力</b><p>逐项开放文档工具、MCP、行业研究和本机固件服务。每项分别配置权限、状态记录与结果校验，按需启用。</p></div>
+        </div>
+        <div class="tech-note"><strong>实现时保留的边界：</strong>管理员登录与机器调用凭证分开；普通问答、知识维护和研究使用各自的工具权限；主记忆通过管理入口维护，聊天记忆工具写额外记忆。知识文件、运行数据和凭据独立管理，配置能力开关后由后端执行约束。</div>
+      </section>
+    </main>
+    <footer><span>Product Expert · 产品架构说明<br>依据当前实现整理，聚焦模块职责与主要数据流。</span><span>独立 HTML 文档 · 无外部资源依赖<br>支持离线阅读、手机浏览与打印。</span></footer>
+  </div>
+  <script>
+    document.getElementById('print-document').addEventListener('click', function () { window.print(); });
+  </script>
+</body>
+</html>

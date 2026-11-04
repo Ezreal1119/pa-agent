@@ -34,14 +34,34 @@ ${text ?? '未设置'}
 // The SDK supplies text rather than mention identities. Match only the configured
 // bot name at the edges; never remove arbitrary @content or change ordinary chat.
 function firmwareInputText(body, text, botName) {
-  if (body.chattype !== 'group' || body.msgtype !== 'text') return text;
+  if (body.msgtype !== 'text') return text;
+  // Copy/paste and mentions can carry zero-width space, word joiner or BOM.
+  // Keep ordinary chat untouched; this result is used only by firmware controls.
+  const cleaned = text.replace(/[\u200b\u2060\ufeff]/gu, '').trim();
+  const isCancel = value => /^(取消|cancel)$/i.test(value);
+  if (body.chattype !== 'group') return isCancel(cleaned) ? cleaned : text;
+  text = cleaned;
   const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const space = '[\\t\\r\\n\\p{Zs}\\u2028\\u2029]';
   const prefix = new RegExp('^@' + escaped + '(?:' + space + '+|$)', 'u');
   const suffix = new RegExp('(?:^|' + space + '+)@' + escaped + '$', 'u');
   let prior;
-  do { prior = text; text = text.replace(prefix, '').replace(suffix, '').trim(); } while (text !== prior);
+  do {
+    prior = text;
+    text = text.replace(prefix, '').replace(suffix, '').trim();
+    // A zero-width separator may leave a mention touching the cancel word.
+    // Accept that only for a complete cancel control and this exact bot name.
+    const mention = '@' + botName;
+    if (text.startsWith(mention) && isCancel(text.slice(mention.length).trim())) text = text.slice(mention.length).trim();
+    if (text.endsWith(mention) && isCancel(text.slice(0, -mention.length).trim())) text = text.slice(0, -mention.length).trim();
+  } while (text !== prior);
   return text;
+}
+
+function firmwareMentionNotice(body, text) {
+  if (body.chattype === 'group' && /^(?:取消|cancel)\s*@/i.test(text)) {
+    return { kind: 'notice', text: '取消尚未执行：未识别消息中的机器人提及，请检查机器人显示名配置后重试。' };
+  }
 }
 
 /** Recognize controls before inbound trimming, file downloads, or Agent capacity checks. */
@@ -60,7 +80,8 @@ export function commandInput(body, scope, userId, botName = DEFAULT_BOT_NAME) {
   const invalidFirmwareText = raw === undefined || body.quote || raw.includes('\0') || /[\r\n\u2028\u2029]/u.test(firmwareText);
   if (/^\/firmware(?:\s|$)/u.test(firmwareText)) {
     if (invalidFirmwareText || raw.length > 510) return { kind: 'notice', text: '请用纯文本发送 /firmware 或 /firmware 固件需求，@机器人可单独一行。' };
-    return { kind: 'firmware', command: true, text: firmwareText.replace(/^\/firmware(?:\s+|$)/u, '') };
+    const text = firmwareText.replace(/^\/firmware(?:\s+|$)/u, '');
+    return firmwareMentionNotice(body, text) ?? { kind: 'firmware', command: true, text };
   }
   if (text.startsWith('/clear') || text === '/new' || text === '新建对话') return { kind: 'reset' };
   if (text.startsWith('/role')) return { kind: 'open' };
@@ -69,7 +90,7 @@ export function commandInput(body, scope, userId, botName = DEFAULT_BOT_NAME) {
   if (text.startsWith('/welcome')) return { kind: 'welcome' };
   if (scope.firmwareUser === userId && scope.firmwareUntil > Date.now()) {
     if (invalidFirmwareText || !firmwareText || raw.length > 500) return { kind: 'notice', text: '请输入一行固件需求、候选序号、“确认”或“取消”；@机器人可单独一行。' };
-    return { kind: 'firmware', command: false, text: firmwareText };
+    return firmwareMentionNotice(body, firmwareText) ?? { kind: 'firmware', command: false, text: firmwareText };
   }
   if (scope.awaitingUser !== userId) return;
   if (scope.awaitingMode === 'files') {

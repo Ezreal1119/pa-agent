@@ -146,6 +146,46 @@ test('firmware accepts blank lines around its body and edge bot mentions without
   assert.deepEqual(commandInput(message('\n\n' + screenshot + '\n').body, scope, 'alice'), { kind: 'firmware', command: false, text: screenshot });
 });
 
+test('firmware cancellation tolerates invisible separators and exact adjacent bot mentions', () => {
+  const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
+  const parse = (text, name = 'AI Patrick') => commandInput(message(text, 'alice', 'g').body, scope, 'alice', name);
+  for (const invisible of ['\u200b', '\u2060', '\ufeff']) {
+    for (const text of [
+      `取${invisible}消 @AI Patrick${invisible}`,
+      `取消${invisible}@AI Patrick`,
+      `@AI Patrick${invisible}取消`,
+      `取消\n${invisible}\n@AI Pa${invisible}trick`,
+    ]) assert.deepEqual(parse(text), { kind: 'firmware', command: false, text: '取消' });
+    assert.deepEqual(parse(`/firmware 取${invisible}消 @AI Patrick`), { kind: 'firmware', command: true, text: '取消' });
+    assert.deepEqual(commandInput(message(`取${invisible}消`).body, scope, 'alice'), { kind: 'firmware', command: false, text: '取消' });
+  }
+  assert.equal(parse('取消@AI Patrick').text, '取消');
+  assert.equal(parse('@AI Patrick取消').text, '取消');
+  assert.equal(parse('CANCEL@AI Patrick').text, 'CANCEL');
+  assert.equal(parse('取消@固件助手 (EN)+', '固件助手 (EN)+').text, '取消');
+  assert.equal(parse('不取消@AI Patrick').text, '不取消@AI Patrick');
+  assert.equal(parse('取消不了@AI Patrick').text, '取消不了@AI Patrick');
+  assert.equal(commandInput(message('取消\u200b@AI Patrick', 'bob', 'g').body, scope, 'bob'), undefined);
+  assert.equal(commandInput(message('取\u200b消 @AI Patrick', 'alice', 'g').body, {}, 'alice'), undefined);
+  assert.equal(commandInput(message('取消\u200b@AI Patrick').body, scope, 'alice').text, '取消\u200b@AI Patrick', 'private mentions keep their original meaning');
+});
+
+test('unmatched cancel mentions give an explicit non-cancellation notice and preserve input boundaries', () => {
+  const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
+  const parse = (text, name = 'AI Patrick') => commandInput(message(text, 'alice', 'g').body, scope, 'alice', name);
+  for (const text of ['取消 @Other Bot', '取消 @AI Patrick Jr', '取消 @其他人 @AI Patrick', '/firmware 取消 @Other Bot']) {
+    const parsed = parse(text); assert.equal(parsed.kind, 'notice'); assert.match(parsed.text, /取消尚未执行.*显示名配置/);
+  }
+  assert.equal(parse('取消 @AI Patrick', 'Other Bot').kind, 'notice');
+  assert.equal(parse('取\u200b消\n其他内容\n@AI Patrick').kind, 'notice');
+  assert.equal(parse('取\u200b消\0 @AI Patrick').kind, 'notice');
+  assert.equal(parse('取消' + '\u200b'.repeat(501) + '@AI Patrick').kind, 'notice');
+  const quoted = message('取\u200b消 @AI Patrick', 'alice', 'g'); quoted.body.quote = { text: { content: 'quoted' } };
+  assert.equal(commandInput(quoted.body, scope, 'alice').kind, 'notice');
+  const normal = message('普通问题\u200b @AI Patrick', 'alice', 'g');
+  assert.equal(commandInput(normal.body, {}, 'alice'), undefined);
+});
+
 test('group mentions do not bypass firmware plain-text, quote or length boundaries', () => {
   const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
   for (const text of ['/firmware\n' + filename + '\n@AI Patrick', '@AI Patrick /firmware\0']) {
@@ -211,6 +251,17 @@ test('group Web + Bridge flow handles blank-line mentions, numbered choice, owne
   await send('@AI Patrick /firmware'); await send('取消 @AI Patrick'); assert.equal(bot.texts.at(-1), '已取消固件流程。');
   await send('@固件助手 (EN)+ /firmware', 'alice', 'g', 'custom'); assert.match(bot.texts.at(-1), /请输入 OS/);
   await send('取消 @固件助手 (EN)+', 'alice', 'g', 'custom'); assert.equal(bot.texts.at(-1), '已取消固件流程。');
+  // Reproduce the screenshot at the confirmation phase, before any transfer.
+  for (const text of ['取消 @AI Patrick', '取\u200b消\u2060@AI Patrick\ufeff', '@AI Patrick\u200b取消', '取消\n\ufeff\n@AI Patrick']) {
+    await send('/firmware ' + filename + ' @AI Patrick');
+    await until(async () => (await state()).active?.phase === 'choose');
+    await send('2 @AI Patrick'); assert.equal((await state()).active.phase, 'confirm');
+    await send('取消 @Other Bot'); assert.match(bot.texts.at(-1), /取消尚未执行/); assert.equal((await state()).active.phase, 'confirm');
+    await send('/firmware 取\u200b消 @AI Patrick', 'bob'); assert.match(bot.texts.at(-1), /任务处理中/);
+    await send(text); assert.equal((await state()).active, undefined);
+    assert.equal(bridge.scope(JSON.stringify(['bot', 'group', 'g'])).firmwareUser, undefined);
+    assert.equal(submissions, 1); assert.equal(cancellations, 1);
+  }
   for (const text of bot.texts) assert.doesNotMatch(text, /FTP|路径|R2/);
 });
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CompletionJournal } from "../sync-notifications/journal.js";
+import { briefSyncSummary } from "../sync-notifications/summary.js";
 import path from "node:path";
 import { atomic, readJson, safePath, SyncError } from "./core.js";
 import type { Incoming, SyncService } from "./service.js";
@@ -51,7 +52,7 @@ export class AutoSync {
     const snapshots = [...(run.batchResults ?? [])];
     for (const jobId of run.jobIds) if (!snapshots.some(batch => batch.jobId === jobId)) {
       const report = this.sync.summary(jobId);
-      if (report.execution?.autoRunId === run.id) snapshots.push({ jobId, scope: report.execution.id, items: report.items.map(item => ({ name: item.name, status: item.status, summary: item.summary?.slice(0,400) })) });
+      if (report.execution?.autoRunId === run.id) snapshots.push({ jobId, scope: report.execution.id, items: report.items.map(item => ({ name: item.name, status: item.status, summary: briefSyncSummary(item.summary).join("\n") || undefined })) });
     }
     const items = snapshots.flatMap(batch => batch.items);
     await new CompletionJournal(this.sync.options.dataDir).record({ version: 1, id: run.id, origin: "auto", started: run.started, finished: run.finished, status: run.status,
@@ -111,7 +112,7 @@ export class AutoSync {
     for (let offset = 0; offset < snapshot.length; offset += 50) {
       await this.sync.waitFor(jobId);
       const job = this.sync.summary(jobId);
-      (run.batchResults ??= []).push({ jobId, scope: job.execution?.id, items: job.items.map(item => ({ name: item.name, status: item.status, summary: item.summary?.slice(0,400) })) });
+      (run.batchResults ??= []).push({ jobId, scope: job.execution?.id, items: job.items.map(item => ({ name: item.name, status: item.status, summary: briefSyncSummary(item.summary).join("\n") || undefined })) });
       for (const item of job.items) run.counts[item.status] = (run.counts[item.status] ?? 0) + 1;
       await this.save(run);
       if (this.closed || ["stopped", "stopping", "interrupted"].includes(job.status)) {

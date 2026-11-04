@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { atomic, readJson } from "../knowledge-sync/core.js";
 import { UsageLedger, type CostSummary } from "../usage/ledger.js";
 import { CompletionJournal, type SyncCompletion } from "./journal.js";
+import { briefSyncSummary } from "./summary.js";
 
 export type Destination = { botId: string; recipient: string };
 const identifier = (v: unknown): v is string => typeof v === "string" && !!v && v.length <= 256 && !/[\s\u0000-\u001f\u007f]/.test(v);
@@ -27,22 +28,6 @@ type State = { version: 1; destination: string; boundary: string; seen: string[]
 const beijing = (value: string) => new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(value));
 const plain = (value: string) => value.replace(/[\u0000-\u001f\u007f<>\[\]*`@]/g, " ").replace(/\s+/g, " ").trim().slice(0, 255);
 const labels: Record<string, string> = { published: "已入库", duplicate: "重复/跳过", needs_review: "待人工处理", awaiting_confirmation: "待确认", failed: "失败", stopped: "已停止", interrupted: "已中断", completed: "已结束" };
-function briefSummary(value?: string) {
-  if (!value) return [];
-  // Keep only short readable clauses. Internal paths/keys are not rewritten into
-  // invented business facts; the full original remains in the web report.
-  const technical = /(?:https?:\/\/|[A-Za-z]:\\|(?:^|\s)[./~]*[\p{L}\p{N}_.-]+[/\\]|[\p{L}\p{N}_.-]+[/\\][\p{L}\p{N}_.-]+|(?:^|\s)\/[\p{L}\p{N}_.-]+|[\w.-]+[ _-]\d{8,14}\b|\b(?:index|SKILL|SYNC_PROMPT)\.md\b|\.(?:jsonl?|md)\b|Current Source Coverage|source[_ ]?(?:Rows?|Key)|oldPaths?|newPath|manifest|路径|节点|覆盖表|索引键|行改为键|\bshared\b)/iu;
-  const clauses = value
-    .replace(/[（(][^（）()\n]*(?:暂存|后端校验|staged|pending publication)[^（）()\n]*[）)]/gi, "")
-    .replace(/[①-⑳]/g, "；")
-    .split(/[。；;\n]+|[，,]\s*/)
-    .filter(part => !technical.test(part.replace(/\b\d{4}\/\d{1,2}\/\d{1,2}\b/g, "")))
-    .map(part => plain(part).replace(/\bHub\b/gi, "相关资料").replace(/相关资料\s+(?=更新)/g, "相关资料").replace(/^(?:并且|以及|同时|并)\s*/, "").replace(/[：:、\s]+$/, ""))
-    .filter(part => part.length >= 4 && !/^(?:SQ[A-Z0-9]+|[A-Z]{1,3}\d[A-Z0-9]*)[\sA-Z0-9._+-]*$/.test(part));
-  return [...new Set(clauses)].slice(0, 2).map(part => {
-    const chars = [...part]; return chars.length > 72 ? chars.slice(0, 71).join("") + "…" : part;
-  });
-}
 export function costText(cost?: CostSummary) {
   if (!cost) return "费用记录暂不可用，不能视为零消费。";
   const incomplete = cost.unpriced || cost.missingUsage || cost.pending || cost.historyMissing;
@@ -66,12 +51,12 @@ export function formatSyncSummary(event: SyncCompletion) {
   if (unprocessed) overview.push(`未处理 ${unprocessed}`);
   if (event.status === "completed" && !failed && !review && !unprocessed) overview.push("无失败");
   const rows = event.items.slice(0, 8).map(item => {
-    const summary = briefSummary(item.summary);
+    const summary = briefSyncSummary(item.summary);
     return [`📄 **${plain(item.name)}**`, `状态：${labels[item.status] ?? "请查看报告"}`,
       ...(summary.length ? ["", "更新摘要：", ...summary.map(line => `- ${line}`)] : [])].join("\n");
   });
   return [[title, `${beijing(event.finished).replace(/:\d{2}$/, "")}（北京时间）`].join("\n"), `📊 ${overview.join("，")}。`, ...rows,
-    `${event.items.length > rows.length ? `其余 ${event.items.length - rows.length} 个文件及` : ""}完整内容请查看网页 Sync reports。`].join("\n\n");
+    ...(event.items.length > rows.length ? [`另有 ${event.items.length - rows.length} 个文件未逐项列出。`] : [])].join("\n\n");
 }
 export function formatSyncNotice(event: SyncCompletion, from: string, interval?: CostSummary, own?: CostSummary) {
   return [formatSyncSummary(event),
