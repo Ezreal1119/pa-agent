@@ -158,6 +158,8 @@ function parseArgs(argv) {
     documentNo: args["document-no"],
     sopName: args["sop-name"],
     author: args.author,
+    revisionReason: args["revision-reason"],
+    revisionContent: args["revision-content"],
     templateLanguage: args["template-language"] || TEMPLATE_LANGUAGE_ENGLISH,
     processList: args["process-list"],
     processFallbackDir: args["process-fallback-dir"],

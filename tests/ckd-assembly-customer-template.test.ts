@@ -69,6 +69,8 @@ test('customer Assembly uses bilingual 1/2/4-cell sheets, ordered captions, logo
       assert.ok(anchor.nativeRow >= (count > 2 && i >= 2 ? 20 : 5));
     }
     const cover = workbook.worksheets[0]!, chart = workbook.worksheets[1]!;
+    assert.equal(cover.getCell('C7').value, 'Cover! "Author"');
+    assert.equal(cover.getCell('D7').value, null); assert.equal(cover.getCell('F7').value, null);
     assert.equal(cover.getCell('D4').value, 1); assert.equal((chart.getCell('F2').value as ExcelJS.CellFormulaValue).result, 1);
     assert.equal(chart.getCell('C2').value, 'P'); assert.equal(chart.getCell('D7').value, id); assert.equal(chart.getCell('A8').value, null);
     assert.equal(cover.getCell(language === '中文' ? 'A22' : 'A26').value, `${language === '中文' ? '编制人：' : 'Author: '}Cover! "Author"`);
@@ -174,7 +176,7 @@ test('Assembly workflow materializes the effective source and selects the new de
   const catalog = JSON.parse(fs.readFileSync(catalogOutput, 'utf8')).output;
   const { run } = require(path.join(assets, 'index.cjs'));
   const envelope = { paths, workflow: { runId: 'customer-assembly' }, inputs: {
-    normalizedInputs: { sopType: 'assemble', projectName: 'P', documentNumber: 'D', safeDocumentNumber: 'D', sopName: 'Assembly', author: 'A', processList: ['step'], templateLanguage: 'English' },
+    normalizedInputs: { sopType: 'assemble', projectName: 'P', documentNumber: 'D', safeDocumentNumber: 'D', sopName: 'Assembly', author: 'Patrick', revisionReason: 'Update template', revisionContent: 'New pictures\nNew layout', processList: ['step'], templateLanguage: 'English' },
     projectMatchResult: { matchedProjectId: 'P', matchedProjectName: 'P' },
     processPlans: [{ requestedProcess: 'step', resolvedProcessId: 'step', resolvedProcessName: 'step', status: 'direct', confidence: 1 }],
     catalogPath: catalog.catalogPath, catalogHash: catalog.catalogHash,
@@ -182,6 +184,8 @@ test('Assembly workflow materializes the effective source and selects the new de
   const direct = await run(structuredClone(envelope)), workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(path.join(workspaceRoot, direct.output.documentPath));
   assert.equal(workbook.worksheets[2]!.getCell('G30').value, '操作说明 1. Instruction 1.');
+  assert.equal(workbook.worksheets[0]!.getCell('C7').value, 'Patrick');
+  assert.equal(workbook.worksheets[0]!.getCell('D7').value, 'Update template');
   fs.rmSync(path.join(workspaceRoot, direct.output.documentPath));
   const prepared = await run({ ...structuredClone(envelope), workflow: { runId: 'prepared-assembly' }, inputs: { ...structuredClone(envelope.inputs), prepareImagesOnly: true } });
   const crop = await sharp({ create: { width: 20, height: 10, channels: 3, background: '#224466' } }).png().toBuffer();
@@ -189,10 +193,24 @@ test('Assembly workflow materializes the effective source and selects the new de
   const final = await run({ paths, workflow: { runId: 'prepared-assembly' }, inputs: { ...structuredClone(envelope.inputs), preparedGeneration: prepared.output, imageOverrides: [{ file: 'crop.png', target: 'step/Operation_Photos/p2-detail.png', hash: hash(crop) }] } });
   const after = new ExcelJS.Workbook(); await after.xlsx.readFile(path.join(workspaceRoot, final.output.documentPath));
   assert.equal(after.worksheets[2]!.getCell('O30').value, '操作说明 2. Instruction 2.');
+  assert.equal(after.worksheets[0]!.getCell('F7').value, 'New pictures\nNew layout');
   const imageId = after.worksheets[2]!.getImages()[3]!.imageId;
   assert.equal(hash(after.getImage(Number(imageId)).buffer as Buffer), hash(crop));
   assert.equal(hash(fs.readFileSync(path.join(sourceDir, 'Operation_Photos/p2-detail.png'))), hash(png));
   validReferences(after);
+});
+
+test('Assembly long revision text is retained on bounded continuation pages without mutating the customer template', async t => {
+  const root = fixture(t); source(root, 'revision', 1);
+  const content = '补充装配要求与图示。'.repeat(350), output = path.join(root, 'revision.xlsx');
+  const result = await buildCkdSop({ output, projectDir: path.join(root, 'processes'), projectName: 'P', documentNo: 'D', sopName: 'S', author: 'Patrick', processList: ['revision'], sopType: 'assemble', templateLanguage: '中文', revisionReason: '修订原因', revisionContent: content });
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(output);
+  assert.equal(workbook.worksheets[0]!.getCell('C7').value, 'Patrick');
+  assert.equal(workbook.worksheets[0]!.getCell('D7').value, '修订原因');
+  assert.ok(workbook.worksheets[0]!.getRow(7).height! <= 400);
+  assert.equal(workbook.worksheets.filter(sheet => sheet.getCell('A2').value === '修订内容').map(sheet => sheet.getCell('A5').value).join(''), content);
+  assert.ok(result.warnings.some((message: string) => message.includes('修订内容')));
+  validReferences(workbook);
 });
 
 test('Assembly chart supports 30 ordered processes, reserved sheet names and no stale template rows', async t => {

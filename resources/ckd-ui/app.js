@@ -17,12 +17,15 @@ async function api(url, data) {
 }
 $('admin-logout').addEventListener('click',async()=>{try{await api('/api/auth/logout',{});location.assign(adminBase+'/login');}catch(error){notice(error.message);}});
 function node(tag, text, className) { const item=document.createElement(tag); if(text!==undefined) item.textContent=text; if(className) item.className=className; return item; }
-function factoryVisibility() { const enabled=$('sop-type').value==='factory_test'; $('factory-field').hidden=!enabled; $('create-form').elements.factoryTestProcesses.required=enabled; }
+function factoryVisibility() {
+  const type=$('sop-type').value,form=$('create-form');$('factory-field').hidden=type!=='factory_test';form.elements.factoryTestProcesses.required=type==='factory_test';
+  for(const [id,key] of [['revision-reason-field','revisionReason'],['revision-content-field','revisionContent']]) {$(id).hidden=type!=='assemble';form.elements[key].disabled=type!=='assemble';}
+}
 function newTask(input) {
   generation++; selectedId=null; current=null; shownQuestion=null; remember(null); notice('');
   $('create-view').hidden=false; $('run-view').hidden=true;
   $('create-form').reset();
-  if(input) { const form=$('create-form'); for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author']) if(input[key]!==undefined) form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
+  if(input) { const form=$('create-form'); for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent']) if(input[key]!==undefined) form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
   factoryVisibility(); void refreshList();
 }
 async function refreshList() {
@@ -49,7 +52,7 @@ function render(run) {
   const index=stages.findIndex(([id])=>id===run.currentNodeId);
   $('steps').replaceChildren(...stages.map(([id,label], i)=>node('li',`${i+1}. ${label}`,run.status==='completed'||i<index?'done':id===run.currentNodeId?'active':'')));
   const details=$('run-details'); details.replaceChildren();
-  for(const [label,value] of [['项目名称',run.inputs.projectName],['文档编号',run.inputs.documentNumber],['作者',run.inputs.author],['创建时间',new Date(run.createdAt).toLocaleString('zh-CN')]]) { const group=node('div'); group.append(node('dt',label),node('dd',value)); details.append(group); }
+  for(const [label,value] of [['项目名称',run.inputs.projectName],['文档编号',run.inputs.documentNumber],['作者',run.inputs.author],...(run.inputs.sopType==='assemble'?[['修订原因',run.inputs.revisionReason||'未填写'],['修订内容',run.inputs.revisionContent||'未填写']]:[]),['创建时间',new Date(run.createdAt).toLocaleString('zh-CN')]]) { const group=node('div'); group.append(node('dt',label),node('dd',value)); details.append(group); }
   const question=run.pendingQuestion; const canAnswer=!!question&&!run.busy&&!pending&&run.status==='awaiting_clarification';
   $('question-panel').hidden=!question;
   if(question) {
@@ -113,6 +116,7 @@ function answer(text,questionId) { return mutate('answer',{questionId,text}); }
 $('create-form').addEventListener('submit',async event=>{
   event.preventDefault();if(pending) return;const form=event.currentTarget;const values=Object.fromEntries(new FormData(form));
   if(values.sopType==='factory_test') values.factoryTestProcesses=String(values.factoryTestProcesses).split(/\r?\n/u).map(value=>value.trim()).filter(Boolean); else delete values.factoryTestProcesses;
+  for(const key of ['revisionReason','revisionContent']) {if(values.sopType==='assemble')values[key]=(values[key]||'').trim();else delete values[key];}
   pending=true;$('start-button').disabled=true;notice('');
   try { const result=await api('/api/runs',values);selectedId=result.run.id;remember(selectedId);generation++;pending=false;render(result.run);await refreshList(); }
   catch(error){notice(error.message);}finally{pending=false;$('start-button').disabled=false;}

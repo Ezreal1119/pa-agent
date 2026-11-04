@@ -151,6 +151,8 @@ npm run ckd -- start --input examples/ckd/reference.json \
 
 `projectName`、`documentNumber`、`sopName`、`author` 为必填项。`sopType` 支持 `assemble`、`assembly_test`、`pcba_test`、`aging_test`、`factory_test`，默认 `assembly_test`。`templateLanguage` 支持 `English` 和 `中文`，默认英文；中文选择独立的 `CN_process` 资料，不翻译英文内容。Factory Test 必须在输入 JSON 中给出有序 `factoryTestProcesses`，1–30 项。其他类型在运行中确认参考或手动来源；手动列表支持换行、分隔符、单项继续添加及重复项确认。
 
+仅 `assemble` 可选填写 `revisionReason`（修订原因，最多 1000 字符）和 `revisionContent`（修订内容，最多 4000 字符，支持多行）；省略时留空。桌面端/Web 新建表单只在装配类型显示这两项，随任务持久化、恢复和“按此信息新建”保留，并写入中英文封面首条修订记录。首条制订者直接使用作者，不再依赖原版本是否填写；后续空白修订行仍按版本条件显示作者。长内容先调整首行可用高度，超出单页可读容量的全文保留在带引用的续页。生成器 CLI 对应 `--revision-reason` 和 `--revision-content`。新字段需更新后端，并使用桌面 0.1.7 或新版 Web；旧客户端不填新字段仍可使用新后端。
+
 非交互模式遇到问题会保存状态并退出，用任务 ID 和问题 ID 回答后继续：
 
 ```bash

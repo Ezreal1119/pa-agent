@@ -126,6 +126,13 @@ function main() {
     safeDocumentNumber,
     sopName,
     author,
+    ...(sopType === "assemble" ? Object.fromEntries([["revisionReason", 1000], ["revisionContent", 4000]].map(([key, max]) => {
+      const value = inputs[key];
+      if (value !== undefined && typeof value !== "string") throw new Error(`${key} must be text.`);
+      const text = (value || "").trim();
+      if (text.length > max) throw new Error(`${key} must not exceed ${max} characters.`);
+      return [key, text];
+    })) : {}),
     processList,
     referenceFastPathEligible,
     referenceTransplantEligible,

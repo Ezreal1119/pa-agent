@@ -72,7 +72,7 @@ flowchart TD
 | `deploy/migrate-data.mjs / ckd-sop.service / ckd-sop-nginx.conf` | Ubuntu 离线路径/收据/Catalog/译文注册表迁移、元数据备份与失败回滚、业务字节保护；独立系统服务及仅客户端 API 的 IP HTTP 反代 |
 | `src/ckd/image-prewarm.ts` | 只读扫描原始图片、跨语言 Hash 去重、1–4 并发（默认3）、逐图持久化及显式恢复/取消，与 SOP 共用质量观察缓存与 Library 锁 |
 | `src/ckd/image-assessment.ts / library-model.ts` | 图片质量输出契约与独立阶段的有限格式重试（最多补试2次）、无效输出诊断；HTTP错误保留脱敏提供方原因，不盲目重试普通400 |
-| `src/ckd/workflow.ts / contract.ts / prompts.ts / definition.ts` | CKD V3 五阶段、五类 SOP、中英文隔离、来源确认、工序顺序及三条解析路径 |
+| `src/ckd/workflow.ts / contract.ts / prompts.ts / definition.ts` | CKD V3 五阶段、五类 SOP、中英文隔离、来源确认、工序顺序及三条解析路径；仅 assemble 增加选填修订原因/内容，贯通持久化、归一化及直接/确认图片后生成 |
 | `src/ckd/service.ts / types.ts / store.ts / lock-owner.ts` | `create / start / get / list / answer / resume / cancel`，原子 JSON、任务互斥、取消及阶段边界恢复；Linux 任务/Library 锁验证启动批次与进程启动时间，防止重启后 PID 复用误判；桌面新版增加持久化图片确认、裁剪、确认生成及清理 |
 | `src/ckd/service.ts / ui-server.ts / image-quality.ts` | Excel 生成收据完成后可提前下载，图片检查独立完成；持久化逐图进度，明确未完成/取消/失败状态；旧客户端保持全部完成再交付，原有生成前图片确认不变 |
 | `src/ckd/image-pixel-focus.ts` | 新任务的独立工序重点检查：复用 Hash 绑定的图片描述、逐项证据引用校验，证据不足才定向检查原图；60秒总预算、取消/互斥、版本与上下文/描述/模型相关缓存，不重跑旧七维视觉评分 |
@@ -435,3 +435,11 @@ SQ69BXP 的 Excel 写入约6–8秒，后续独立AI检查仍挂在“生成Exce
 - 物料默认七行、工具五行，在原表空间内分配可读行高并增行，保留物料/工具溢出续表、顺序与数量；检查文字和前站图分区避免重叠。排位图支持 1–30 工序，增加页重复表头，封面及工序/续页页码同步。
 - 兼容性：只改变 `assemble` 默认生成；其他四类 SOP 的模板、布局、业务评分、图片评分、HTTP/CLI 契约及 Library 来源选择不变。显式传入旧模板仍保留旧布局；原图和任务级裁剪沿用既有路径。旧产物不重写，未完成任务仍受工作流资产 Hash 校验保护，不能混用版本。未部署 VPS、未重打桌面包。
 - 验证：本机 typecheck/build、脚本语法与 diff 检查通过，完整 234 项测试中 232 通过、2 项按平台跳过；中英文 1/2/3/4 图及长文/表格溢出的合成样例经 LibreOffice 打印检查。详见 [开发记录](../dev-history/2026-11-04-assemble-customer-template.md)。本轮没有调用真实模型，正式 Library/任务/缓存没有改写，未运行 patrick-agent 生成器或测试。
+
+### 2026-11-05：assemble 封面制订者修复及修订原因/内容输入
+
+- 原因：客户新模板的首条记录没有填写“原版本”，旧条件公式因此隐藏已输入的作者；同时需要在新建表单填写修订原因和修订内容。
+- 仅 assemble 新建表单显示两个选填字段，后端限制为 1000/4000 字符，持久化、恢复、按原信息新建、归一化、CLI、直接生成和图片确认/裁剪后生成均保留。其他类型不显示、不发送字段，API 拒绝其他类型非空修订字段。
+- 新版中英文封面 C7 直接写作者，D7:E7 写修订原因，F7:H7 写修订内容；后续空白修订行保留原条件。正常多行内容在不改变封面总高度的范围内增加首条高度，确实过长则引用完整文字续页并计入页码，不改客户模板原始字节。已有完成 Excel 不回写，未完成任务继续遵守原资产快照保护。
+- 桌面版本升为 0.1.7；新字段需要先更新阿里云后端，再使用新客户端。旧客户端/旧输入省略新字段仍兼容新后端。没有改图片评分、AI 核查、Library 或其他 SOP 模板，没有部署服务器。
+- 验证：类型检查、构建、完整 238 项测试中 236 通过/2 平台跳过；隔离浏览器检查装配专用字段显示、实际提交、多行内容与按原信息新建；本机中英文 Excel/PDF 检查及客户端构建结果见 [开发记录](../dev-history/2026-11-05-assemble-revision-fields.md)。没有调用真实模型或改正式业务数据。

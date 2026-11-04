@@ -20,6 +20,8 @@
           <label>模板语言<select name="templateLanguage"><option value="English">English · 英文</option><option value="中文">中文</option></select><span class="hint">使用对应语言资料。</span></label>
           <label>项目名称<input name="projectName" required maxlength="200" placeholder="例如 GPOS730"></label><label>文档编号<input name="documentNumber" required maxlength="200"></label>
           <label>SOP 名称<input name="sopName" required maxlength="200"></label><label>作者<input name="author" required maxlength="200"></label>
+          <label id="revision-reason-field" hidden>修订原因<textarea name="revisionReason" rows="3" maxlength="1000" disabled placeholder="例如：调整装配流程"></textarea><span class="hint">选填，写入封面首条修订记录。</span></label>
+          <label id="revision-content-field" hidden>修订内容<textarea name="revisionContent" rows="3" maxlength="4000" disabled placeholder="填写本次新增或调整的内容"></textarea><span class="hint">选填，支持多行文字。</span></label>
           <label id="factory-field" class="full" hidden>Factory Test 工序<textarea name="factoryTestProcesses" rows="5" placeholder="每行一个工序，按照 SOP 顺序填写"></textarea><span class="hint">每行一个工序，顺序会保留。</span></label>
           <div class="full form-footer"><span class="muted small">下一步确认流程来源与工序。</span><button id="start" class="primary">开始生成 →</button></div>
         </form>

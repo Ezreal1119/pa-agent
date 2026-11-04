@@ -137,6 +137,44 @@ test("invalid model outputs fail schema and Catalog validation before advancing"
   }
 });
 
+test("Assembly revision metadata survives restart, normalization and bilingual cover generation with no original version", async t => {
+  const f = fixture(t);
+  for (const templateLanguage of ["中文", "English"] as const) {
+    let service = new CkdWorkflow({ dataDir: f.dataDir, libraryPath: f.library, agent: deterministicAgent });
+    let run = await service.start({ ...base, author: "Patrick", sopType: "assemble", templateLanguage,
+      revisionReason: "  调整装配流程  ", revisionContent: " 更新图文布局。\n补充螺丝位置说明。 " });
+    service = new CkdWorkflow({ dataDir: f.dataDir, libraryPath: f.library, agent: deterministicAgent });
+    run = service.get(run.id);
+    assert.equal(run.inputs.revisionReason, "调整装配流程");
+    assert.equal(run.inputs.revisionContent, "更新图文布局。\n补充螺丝位置说明。");
+    run = await service.answer(run.id, run.pendingQuestion!.id, "参考 Library 中已有 SOP");
+    assert.equal(run.status, "completed", run.error);
+    assert.equal((run.sharedState.normalizedInputs as any).revisionContent, run.inputs.revisionContent);
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(path.resolve(run.workspaceRoot, run.finalResult!.artifacts[0]!));
+    const cover = workbook.worksheets[0]!;
+    assert.equal(cover.getCell("A7").value, null);
+    assert.equal(cover.getCell("C7").value, "Patrick");
+    assert.equal(cover.getCell("D7").value, "调整装配流程");
+    assert.equal(cover.getCell("F7").value, "更新图文布局。\n补充螺丝位置说明。");
+    assert.equal((cover.getCell("C8").value as ExcelJS.CellFormulaValue).result ?? "", "");
+    assert.match((cover.getCell("C8").value as ExcelJS.CellFormulaValue).formula, /IF\(A8=""/u);
+  }
+});
+
+test("Assembly revision fields are optional, bounded, and excluded from the other SOP types", t => {
+  const f = fixture(t), service = new CkdWorkflow({ dataDir: f.dataDir, libraryPath: f.library });
+  const old = service.create({ ...base, sopType: "assemble" });
+  assert.equal(old.inputs.revisionReason, ""); assert.equal(old.inputs.revisionContent, "");
+  assert.throws(() => service.create({ ...base, sopType: "assemble", revisionReason: "x".repeat(1001) }), /1000|structured/u);
+  assert.throws(() => service.create({ ...base, sopType: "assemble", revisionContent: "x".repeat(4001) }), /4000|structured/u);
+  assert.throws(() => service.create({ ...base, sopType: "assemble", revisionContent: 123 } as any), /string|structured/u);
+  for (const sopType of ["assembly_test", "pcba_test", "aging_test", "factory_test"] as const) {
+    const input = { ...base, sopType, ...(sopType === "factory_test" ? { factoryTestProcesses: ["First Check"] } : {}) };
+    assert.throws(() => service.create({ ...input, revisionReason: "changed" }), /only supported for assemble/u);
+    assert.equal(service.create(input).inputs.revisionContent, undefined);
+  }
+});
+
 test("process submission rejects duplicate Catalog IDs and reordering", async t => {
   const f = fixture(t); let captured!: CkdRun;
   const service = new CkdWorkflow({ dataDir: f.dataDir, libraryPath: f.library, agent: { async execute(input) { captured = input.run; input.checkpoint.action = { kind: "terminate", reason: "test" }; } } });

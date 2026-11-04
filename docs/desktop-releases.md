@@ -1,5 +1,11 @@
 # 桌面端云端版与重新打包
 
+## 0.1.7：装配修订原因与内容（2026-11-05）
+
+仅 assemble 新建表单增加选填的“修订原因”“修订内容”，多行内容随任务保存并支持按原信息新建。后端同步修复首条制订者为空的问题，写入中英文封面。必须先更新后端，再使用新客户端字段；旧客户端省略新字段仍兼容新后端。
+
+Mac ARM64：`desktop/release/cloud/CKD-SOP-Cloud-0.1.7-mac-arm64.zip`。Windows x64：`desktop/release/cloud/CKD-SOP-Cloud-0.1.7-win-x64.zip`，完整解压后运行其中 `CKD SOP Cloud.exe`，须保留资源和 DLL。Windows 提供解压版：本机无法运行 NSIS 的 x86_64 Mac 工具，未生成本版本 NSIS 安装器。两包均核验 app.asar 当前源码、0.1.7 版本和阿里云地址，ZIP 完整性通过；校验和见同目录 `CKD-SOP-Cloud-0.1.7-SHA256.txt`。Windows 未做实机启动验证，Mac 包未签名/公证。关闭旧客户端后再运行新版；本轮未部署阿里云后端。
+
 ## 初版 Mac 云端测试包（历史）
 
 - 应用：`desktop/release/cloud/mac-arm64/CKD SOP Cloud.app`

@@ -37,6 +37,11 @@ function instructionParagraphs(value) {
 
 function buildAssemblyWorkbook(workbook, options, h) {
   options = { ...options, author: h.authorName(options.author) };
+  for (const [key, max] of [["revisionReason", 1000], ["revisionContent", 4000]]) {
+    if (options[key] !== undefined && typeof options[key] !== "string") throw new Error(`${key} must be text.`);
+    options[key] = (options[key] || "").trim();
+    if (options[key].length > max) throw new Error(`${key} must not exceed ${max} characters.`);
+  }
   const chinese = options.templateLanguage === "中文", names = TEMPLATE_NAMES[options.templateLanguage];
   const cover = workbook.getWorksheet(names.cover), chart = workbook.getWorksheet(names.chart);
   const templateSheets = names.templates.map(name => workbook.getWorksheet(name));
@@ -162,7 +167,27 @@ function buildAssemblyWorkbook(workbook, options, h) {
   formula(cover, "B7", "TODAY()", today);
   formula(cover, "F4", 'IF(B7="","",B7)', today);
   for (const cell of ["B7", "F4"]) cover.getCell(cell).numFmt = "yyyy/m/d";
-  for (let row = 7; row < names.authorRow; row++) formula(cover, `C${row}`, `IF(A${row}="","","${literal(options.author || "")}")`, "");
+  // First record describes this generation even when no original version was supplied.
+  cover.getCell("C7").value = options.author || null;
+  cover.getCell("C7").alignment = { ...cover.getCell("C7").alignment, vertical: "top", wrapText: true };
+  for (let row = 8; row < names.authorRow; row++) formula(cover, `C${row}`, `IF(A${row}="","","${literal(options.author || "")}")`, "");
+  const revisionHeight = Math.ceil(Math.max(rowHeight(cover, 7), textHeight(cover, options.author, 7, 3, 3),
+    textHeight(cover, options.revisionReason, 7, 4, 5), textHeight(cover, options.revisionContent, 7, 6, 8)) + 4);
+  const blankRows = [];
+  for (let row = 8; row < names.authorRow; row++) {
+    // C is our conditional author formula; ExcelJS may omit an empty-string cached result.
+    const blank = [1, 2, 4, 5, 6, 7, 8, 9].map(col => cover.getCell(row, col).value).every(value => value == null || value === "" || typeof value === "object" && value.result === "");
+    if (blank) blankRows.push({ row, spare: Math.max(0, rowHeight(cover, row) - 24) });
+  }
+  const available = blankRows.reduce((sum, item) => sum + item.spare, 0);
+  const extra = Math.max(0, Math.min(revisionHeight - rowHeight(cover, 7), available, 400 - rowHeight(cover, 7)));
+  if (extra) {
+    cover.getRow(7).height += extra;
+    for (const item of blankRows) cover.getRow(item.row).height -= extra * item.spare / available;
+  }
+  const revisionTitle = `${options.projectName} ${options.sopName}`;
+  writeText(cover, options.revisionReason, [7, 7, 4, 5], revisionTitle, chinese ? "修订原因" : "Revision reason");
+  writeText(cover, options.revisionContent, [7, 7, 6, 8], revisionTitle, chinese ? "修订内容" : "Revision content");
   cover.getCell(`A${names.authorRow}`).value = `${labels.author}${options.author || ""}`;
   paper(cover, `A1:I${names.authorRow}`, "portrait"); h.setSheetZoom(cover, 100);
 

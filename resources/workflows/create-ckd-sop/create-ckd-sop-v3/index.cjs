@@ -876,6 +876,13 @@ async function run(input) {
     ? requiredText(normalized.author, "normalizedInputs.author", 200)
     : "";
   const sopType = requiredText(normalized.sopType || "assembly_test", "normalizedInputs.sopType", 40);
+  const revision = sopType === "assemble" ? Object.fromEntries([["revisionReason", 1000], ["revisionContent", 4000]].map(([key, max]) => {
+    const value = normalized[key];
+    if (value !== undefined && typeof value !== "string") throw new Error(`normalizedInputs.${key} must be text.`);
+    const text = (value || "").trim();
+    if (text.length > max) throw new Error(`normalizedInputs.${key} must not exceed ${max} characters.`);
+    return [key, text];
+  })) : {};
   const templateLanguage = requiredText(
     normalized.templateLanguage || "English",
     "normalizedInputs.templateLanguage",
@@ -931,7 +938,7 @@ async function run(input) {
       effectiveFiles: scanLayerFiles(effectiveRoot, paths.workspaceRoot),
       warnings: [...normalizedWarnings(input.inputs.normalizationWarnings), ...plans.flatMap(plan => normalizedWarnings(plan.warnings))],
       generation: { projectDir: path.relative(paths.sessionWorkspace, effectiveRoot), projectName, documentNo: documentNumber,
-        sopName, author, processList: resolvedProcessIds, sopType, templateLanguage }
+        sopName, author, ...revision, processList: resolvedProcessIds, sopType, templateLanguage }
     }, artifacts: [] };
   }
   const outputDirectory = path.join(paths.sessionWorkspace, "outputs");
@@ -948,6 +955,7 @@ async function run(input) {
       documentNo: documentNumber,
       sopName,
       author,
+      ...revision,
       processList: resolvedProcessIds,
       sopType,
       templateLanguage,
