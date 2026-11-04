@@ -9,7 +9,7 @@ import {createServer} from 'node:http';
 import {createFirmwareExtractor} from '../dist/firmware/matcher.js';
 import {UsageLedger, meterSession, metered, usageScope, configureUsagePricing} from '../dist/usage/ledger.js';
 import {CompletionJournal} from '../dist/sync-notifications/journal.js';
-import {SyncNotifications, destinationKey, syncDestination, syncGroupDestination, formatSyncSummary, costText} from '../dist/sync-notifications/service.js';
+import {SyncNotifications, destinationKey, syncDestination, syncGroupDestination, formatSyncSummary, formatSyncNotice, costText} from '../dist/sync-notifications/service.js';
 import {SyncService} from '../dist/knowledge-sync/service.js';
 import {AutoSync} from '../dist/knowledge-sync/auto-sync.js';
 import {emptyUsage, hash, PlanError} from '../dist/knowledge-sync/core.js';
@@ -221,4 +221,48 @@ test('group send failure does not block a personal notice; group ACK loss resume
  await Promise.all([personal.active,group.active]);assert.ok(acks.has('private'));assert.equal(sent.length,1);assert.equal(sent[0].target,'owner');
  failSend=false;await group.pump();assert.equal(sent.length,2);assert.equal(sent[1].target,'group-chat');assert.doesNotMatch(sent[1].text,/¥|total/);await group.close();
  failAck=false;group=make();await group.active;assert.equal(sent.length,2);assert.ok(acks.has('group'));await group.close();await personal.close();
+});
+
+test('notification layout turns the screenshot summary into readable clauses without internal keys or paths',()=>{
+ const item={name:'SQ68_A13_GO修改记录.xlsx',status:'published',summary:'i9200 Hub 更新（文件已暂存，待后端校验发布）：①覆盖表 firmware-release-notes 202610212352 行改为键 firmware-release-notes 202611040700、路径 i9200/others/firmware-release-notes 202611040700/SQ68 A13 GO 修改记录.md，并注明 WUZL 工作表现为两行（2025-10-21、2026-11-03）；②SQ68 A13 GO'};
+ const e=event('2026-11-03T23:01:07.000Z',{origin:'auto',items:[item]}),original=structuredClone(e);
+ const text=formatSyncSummary(e);
+ assert.ok(text.startsWith('✅ **自动同步完成**\n2026/11/04 07:01（北京时间）\n\n'));
+ assert.match(text,/📊 共 1 个文件，已入库 1，无失败。\n\n📄 \*\*SQ68_A13_GO修改记录.xlsx\*\*/);
+ assert.match(text,/状态：已入库\n\n更新摘要：\n- i9200 相关资料更新\n- 注明 WUZL/);
+ assert.match(text,/2025-10-21、2026-11-03/);
+ assert.doesNotMatch(text,/firmware-release-notes|202610212352|i9200\/|Hub|暂存|后端校验|①|②|路径|失败\/中断 0|待处理 0/);
+ assert.deepEqual(e,original,'notification formatting must not rewrite the source report');
+});
+
+test('readable overviews retain nonzero failure, review, skip and missing-file counts without reporting false success',()=>{
+ const e=event(second,{total:6,counts:{published:1,failed:1,needs_review:1,duplicate:1},items:[{name:'good.pdf',status:'published'},{name:'bad.pdf',status:'failed'},{name:'review.pdf',status:'needs_review'},{name:'same.pdf',status:'duplicate'}]});
+ const text=formatSyncSummary(e);
+ assert.ok(text.startsWith('⚠️ **同步完成，部分文件需处理**'));
+ for(const count of ['已入库 1','失败/中断 1','待处理 1','重复/跳过 1','未处理 2'])assert.ok(text.includes(count));
+ assert.match(text,/📄 \*\*bad.pdf\*\*\n状态：失败/);assert.doesNotMatch(text,/无失败/);
+ for(const status of ['failed','stopped','interrupted','awaiting_confirmation']){
+  const stopped=formatSyncSummary(event(second,{status}));assert.doesNotMatch(stopped,/✅|无失败/);
+ }
+});
+
+test('summary length and file count are bounded; technical-only summaries defer to the full web report',()=>{
+ const summary='更新产品规格'+ '参数说明'.repeat(60)+'；补充接口信息；补充电源信息';
+ const e=event(second,{total:10,counts:{published:10},items:Array.from({length:10},(_,i)=>({name:`file_${i}.xlsx`,status:'published',summary}))});
+ const text=formatSyncSummary(e),bullets=text.split('\n').filter(line=>line.startsWith('- '));
+ assert.equal((text.match(/📄 /g)||[]).length,8);assert.equal(bullets.length,16);assert.ok(bullets.every(line=>[...line.slice(2)].length<=72));
+ assert.match(text,/其余 2 个文件及完整内容请查看网页 Sync reports/);
+ const technical=formatSyncSummary(event(second,{items:[{name:'source.xlsx',status:'published',summary:'路径 /opt/ProductExpertCloud/.data/urovo-product-expert/index.md；sourceKey firmware-release-notes 202611040700；无新增 Hub/shared 节点；修改 SKILL.md；中文目录/内部条目；/绝对目录'}]}));
+ assert.doesNotMatch(technical,/\/opt\/|sourceKey|firmware-release-notes|index.md|SKILL.md|Hub|shared|中文目录|内部条目|绝对目录|更新摘要/);
+ assert.match(formatSyncSummary(event(second,{items:[{name:'dates.xlsx',status:'published',summary:'更新生效日期为2026/11/04'}]})),/更新生效日期为2026\/11\/04/);
+ assert.match(technical,/状态：已入库/);assert.match(technical,/完整内容请查看网页/);
+});
+
+test('personal usage is a separate section after the shared summary and retains all accounting caveats',()=>{
+ const e=event(),cost={cny:.123456,requests:5,priced:2,unpriced:1,missingUsage:2,pending:1,historyMissing:true};
+ const group=formatSyncSummary(e),personal=formatSyncNotice(e,first,cost,cost);
+ assert.ok(personal.startsWith(group+'\n\n💰 **模型消费**\n\n'));
+ assert.match(personal,/\n\n\*\*区间模型总消费\*\*\n/);assert.match(personal,/\n\n\*\*本次 Sync 模型消费\*\*\n/);
+ assert.match(personal,/0.123456/);assert.match(personal,/已计价 2\/5/);assert.match(personal,/缺价格 1 次，缺用量 2 次/);assert.match(personal,/1 次请求未结算/);assert.match(personal,/历史消费不完整/);
+ assert.doesNotMatch(group,/消费|余额|计价|¥|报告：/);assert.ok(personal.includes(e.jobIds[0]));
 });

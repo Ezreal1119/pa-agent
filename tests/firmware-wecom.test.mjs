@@ -45,9 +45,9 @@ test('real Web API + Bridge enforces /firmware entry, switch, ownership, confirm
   const stateFile = path.join(root, '.data/firmware/state.json'); const state = () => fs.readFile(stateFile, 'utf8').then(JSON.parse);
   await until(async () => (await state()).active?.phase === 'confirm'); await bridge.firmwareNotifier.active; await bridge.firmwareNotifier.pump();
   assert.ok(bot.texts.some(text => text.includes('是否下载并上传')));
-  const code = (await state()).active.code;
-  await bridge.receive('bot', message(`确认 ${code}`, 'bob')); await bridge.idle(); assert.equal(submissions, 0);
-  await bridge.receive('bot', message(`确认 ${code}`)); await bridge.idle(); await until(() => submissions === 1);
+  assert.equal((await state()).active.code, undefined);
+  await bridge.receive('bot', message('确认', 'bob')); await bridge.idle(); assert.equal(submissions, 0);
+  await bridge.receive('bot', message('确认')); await bridge.idle(); await until(() => submissions === 1);
   await toggle(false); job.stage = 'uploading'; job.state = 'succeeded'; job.result = { uploaded: true, filename, size: candidate.size, download_url: 'https://temp.patrick-shenzhen.org/firmware/' + filename };
   await until(async () => !(await state()).active); await bridge.firmwareNotifier.active; await bridge.firmwareNotifier.pump();
   assert.ok(bot.texts.some(text => text.includes(job.result.download_url)));
@@ -119,12 +119,35 @@ test('group firmware strips only exact bot mentions at input edges, including sc
   assert.equal(commandInput(message('确认 ABCDEF @AI Patrick', 'bob', 'g').body, scope, 'bob'), undefined);
 });
 
+test('firmware accepts blank lines around its body and edge bot mentions without merging content lines', () => {
+  const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
+  const screenshot = 'SQ29MB_GO_EN_XX_WE__DS_FI_S02_U_261103_02_rel_go_uFWsign_VendorEN';
+  const parse = (text, active = scope, name) => commandInput(message(text, 'alice', 'g').body, active, 'alice', name);
+  for (const newline of ['\n', '\r\n', '\r', '\u2028', '\u2029']) {
+    for (const text of [screenshot, '帮我下载 SQ29MB 的 261103_02 固件', '选择 2', '确认 ABCDEF', '取消', '状态']) {
+      for (const wrapped of [text + newline + newline + '@AI Patrick', '@AI Patrick' + newline + text, newline + '@AI Patrick' + newline + text + newline + '@AI Patrick' + newline]) {
+        assert.deepEqual(parse(wrapped), { kind: 'firmware', command: false, text });
+      }
+    }
+    assert.deepEqual(parse('/firmware' + newline + '@AI Patrick', {}), { kind: 'firmware', command: true, text: '' });
+    assert.deepEqual(parse('@AI Patrick' + newline + '/firmware ' + screenshot + newline, {}), { kind: 'firmware', command: true, text: screenshot });
+  }
+  assert.deepEqual(parse('@固件助手 (EN)+\n' + screenshot + '\n\n@固件助手 (EN)+', scope, '固件助手 (EN)+'), { kind: 'firmware', command: false, text: screenshot });
+  assert.equal(parse(screenshot + '\n@其他人').kind, 'notice');
+  assert.equal(parse(screenshot + '\n@AI Patrick Jr').kind, 'notice');
+  assert.equal(parse('帮我下载\n@AI Patrick\nSQ29MB 261103_02').kind, 'notice');
+  assert.equal(parse(screenshot + '\n@AI Patrick', {}), undefined, 'a filename still cannot enter firmware mode by itself');
+  assert.equal(parse('@AI Patrick\n/role', {}), undefined, 'other command parsing is unchanged');
+  assert.equal(parse(screenshot + '\n@AI Patrick', { ...scope, firmwareUser: 'bob' }), undefined);
+  assert.deepEqual(commandInput(message('\n\n' + screenshot + '\n').body, scope, 'alice'), { kind: 'firmware', command: false, text: screenshot });
+});
+
 test('group mentions do not bypass firmware plain-text, quote or length boundaries', () => {
   const scope = { firmwareUser: 'alice', firmwareUntil: Date.now() + 60000 };
-  for (const text of ['@AI Patrick\n/firmware', '/firmware\n@AI Patrick', '@AI Patrick /firmware\0']) {
+  for (const text of ['/firmware\n' + filename + '\n@AI Patrick', '@AI Patrick /firmware\0']) {
     assert.equal(commandInput(message(text, 'alice', 'g').body, scope, 'alice').kind, 'notice');
   }
-  for (const text of ['确认 ABCDEF\n@AI Patrick', '@AI Patrick', '确认 ABCDEF @AI Patrick' + ' '.repeat(501)]) {
+  for (const text of ['确认\nABCDEF\n@AI Patrick', filename + '\n' + filename + '\n@AI Patrick', '@AI Patrick', '确认 ABCDEF @AI Patrick' + ' '.repeat(501)]) {
     assert.equal(commandInput(message(text, 'alice', 'g').body, scope, 'alice').kind, 'notice');
   }
   const quoted = message('@AI Patrick /firmware', 'alice', 'g').body; quoted.quote = { msgtype: 'text', text: { content: filename } };
@@ -142,7 +165,7 @@ test('bot mention display names default compatibly and are isolated per configur
   for (const name of ['', ' ', '@Bot', 'Bot\nName', 'x'.repeat(81), 3]) assert.throws(() => bridgeConfig({ ...env, WECOM_BOT_NAME: name }, '/tmp'), /显示名/);
 });
 
-test('group Web + Bridge flow handles natural requests, numbered choice, mentions, owner confirmation and cancellation', async t => {
+test('group Web + Bridge flow handles blank-line mentions, numbered choice, owner confirmation and cancellation', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'firmware-group-'));
   const token = 'group-test-token-'.repeat(4);
   const alternate = { ...candidate, id: 'e'.repeat(32), filename: filename.replace('_S02_', '_S03_'), path: candidate.path.replace('_S02_', '_S03_') };
@@ -162,22 +185,23 @@ test('group Web + Bridge flow handles natural requests, numbered choice, mention
   await bridge.start(); bridge.authenticated('bot'); bridge.authenticated('custom');
   const state = () => fs.readFile(path.join(root, '.data/firmware/state.json'), 'utf8').then(JSON.parse);
   const send = async (text, user = 'alice', chat = 'g', botId = 'bot') => { await bridge.receive(botId, message(text, user, chat)); await bridge.idle(); };
-  await send('/firmware @AI Patrick'); assert.match(bot.texts.at(-1), /请输入 OS/);
-  await send('帮我下载 SQ27M 的 251205_02 固件 @AI Patrick'); await until(async () => (await state()).active?.phase === 'choose');
+  await send('/firmware\n\n@AI Patrick'); assert.match(bot.texts.at(-1), /请输入 OS/);
+  await send(filename + '\n\n@AI Patrick'); await until(async () => (await state()).active?.phase === 'choose');
   assert.deepEqual(searched, criteria); assert.equal(submissions, 0);
   await bridge.firmwareNotifier.active; await bridge.firmwareNotifier.pump();
   assert.ok(bot.texts.some(text => text.includes('找到多个固件')));
   await send('/firmware 2 @AI Patrick', 'bob'); assert.match(bot.texts.at(-1), /任务处理中/);
   await send('/firmware 2 @AI Patrick', 'alice', 'other-group'); assert.match(bot.texts.at(-1), /任务处理中/);
-  await send('选择 2 @AI Patrick'); assert.equal((await state()).active.selected.id, alternate.id); assert.equal(submissions, 0);
+  await send('选择 2\r\n\r\n@AI Patrick'); assert.equal((await state()).active.selected.id, alternate.id); assert.equal(submissions, 0);
   assert.ok(bot.texts.at(-1).includes(alternate.filename));
-  const code = (await state()).active.code; assert.ok(code);
-  await send(`/firmware 确认 ${code} @AI Patrick`, 'bob'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
-  await send(`/firmware 确认 ${code} @AI Patrick`, 'alice', 'other-group'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
-  await send(`确认 ${code} @其他人 @AI Patrick`); assert.match(bot.texts.at(-1), /尚未开始/); assert.equal(submissions, 0);
-  await send(`确认 ${code} @AI Patrick`); await until(() => submissions === 1);
+  assert.equal((await state()).active.code, undefined);
+  assert.match(bot.texts.at(-1), /回复“确认”开始/);
+  await send('/firmware 确认 @AI Patrick', 'bob'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
+  await send('/firmware 确认 @AI Patrick', 'alice', 'other-group'); assert.match(bot.texts.at(-1), /任务处理中/); assert.equal(submissions, 0);
+  await send('稍后再说 @AI Patrick'); assert.match(bot.texts.at(-1), /尚未开始/); assert.equal(submissions, 0);
+  await send('好的，确认下载\n\n@AI Patrick'); await until(() => submissions === 1);
   await send('@AI Patrick /firmware 状态'); assert.match(bot.texts.at(-1), /下载/);
-  await send('/firmware 取消 @AI Patrick'); await until(async () => !(await state()).active);
+  await send('/firmware 取消\n@AI Patrick'); await until(async () => !(await state()).active);
   assert.equal(cancellations, 1); assert.equal(submissions, 1);
   await bridge.firmwareNotifier.pump(); assert.ok(targets.length); assert.ok(targets.every(target => target === 'g'));
   await send('@AI Patrick /firmware'); await send('取消 @AI Patrick'); assert.equal(bot.texts.at(-1), '已取消固件流程。');

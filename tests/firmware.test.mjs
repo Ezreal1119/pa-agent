@@ -34,7 +34,7 @@ async function fixture(t, options = {}) {
   let service = create(); await service.start();
   const state = () => fs.readFile(path.join(dataDir, 'firmware/state.json'), 'utf8').then(JSON.parse);
   t.after(async () => { await service.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
-  return { get service() { return service; }, client, candidates, jobs, state, get submits() { return submits; }, set enabled(x) { enabled = x; }, set ready(x) { ready = x; }, advance(ms) { now += ms; }, async restart() { await service.close(); service = create(); await service.start(); }, async query(text = name, who = owner()) { await service.command(input(text, true, who)); await until(async () => ['choose', 'confirm'].includes((await state()).active?.phase)); return (await state()).active; }, async confirm(flow, who = owner()) { const result = await service.command(input(`确认 ${flow.code}`, false, who)); await service.tick(); await until(async () => (await state()).active?.jobId); return result; } };
+  return { get service() { return service; }, client, candidates, jobs, state, get submits() { return submits; }, set enabled(x) { enabled = x; }, set ready(x) { ready = x; }, advance(ms) { now += ms; }, async restart() { await service.close(); service = create(); await service.start(); }, async query(text = name, who = owner()) { await service.command(input(text, true, who)); await until(async () => ['choose', 'confirm'].includes((await state()).active?.phase)); return (await state()).active; }, async confirm(flow, who = owner()) { const result = await service.command(input('确认', false, who)); await service.tick(); await until(async () => (await state()).active?.jobId); return result; } };
 }
 
 test('firmware requires command, real candidate and owner confirmation, then returns only verified upload URL', async t => {
@@ -42,9 +42,9 @@ test('firmware requires command, real candidate and owner confirmation, then ret
   assert.match((await f.service.command(input(name, false))).text, /重新发送 \/firmware/);
   assert.equal((await f.state()).active, undefined);
   const flow = await f.query(); assert.equal(f.submits, 0);
-  assert.match((await f.service.command(input('确认 WRONG', false))).text, /尚未开始/);
+  assert.match((await f.service.command(input('开始', false))).text, /尚未开始/);
   assert.equal(f.submits, 0);
-  assert.match((await f.service.command(input(`确认 ${flow.code}`, false, owner('bob')))).text, /任务处理中/);
+  assert.match((await f.service.command(input('确认', false, owner('bob')))).text, /任务处理中/);
   await f.confirm(flow); assert.equal(f.submits, 1);
   const job = [...f.jobs.values()][0]; job.state = 'succeeded'; job.result = { uploaded: true, filename: name, size: f.candidates[0].size, download_url: base + name };
   await f.service.tick();
@@ -69,14 +69,14 @@ test('disabled or offline sends maintenance and does not acquire slot or start a
 
 test('switch off after preview prevents confirmation; switch off after accepted job continues tracking', async t => {
   const f = await fixture(t); const flow = await f.query(); f.enabled = false;
-  assert.equal((await f.service.command(input(`确认 ${flow.code}`, false))).text, FIRMWARE_MAINTENANCE); assert.equal(f.submits, 0);
+  assert.equal((await f.service.command(input('确认', false))).text, FIRMWARE_MAINTENANCE); assert.equal(f.submits, 0);
   f.enabled = true; await f.confirm(flow); f.enabled = false; f.advance(60000); await f.service.tick();
   assert.match((await f.state()).notices.at(-1).text, /下载中/); assert.equal((await f.state()).active.jobId, [...f.jobs.values()][0].id);
 });
 
 test('lost submit response reconciles by idempotency key, including service restart', async t => {
   const f = await fixture(t, { loseSubmit: true }); const flow = await f.query();
-  await f.service.command(input(`确认 ${flow.code}`, false)); await f.service.tick();
+  await f.service.command(input('确认', false)); await f.service.tick();
   await until(() => f.submits === 1); await until(async () => (await f.state()).active.offline);
   await f.restart(); await f.service.tick();
   await until(async () => (await f.state()).active?.jobId);
@@ -257,4 +257,44 @@ test('local client rejects legacy, hidden ambiguity and wrong-condition results'
     const client = new LocalFirmwareClient(config, async () => Response.json(value));
     await assert.rejects(client.search(criteria));
   }
+});
+
+test('confirmation needs no code and accepts the owner message containing 确认 exactly once', async t => {
+  for (const text of ['确认', '好的，确认下载', '我已确认，可以开始了', '确认 E4630C']) {
+    const f = await fixture(t); await f.query();
+    assert.equal((await f.state()).active.code, undefined);
+    const preview = await f.service.command(input('状态', true)); assert.match(preview.text, /回复“确认”开始/); assert.doesNotMatch(preview.text, /确认码/);
+    const cmd = input(text, false); const accepted = await f.service.command(cmd); assert.match(accepted.text, /已确认/);
+    await f.service.tick(); await until(() => f.submits === 1);
+    await f.service.command(cmd); await f.service.command(input(text, false)); await f.service.tick();
+    assert.equal(f.submits, 1); assert.equal([...f.jobs.values()][0].candidate.id, f.candidates[0].id);
+  }
+});
+
+test('code-free confirmation still belongs to the original user, bot and group', async t => {
+  const f = await fixture(t), group = { botId: 'bot', userId: 'alice', chatType: 'group', target: 'original-group' };
+  await f.query(name, group);
+  for (const stranger of [{ ...group, userId: 'bob' }, { ...group, botId: 'other-bot' }, { ...group, target: 'other-group' }, owner()]) {
+    assert.match((await f.service.command(input('确认', false, stranger))).text, /任务处理中/); assert.equal(f.submits, 0);
+  }
+  await f.service.command(input('确认下载', false, group)); await f.service.tick(); await until(() => f.submits === 1);
+});
+
+test('expired, cancelled or absent flows cannot be started by a plain confirmation', async t => {
+  for (const state of ['absent', 'expired', 'cancelled']) {
+    const f = await fixture(t);
+    if (state !== 'absent') await f.query();
+    if (state === 'expired') f.advance(5 * 60000 + 1);
+    if (state === 'cancelled') await f.service.command(input('取消', false));
+    assert.match((await f.service.command(input('确认', false))).text, /已结束或超时/); assert.equal(f.submits, 0);
+  }
+});
+
+test('an existing confirmation flow with a legacy code keeps its candidate and expiry but accepts 确认 after restart', async t => {
+  const f = await fixture(t); await f.query(); const file = path.join(f.service.directory, 'state.json');
+  const old = await f.state(); old.active.code = 'E4630C'; await fs.writeFile(file, JSON.stringify(old));
+  await f.restart(); const restored = (await f.state()).active;
+  assert.equal(restored.id, old.active.id); assert.equal(restored.selected.id, old.active.selected.id); assert.equal(restored.expiresAt, old.active.expiresAt);
+  const preview = await f.service.command(input('状态', true)); assert.match(preview.text, /回复“确认”开始/); assert.doesNotMatch(preview.text, /E4630C|确认码/);
+  await f.service.command(input('确认', false)); await f.service.tick(); await until(() => f.submits === 1);
 });

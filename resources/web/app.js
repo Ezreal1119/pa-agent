@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = { token: '', status: null, current: null, busy: false, rounds: 0, activities: [], toastTimer: null, cancelBeforeRun: false, effort: 'low', run: null, clock: null, clockStart: 0, files: [], pendingIds: [] };
+const state = { token: '', status: null, current: null, busy: false, rounds: 0, activities: [], toastTimer: null, cancelBeforeRun: false, effort: 'low', run: null, clock: null, clockStart: 0, files: [], pendingIds: [], sessionEpoch: 0 };
 const dialog = $('settings-dialog');
 const sessionDialog = $('session-dialog');
 let sessionAction = null;
@@ -61,6 +61,7 @@ async function api(url, options = {}) {
   return data;
 }
 function setBusy(busy) {
+  if (busy) { state.sessionEpoch++; clearFileDrag(); }
   state.busy = busy; $('send').hidden = busy; $('stop').hidden = !busy; $('send').disabled = !state.status;
   $('question').disabled = busy; $('new-chat').disabled = busy;
   $('logout').disabled = busy; $('logout-top').disabled = busy;
@@ -296,7 +297,9 @@ function scrollBottom() { const node = $('chat-scroll'); node.scrollTop = node.s
 async function openSession(id) {
   if (state.busy) return;
   if (!state.status?.configured) return note('Configure the model connection in .env, then restart the service.', true);
+  const epoch = ++state.sessionEpoch;
   const data = await api(`/api/sessions/${id}`);
+  if (epoch !== state.sessionEpoch || state.busy) return;
   state.current = id; localStorage.setItem('product-expert-session', id); $('chat-title').textContent = data.title || 'New conversation';
   renderMessages(data.messages); updateRounds(data.rounds); resetContext(); showContext(data.context); showRuns(data.runs); note();
   restorePending(data); renderFiles(data.files || []);
@@ -307,6 +310,7 @@ async function openSession(id) {
 }
 function newChat() {
   if (state.busy) return;
+  state.sessionEpoch++;
   state.current = null; localStorage.removeItem('product-expert-session'); $('chat-title').textContent = 'New conversation';
   renderMessages([]); updateRounds(0); resetContext(); showRuns(); stopClock(); note(); void refreshSessions().catch(error => toast(error.message)); $('question').focus();
   state.pendingIds = []; renderFiles([]);
@@ -496,23 +500,103 @@ function renderFiles(files) {
   $('attachment-hint').hidden = !pending.length;
   $('attachment-hint').textContent = `${pending.length} pending attachments will be sent with your next message.`;
 }
-$('upload-file').addEventListener('click', () => { if (!state.busy) $('file-input').click(); });
-$('file-input').addEventListener('change', async () => {
-  const files = [...$('file-input').files]; $('file-input').value = '';
-  if (!files.length || state.busy || !state.status?.fileTools?.enabled) return;
+function uploadsEnabled() { return Boolean(state.status?.fileTools?.enabled && state.status.fileTools.tools?.length); }
+async function uploadAttachments(input) {
+  const files = Array.from(input || []);
+  if (!files.length) return;
+  if (state.busy) return toast('Wait for the current upload or answer to finish.');
+  if (!uploadsEnabled()) return toast('File uploads are currently unavailable.');
   if (state.pendingIds.length + files.length > 20) return toast('Attach up to 20 files per message. Send additional files in another message.');
   if (!state.status.configured) return note('Configure the model connection in .env, then restart the service.', true);
-  setBusy(true); state.uploadAbort = new AbortController();
+  const accepted = state.status.fileTools.acceptedExtensions || $('file-input').accept.split(',');
+  for (const file of files) {
+    const extension = /\.[^.]+$/.exec(file.name)?.[0].toLowerCase();
+    if (!extension || !accepted.includes(extension)) return note(`${file.name || 'This file'} has an unsupported file type.`, true);
+    if (file.size > state.status.fileTools.maxFileBytes) return note(`${file.name} exceeds the per-file size limit.`, true);
+  }
+  setBusy(true);
+  const controller = new AbortController(); state.uploadAbort = controller;
+  let sessionId = state.current;
   try {
-    if (!state.current) { const data = await api('/api/sessions', { method: 'POST', body: '{}' }); state.current = data.id; localStorage.setItem('product-expert-session', data.id); }
+    if (!sessionId) {
+      const data = await api('/api/sessions', { method: 'POST', body: '{}', signal: controller.signal });
+      sessionId = data.id; state.current = sessionId; localStorage.setItem('product-expert-session', sessionId);
+    }
     for (const file of files) {
-      if (file.size > state.status.fileTools.maxFileBytes) throw new Error(`${file.name} exceeds the per-file size limit.`);
+      controller.signal.throwIfAborted();
       note(`Uploading ${file.name}…`);
-      const uploaded = await api(`/api/sessions/${state.current}/files?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal: state.uploadAbort.signal });
+      const uploaded = await api(`/api/sessions/${sessionId}/files?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal: controller.signal });
       state.pendingIds.push(uploaded.file.id); savePending(); state.files.push(uploaded.file); renderFiles(state.files);
     }
-    const data = await api(`/api/sessions/${state.current}/files`); renderFiles(data.files); await refreshSessions();
+    const data = await api(`/api/sessions/${sessionId}/files`, { signal: controller.signal }); renderFiles(data.files); await refreshSessions();
     note('Attachments are ready to send with your next message.');
   } catch (error) { note(error.name === 'AbortError' ? 'Upload cancelled.' : error.message, true); }
   finally { state.uploadAbort = null; setBusy(false); renderFiles(state.files); $('question').focus(); }
+}
+$('upload-file').addEventListener('click', () => { if (!state.busy) $('file-input').click(); });
+$('file-input').addEventListener('change', () => {
+  const files = Array.from($('file-input').files); $('file-input').value = '';
+  return uploadAttachments(files);
 });
+
+function carriesFiles(data) {
+  return Boolean(data && (Array.from(data.types || []).includes('Files') || Array.from(data.items || []).some(item => item.kind === 'file') || data.files?.length));
+}
+function transferFiles(data) {
+  const items = Array.from(data?.items || []).filter(item => item.kind === 'file');
+  if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) throw new Error('Folders cannot be attached. Choose individual files.');
+  // FileList and items usually describe the same payload; use only one to avoid duplicates.
+  const files = data?.files?.length ? Array.from(data.files) : items.map(item => item.getAsFile?.()).filter(Boolean);
+  return files.map((file, index) => {
+    const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[file.type];
+    if (extension && (!file.name || !file.name.includes('.'))) return new File([file], `clipboard-${Date.now()}-${index + 1}.${extension}`, { type: file.type, lastModified: file.lastModified });
+    return file;
+  });
+}
+function receiveTransferredFiles(data) {
+  try {
+    const files = transferFiles(data);
+    if (!files.length) return toast('The browser could not read these files. Drag them in or use Upload files.');
+    return uploadAttachments(files);
+  } catch (error) { toast(error.message); }
+}
+let fileDragDepth = 0;
+function clearFileDrag() {
+  fileDragDepth = 0; $('composer').classList.remove('file-drag-over'); $('file-drop-hint').hidden = true;
+}
+const composerArea = $('composer-area');
+composerArea.addEventListener('dragenter', event => {
+  if (!carriesFiles(event.dataTransfer)) return;
+  event.preventDefault(); fileDragDepth++;
+  if (uploadsEnabled() && !state.busy) { $('composer').classList.add('file-drag-over'); $('file-drop-hint').hidden = false; }
+});
+composerArea.addEventListener('dragover', event => {
+  if (!carriesFiles(event.dataTransfer)) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = uploadsEnabled() && !state.busy ? 'copy' : 'none';
+});
+composerArea.addEventListener('dragleave', () => { if (fileDragDepth > 0 && --fileDragDepth === 0) clearFileDrag(); });
+composerArea.addEventListener('drop', event => {
+  clearFileDrag();
+  if (!carriesFiles(event.dataTransfer)) return;
+  event.preventDefault();
+  return receiveTransferredFiles(event.dataTransfer);
+});
+$('question').addEventListener('paste', event => {
+  if (!carriesFiles(event.clipboardData)) return; // Preserve ordinary text/HTML paste.
+  event.preventDefault();
+  return receiveTransferredFiles(event.clipboardData);
+});
+// A misplaced file drop must not navigate away from the conversation.
+for (const type of ['dragover', 'drop']) document.addEventListener(type, event => {
+  if (!carriesFiles(event.dataTransfer) || event.defaultPrevented) return;
+  event.preventDefault();
+  if (!composerArea.contains(event.target)) {
+    clearFileDrag();
+    if (type === 'dragover') event.dataTransfer.dropEffect = 'none';
+    else toast('Drop files in the message box to attach them.');
+  }
+});
+document.addEventListener('dragend', clearFileDrag);
+document.addEventListener('keydown', event => { if (event.key === 'Escape') clearFileDrag(); });
+document.addEventListener('dragleave', event => { if (!event.relatedTarget && [document, document.documentElement].includes(event.target)) clearFileDrag(); });
+window.addEventListener('blur', clearFileDrag);

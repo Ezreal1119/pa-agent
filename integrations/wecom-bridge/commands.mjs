@@ -36,8 +36,9 @@ ${text ?? '未设置'}
 function firmwareInputText(body, text, botName) {
   if (body.chattype !== 'group' || body.msgtype !== 'text') return text;
   const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const prefix = new RegExp('^@' + escaped + '(?:[\\t\\p{Zs}]+|$)', 'u');
-  const suffix = new RegExp('(?:^|[\\t\\p{Zs}]+)@' + escaped + '$', 'u');
+  const space = '[\\t\\r\\n\\p{Zs}\\u2028\\u2029]';
+  const prefix = new RegExp('^@' + escaped + '(?:' + space + '+|$)', 'u');
+  const suffix = new RegExp('(?:^|' + space + '+)@' + escaped + '$', 'u');
   let prior;
   do { prior = text; text = text.replace(prefix, '').replace(suffix, '').trim(); } while (text !== prior);
   return text;
@@ -54,8 +55,11 @@ export function commandInput(body, scope, userId, botName = DEFAULT_BOT_NAME) {
   collect(body);
   const text = parts.join('\n').trim();
   const firmwareText = firmwareInputText(body, text, botName);
+  // Check the cleaned firmware body, not line breaks used to place @bot on its
+  // own line. Keep raw length/NUL checks and never merge substantive text lines.
+  const invalidFirmwareText = raw === undefined || body.quote || raw.includes('\0') || /[\r\n\u2028\u2029]/u.test(firmwareText);
   if (/^\/firmware(?:\s|$)/u.test(firmwareText)) {
-    if (raw === undefined || body.quote || /[\r\n\0]/u.test(raw) || raw.length > 510) return { kind: 'notice', text: '请用纯文本发送 /firmware 或 /firmware 固件文件名。' };
+    if (invalidFirmwareText || raw.length > 510) return { kind: 'notice', text: '请用纯文本发送 /firmware 或 /firmware 固件需求，@机器人可单独一行。' };
     return { kind: 'firmware', command: true, text: firmwareText.replace(/^\/firmware(?:\s+|$)/u, '') };
   }
   if (text.startsWith('/clear') || text === '/new' || text === '新建对话') return { kind: 'reset' };
@@ -64,7 +68,7 @@ export function commandInput(body, scope, userId, botName = DEFAULT_BOT_NAME) {
   if (text.startsWith('/patrick_balance')) return { kind: 'balance' };
   if (text.startsWith('/welcome')) return { kind: 'welcome' };
   if (scope.firmwareUser === userId && scope.firmwareUntil > Date.now()) {
-    if (raw === undefined || body.quote || !firmwareText || /[\r\n\0]/u.test(raw) || raw.length > 500) return { kind: 'notice', text: '固件流程只接收单行纯文本；请输入文件名、候选序号、本次确认码或“取消”。' };
+    if (invalidFirmwareText || !firmwareText || raw.length > 500) return { kind: 'notice', text: '请输入一行固件需求、候选序号、“确认”或“取消”；@机器人可单独一行。' };
     return { kind: 'firmware', command: false, text: firmwareText };
   }
   if (scope.awaitingUser !== userId) return;

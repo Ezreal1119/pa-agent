@@ -12,7 +12,7 @@ type Owner = { botId: string; userId: string; chatType: "single" | "group"; targ
 export type Command = Owner & { msgid: string; text: string; command: boolean };
 export type Reply = { text: string; awaiting: boolean; flowId?: string; expiresAt?: number };
 type Phase = "filename" | "matching" | "choose" | "confirm" | "starting" | "running" | "cancelling";
-type Flow = { id: string; owner: Owner; phase: Phase; expiresAt: number; query?: string; criteria?: FirmwareQuery; matchVersion?: number; candidates: Candidate[]; candidateTotal?: number; selected?: Candidate; code?: string; confirmedAt?: number; jobId?: string; snapshot?: LocalJob; notified: number[]; offline?: boolean; invalidResult?: boolean };
+type Flow = { id: string; owner: Owner; phase: Phase; expiresAt: number; query?: string; criteria?: FirmwareQuery; matchVersion?: number; candidates: Candidate[]; candidateTotal?: number; selected?: Candidate; confirmedAt?: number; jobId?: string; snapshot?: LocalJob; notified: number[]; offline?: boolean; invalidResult?: boolean };
 export type Notice = { id: string; flowId: string; botId: string; userId: string; chatType: "single" | "group"; target: string; text: string; created: number; prompt?: boolean; expiresAt?: number; claim?: string; claimUntil?: number; sent?: number };
 type Database = { version: 1; active?: Flow; replies: Record<string, { owner: string; at: number; value: Reply }>; notices: Notice[] };
 export interface FirmwareServiceOptions { dataDir: string; client: FirmwareClient; extractor: FirmwareExtractor; enabled: () => boolean; publicBase: string; now?: () => number; pollMs?: number; }
@@ -90,11 +90,11 @@ export class FirmwareService {
     }
     if (flow.phase === "confirm") {
       const c = flow.selected!;
-      return { text: `是否下载并上传？\n\n${c.filename}\n大小：${(c.size / 1024 / 1024).toFixed(1)} MiB\n\n回复“确认 ${flow.code}”开始，输入“取消”退出。5 分钟内有效。`, awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
+      return { text: `是否下载并上传？\n\n${c.filename}\n大小：${(c.size / 1024 / 1024).toFixed(1)} MiB\n\n回复“确认”开始，输入“取消”退出。5 分钟内有效。`, awaiting: true, flowId: flow.id, expiresAt: flow.expiresAt };
     }
     return { text: this.progress(flow), awaiting: false, flowId: flow.id };
   }
-  private select(flow: Flow, c: Candidate) { flow.selected = c; flow.phase = "confirm"; flow.code = randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase(); flow.expiresAt = this.now() + INPUT_TTL; }
+  private select(flow: Flow, c: Candidate) { flow.selected = c; flow.phase = "confirm"; flow.expiresAt = this.now() + INPUT_TTL; }
   async command(input: unknown): Promise<Reply> {
     const cmd = identity(input);
     const unavailable = { text: FIRMWARE_MAINTENANCE, awaiting: false };
@@ -130,10 +130,10 @@ export class FirmwareService {
             if (candidate) { this.clearPrompts(db, flow.id); this.select(flow, candidate); answer = this.preview(flow); }
             else answer = { ...this.preview(flow), text: "请输入列表中的序号。\n\n" + this.preview(flow).text };
           } else if (flow.phase === "confirm") {
-            if (text.match(/^确认\s+([A-F0-9]{6})$/i)?.[1]?.toUpperCase() === flow.code) {
+            if (text.includes("确认")) {
               this.clearPrompts(db, flow.id); flow.phase = "starting"; flow.confirmedAt = this.now();
               answer = { text: "已确认，正在提交任务，完成后发送下载链接。", awaiting: false, flowId: flow.id };
-            } else answer = { ...this.preview(flow), text: "尚未开始，请使用本次确认码。\n\n" + this.preview(flow).text };
+            } else answer = { ...this.preview(flow), text: "尚未开始，请回复“确认”。\n\n" + this.preview(flow).text };
           } else {
             flow.query = text; flow.phase = "matching"; flow.expiresAt = this.now() + 120000; answer = this.preview(flow);
           }

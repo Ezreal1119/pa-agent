@@ -47,11 +47,12 @@
             </div>
             <div id="messages" class="messages" aria-live="polite" aria-relevant="additions"></div>
           </div>
-          <div class="composer-area">
+          <div id="composer-area" class="composer-area">
             <div id="config-banner" class="config-banner" hidden><span>Configure the model connection in .env, then restart the service.</span><button id="banner-settings">Agent settings →</button></div>
             <div id="run-note" class="run-note" role="status" hidden></div>
             <section id="attachment-area" class="attachment-area" aria-label="Message attachments" hidden>
               <div class="attachment-heading"><button id="upload-file" type="button">＋ Upload files</button><span id="file-support"></span><input id="file-input" type="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp,.txt,.md,.markdown,.log,.java,.json,.jsonl,.csv,.tsv,.html,.htm,.xml,.yaml,.yml,.py,.js,.ts,.jsx,.tsx,.mjs,.cjs,.css,.sql,.c,.h,.cpp,.hpp,.go,.rs,.ini,.conf,.cfg,.properties" multiple hidden></div>
+              <p id="file-input-help" class="attachment-input-help">Drag files into the message box, or paste screenshots and files.</p>
               <div id="attachment-list" class="attachment-list"></div>
               <p id="attachment-hint" class="attachment-hint" hidden></p>
               <details id="session-files" class="session-files" hidden><summary>Conversation files and outputs</summary><div id="session-file-list" class="attachment-list"></div></details>
@@ -61,7 +62,8 @@
               <span id="run-clock" class="run-clock" role="timer" aria-label="Elapsed run time">Ready</span>
             </div>
             <form id="composer" class="composer">
-              <label class="sr-only" for="question">Enter a product or UMS question</label><textarea id="question" rows="2" maxlength="12000" placeholder="Ask a product or UMS question, or continue the conversation…"></textarea>
+              <div id="file-drop-hint" class="file-drop-hint" hidden>Drop files to attach</div>
+              <label class="sr-only" for="question">Enter a product or UMS question</label><textarea id="question" aria-describedby="file-input-help" rows="2" maxlength="12000" placeholder="Ask a product or UMS question, or continue the conversation…"></textarea>
               <div class="composer-bottom"><span class="composer-label"><span class="sparkle">✳</span> Product and UMS knowledge base</span><div><span class="keyboard-hint">Enter to send · Shift + Enter for a new line</span><button id="send" class="send-button" type="submit" aria-label="Send question">↑</button><button id="stop" class="stop-button" type="button" hidden><span>■</span> Stop</button></div></div>
             </form>
             <div class="composer-foot"><span>Answers use your knowledge base. Verify important details.</span><span id="round-count">Context 0 / 5 turns</span></div>

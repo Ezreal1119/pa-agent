@@ -52,3 +52,6 @@ a.settings-button{display:flex;align-items:center;text-decoration:none}.contacts
 #mcp-settings{margin:14px 0 18px;border-top:1px solid #e5ebdf;padding-top:5px}.mcp-settings-stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:13px 14px;margin-top:10px;border:1px solid #dfe7d8;border-radius:8px;background:#f0f4eb}.mcp-settings-stats span{display:block;font-size:10px;color:#788c6e}.mcp-settings-stats strong{display:block;font-size:20px;color:#35553d;margin-top:4px;font-variant-numeric:tabular-nums}
 
 .contact-kind{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;color:#52734f;background:#edf3e8;border:1px solid #dce7d5;border-radius:5px;padding:3px 7px;margin-bottom:9px}.contact-row[data-kind="group"] .contact-kind{color:#596c85;background:#eef2f8;border-color:#dbe3ef}
+
+/* Chat attachments: shared picker, drop and clipboard upload flow. */
+.composer{position:relative}.composer.file-drag-over{border-color:#6e9477;border-style:dashed;box-shadow:0 0 0 3px #6e947720}.file-drop-hint{position:absolute;inset:0;z-index:2;display:grid;place-items:center;pointer-events:none;background:#f0f6eff2;color:#355d3e;font-size:14px;font-weight:500}.attachment-input-help{font-size:10px;line-height:1.6;color:#8a9788;margin:7px 2px 9px}
