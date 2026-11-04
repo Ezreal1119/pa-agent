@@ -1,0 +1,8 @@
+{
+  "source": "Customer-provided SOP AI模版.xlsx",
+  "receivedAt": "2026-11-04",
+  "asset": "assemble-sop-template.xlsx",
+  "sha256": "794e77981b7a66798a36a539ecee0ddd163603074311df7352d8d8e7a5a72377",
+  "bytes": 170164,
+  "note": "Unmodified customer workbook. Used only by the assemble default generator. Language selection, metadata, image anchors, layout adjustments and unused-template removal happen in the generated output. No Library, task or credential data is included."
+}

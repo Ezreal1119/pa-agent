@@ -151,7 +151,7 @@ function parseArgs(argv) {
   }
 
   return {
-    template: args.template || path.resolve(__dirname, "urovo-sop-template.xlsx"),
+    template: args.template || (args["sop-type"] === "assemble" ? undefined : path.resolve(__dirname, "urovo-sop-template.xlsx")),
     dataDir: args["data-dir"],
     projectDir: args["project-dir"],
     projectName: args["project-name"],
@@ -747,6 +747,20 @@ function copyCellValue(sourceCell, targetCell) {
 function copyWorksheetImages(sourceSheet, targetSheet, mapRow = row => row) {
   for (const image of sourceSheet.getImages()) {
     const range = image.range;
+    // Customer Assembly templates use one-cell anchors with a fixed extent.
+    if (range?.tl && !range.br && range.ext) {
+      targetSheet.addImage(image.imageId, {
+        tl: {
+          nativeCol: range.tl.nativeCol,
+          nativeRow: mapRow(range.tl.nativeRow + 1) - 1,
+          nativeColOff: range.tl.nativeColOff,
+          nativeRowOff: range.tl.nativeRowOff,
+        },
+        ext: { ...range.ext },
+        editAs: range.editAs,
+      });
+      continue;
+    }
     if (!range?.tl || !range?.br) {
       continue;
     }
@@ -771,7 +785,8 @@ function copyWorksheetImages(sourceSheet, targetSheet, mapRow = row => row) {
 function cloneWorksheet(workbook, sourceSheet, newName, assemblyLayout = null) {
   const mapRow = assemblyLayout?.mapRow || (row => row);
   const targetRows = row => {
-    const extra = row === 12 ? assemblyLayout?.bomExtra : row === 19 ? assemblyLayout?.toolsExtra : 0;
+    const extra = row === (assemblyLayout?.bomEndRow ?? 12) ? assemblyLayout?.bomExtra
+      : row === (assemblyLayout?.toolsEndRow ?? 19) ? assemblyLayout?.toolsExtra : 0;
     return Array.from({ length: 1 + (extra || 0) }, (_, index) => mapRow(row) + index);
   };
   const maxRow = sourceSheet.rowCount || 0;
@@ -2309,7 +2324,8 @@ function buildAssemblyProcessSheets(
 async function buildCkdSop(options) {
   const templateLanguage = normalizeTemplateLanguage(options.templateLanguage);
   const templatePath = path.resolve(
-    options.template || path.resolve(__dirname, TEMPLATE_FILE_BY_LANGUAGE[templateLanguage])
+    options.template || path.resolve(__dirname, options.sopType === "assemble"
+      ? "assemble-sop-template.xlsx" : TEMPLATE_FILE_BY_LANGUAGE[templateLanguage])
   );
   const assetsDir = path.resolve(options.assetsDir || path.dirname(templatePath));
   const outputPath = path.resolve(options.output);
@@ -2339,7 +2355,13 @@ async function buildCkdSop(options) {
     if (missing.length > 0) {
       throw new Error(`Project mode requires: ${missing.join(", ")}`);
     }
-    const projectResult = buildProjectWorkbook(
+    const useCustomerAssembly = options.sopType === "assemble" && workbook.getWorksheet("1格模版");
+    const projectResult = useCustomerAssembly
+      ? require("./assembly-template.cjs").buildAssemblyWorkbook(workbook, { ...options, projectDir: path.resolve(projectDir), templateLanguage }, {
+        resolveProcesses, parseProcessList, resolveInstructionPhotos, cloneWorksheet, setSheetZoom, loadToolsText, loadJsonl, assemblyPath,
+        validateAssemblyBom, fillAssemblyTable, embedSingleAssemblyPhoto, appendAssemblyTables, authorName,
+        mergedWidthPx, uniqueSheetName, sheetNameKey,
+      }) : buildProjectWorkbook(
       workbook,
       path.resolve(projectDir),
       assetsDir,

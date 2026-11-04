@@ -113,7 +113,8 @@ test('Assembly expands the process table, retains overflow in continuation pages
   const source = fs.readFileSync(path.join(folder, 'Bill_of_Materials.jsonl'));
   for (const language of ['中文', 'English']) {
     const output = path.join(root, language + '.xlsx');
-    const generated = await generator.buildCkdSop({ output, projectDir: project, projectName: 'P', documentNo: 'D', sopName: 'S', author: 'Cover! "Workstation Layout Chart"', processList: ['step'], sopType: 'assemble', templateLanguage: language });
+    const template = path.resolve('resources/workflows/create-ckd-sop/create-ckd-sop-v3', language === '中文' ? 'urovo-sop-template-zh.xlsx' : 'urovo-sop-template.xlsx');
+    const generated = await generator.buildCkdSop({ template, output, projectDir: project, projectName: 'P', documentNo: 'D', sopName: 'S', author: 'Cover! "Workstation Layout Chart"', processList: ['step'], sopType: 'assemble', templateLanguage: language });
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(output);
     assert.equal(generated.sheetCount, 5); assert.equal(generated.warnings.length, 1); assert.ok(!generated.warnings.join('').includes('only the first'));
     const cover = workbook.getWorksheet(language === '中文' ? '封面' : 'Cover')!, chart = workbook.getWorksheet(language === '中文' ? '工站安排表' : 'Workstation Layout Chart')!;
@@ -145,7 +146,7 @@ test('Chinese generated workbooks for every SOP type have localized front sheets
     const output = path.join(root, sopType + '.xlsx');
     await generator.buildCkdSop({ output, projectDir: project, projectName: 'P', documentNo: 'D', sopName: 'S', author: 'A', processList: ['step'], sopType, templateLanguage: '中文' });
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(output);
-    assert.equal(workbook.worksheets[0]!.name, '封面'); assert.equal(workbook.worksheets[1]!.name, sopType === 'assemble' ? '工站安排表' : '生产安排表');
+    assert.equal(workbook.worksheets[0]!.name, '封面'); assert.equal(workbook.worksheets[1]!.name, sopType === 'assemble' ? '排位图' : '生产安排表');
     assert.equal(workbook.getWorksheet('Cover'), undefined);
     for (const sheet of workbook.worksheets) sheet.eachRow(row => row.eachCell(cell => {
       const formula = (cell.value as ExcelJS.CellFormulaValue)?.formula;
