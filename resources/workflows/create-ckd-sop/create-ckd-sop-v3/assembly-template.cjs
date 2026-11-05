@@ -64,9 +64,56 @@ function buildAssemblyWorkbook(workbook, options, h) {
     delete sheet.pageSetup.scale;
   };
   const formula = (sheet, cell, expression, result) => { sheet.getCell(cell).value = { formula: expression, ...(result == null ? {} : { result }) }; };
+  const chineseText = /[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/u;
+  function fontPatch(cell, patch) {
+    const font = { ...cell.font, ...patch };
+    // A theme font would otherwise take precedence over an explicitly requested face.
+    delete font.scheme;
+    cell.style = { ...cell.style, font };
+  }
+  function styleRange(sheet, first, last, left, right, patch) {
+    const masters = new Set();
+    for (let row = first; row <= last; row++) for (let col = left; col <= right; col++) {
+      const cell = sheet.getCell(row, col).master;
+      if (!masters.has(cell.address)) { masters.add(cell.address); fontPatch(cell, patch); }
+    }
+  }
+  // Apply process fonts before measuring tables, captions or check-text capacity.
+  for (const template of templateSheets) {
+    fontPatch(template.getCell("E1"), { size: 36 });
+    for (const [left, right] of [[1, 4], [19, 22]]) styleRange(template, 3, 5, left, right, { size: 16 });
+    for (const row of [6, 15, 22, 30, 36]) fontPatch(template.getCell(row, 1), { name: "黑体", size: 16 });
+    for (const [first, last] of [[7, 14], [16, 21], [23, 29], [31, 35]]) {
+      styleRange(template, first, last, 1, 6, { name: "黑体", size: 16,
+        ...(first >= 23 ? { color: { argb: "FFFF0000" }, underline: true } : {}) });
+    }
+  }
+  templateSheets.forEach((template, index) => {
+    for (const [, , left, , first] of TILES[[1, 2, 4][index]]) fontPatch(template.getCell(first, left), { name: "黑体", size: 22 });
+  });
+  cover.getCell("A1").style = { ...cover.getCell("A1").style,
+    alignment: { ...cover.getCell("A1").alignment, vertical: "middle" } };
+  // Formula results cannot be rich text. Preserve their formulas and configure the
+  // minor theme's Chinese fallback; ordinary mixed text uses explicit font runs.
+  if (workbook._themes?.theme1) workbook._themes.theme1 = workbook._themes.theme1.replace(
+    /<a:minorFont>[\s\S]*?<\/a:minorFont>/u,
+    block => block.replace(/(<a:font script="Han[st]" typeface=")[^"]*("\/?>)/gu, "$1黑体$2")
+  );
+  function styleChartCell(cell) {
+    const text = typeof cell.value === "string" ? cell.value : null;
+    const hasChinese = text && chineseText.test(text);
+    fontPatch(cell, { name: hasChinese ? "黑体" : "Calibri", charset: hasChinese ? 134 : 0 });
+    cell.alignment = { ...cell.alignment, horizontal: "center", vertical: "middle", wrapText: true };
+    if (text && chineseText.test(text) && /[A-Za-z0-9]/u.test(text)) {
+      cell.value = { richText: (text.match(/[\p{Script=Han}\u3000-\u303f\uff01-\uff60]+|[^\p{Script=Han}\u3000-\u303f\uff01-\uff60]+/gu) || [])
+        .map(run => ({ text: run, font: { ...cell.font, name: chineseText.test(run) ? "黑体" : "Calibri", charset: chineseText.test(run) ? 134 : 0 } })) };
+    } else if (cell.value && typeof cell.value === "object" && "formula" in cell.value) {
+      cell.font = { ...cell.font, scheme: "minor" };
+    }
+  }
   // Conservative point-height estimate with CJK/full-width glyphs and explicit line breaks.
-  function textHeight(sheet, text, row, firstCol, lastCol) {
-    if (!text) return 0;
+  function textHeight(sheet, text, row, firstCol, lastCol, compact = false) {
+    if (text == null || text === "") return 0;
     const size = sheet.getCell(row, firstCol).font?.size || 11, width = Math.max(1, h.mergedWidthPx(sheet, firstCol, lastCol) * 0.88);
     let lines = 0;
     for (const line of String(text).split("\n")) {
@@ -74,7 +121,7 @@ function buildAssemblyWorkbook(workbook, options, h) {
       for (const character of line) used += size * 4 / 3 * (/[\u2E80-\u9FFF\uF900-\uFAFF\uFF01-\uFF60]/u.test(character) ? 1 : 0.6);
       lines += Math.max(1, Math.ceil(used / width));
     }
-    return lines * size * 1.4 + 10;
+    return lines * size * (compact ? 1.2 : 1.4) + (compact ? 6 : 10);
   }
   function writeText(sheet, text, range, processName, label, preserveAlignment = false) {
     const [first, last, left, right] = range, cell = sheet.getCell(first, left);
@@ -84,7 +131,7 @@ function buildAssemblyWorkbook(workbook, options, h) {
     if (!text) { cell.value = null; return; }
     if (textHeight(sheet, text, first, left, right) <= blockHeight(sheet, first, last) - 4) { cell.value = text; return; }
     const name = freshName(labels.continuation);
-    textRequests.push({ name, processName, label, text });
+    textRequests.push({ name, processName, label, text, font: { ...cell.font } });
     const reference = `${labels.full}「${name}」`;
     // A short excerpt is useful on the process page; the continuation retains the complete original.
     const chars = Array.from(text); let low = 0, high = chars.length;
@@ -101,13 +148,20 @@ function buildAssemblyWorkbook(workbook, options, h) {
     const fixed = protectedRows.reduce((sum, row) => sum + rowHeight(template, row), 0);
     const maximum = Math.max(base, Math.floor((total - fixed) / 24) + protectedRows.length);
     for (let count = Math.min(records.length, maximum); count >= 0; count--) {
-      const rows = Math.max(base, count), height = (total - fixed) / (rows - protectedRows.length);
-      const fits = records.slice(0, count).every((record, index) => {
-        const row = first + index, available = protectedRows.includes(row) ? rowHeight(template, row) : height;
-        return Math.max(textHeight(template, record.partno ?? record.name, Math.min(row, last), 2, 3),
-          textHeight(template, record.spec ?? record.specs, Math.min(row, last), 5, 6)) <= available;
+      const rows = Math.max(base, count), heights = Array.from({ length: rows }, () => 24);
+      const fits = heights.every((_, index) => {
+        const row = first + index, record = index < count ? records[index] : null;
+        const needed = record ? Math.max(24, ...[[record.index, 1, 1], [record.partno ?? record.name, 2, 3], [record.qty, 4, 4], [record.spec ?? record.specs, 5, 6]]
+          .map(([value, left, right]) => textHeight(template, value, Math.min(row, last), left, right, true))) : 24;
+        heights[index] = protectedRows.includes(row) ? rowHeight(template, row) : needed;
+        return needed <= heights[index];
       });
-      if (fits) return { rows, inline: count, extra: rows - base, height, protectedRows };
+      const used = heights.reduce((sum, height) => sum + height, 0);
+      if (fits && used <= total + .001) {
+        const spare = Math.max(0, total - used) / (rows - protectedRows.length);
+        for (let i = 0; i < rows; i++) if (!protectedRows.includes(first + i)) heights[i] += spare;
+        return { rows, inline: count, extra: rows - base, heights };
+      }
     }
   }
   function layoutFor(template, bom, tools, slots) {
@@ -115,10 +169,9 @@ function buildAssemblyWorkbook(workbook, options, h) {
     const mapRow = row => row + (row >= 15 ? b.extra : 0) + (row >= 22 ? t.extra : 0);
     return { bomEndRow: 14, toolsEndRow: 21, bomExtra: b.extra, toolsExtra: t.extra, mapRow, b, t,
       compact(sheet) {
-        for (let row = 8; row <= 14 + b.extra; row++) sheet.getRow(row).height = b.height;
+        for (let i = 0; i < b.rows; i++) sheet.getRow(8 + i).height = b.heights[i];
         for (let row = mapRow(17); row <= mapRow(21) + t.extra; row++) {
-          const originalRow = row - b.extra;
-          sheet.getRow(row).height = t.protectedRows.includes(originalRow) ? rowHeight(template, originalRow) : t.height;
+          sheet.getRow(row).height = t.heights[row - mapRow(17)];
         }
       }
     };
@@ -146,7 +199,8 @@ function buildAssemblyWorkbook(workbook, options, h) {
             const match = /^([A-F])(\d+):([A-F])(\d+)$/u.exec(merge);
             if (match && match[1].charCodeAt(0) - 64 === col && Number(match[2]) === row && match[2] === match[4]) right = match[3].charCodeAt(0) - 64;
           }
-          minimum = Math.max(minimum, textHeight(sheet, cell.value, row, col, right));
+          const tableRow = row >= map(7) && row <= map(14) || row >= map(16) && row <= map(21);
+          minimum = Math.max(minimum, textHeight(sheet, cell.text, row, col, right, tableRow));
         }
         const spare = Math.max(0, rowHeight(sheet, row) - minimum);
         if (spare) donors.push({ row, spare });
@@ -216,7 +270,10 @@ function buildAssemblyWorkbook(workbook, options, h) {
     if (row > 26) for (let col = 1; col <= 6; col++) chart.getCell(row, col).style = JSON.parse(JSON.stringify(chart.getCell(26, col).style));
     for (let col = 1; col <= 6; col++) chart.getCell(row, col).value = null;
     if (!active) continue;
-    const item = processes[row - 7], toolsText = h.loadToolsText(item.folder, "assemble");
+    const item = processes[row - 7], toolsFile = h.assemblyPath(item.folder, "Tools.jsonl");
+    const toolsText = (toolsFile ? h.loadJsonl(toolsFile) : []).map(record => [record.name || "",
+      record.qty != null && record.qty !== "" ? `x${record.qty}` : "",
+      record.specs && String(record.specs).toUpperCase() !== "NA" ? `(${record.specs})` : ""].filter(Boolean).join(" ")).join("\n");
     chart.getRow(row).values = [`OP${String(row - 6).padStart(3, "0")}`, row - 6, null, item.metadataName, toolsText || null, 30];
     chart.getRow(row).height = Math.max(30, textHeight(chart, toolsText, row, 5, 5), textHeight(chart, item.metadataName, row, 4, 4));
     chart.getRow(row).eachCell(cell => { cell.alignment = { ...cell.alignment, vertical: "middle", wrapText: true }; });
@@ -228,6 +285,11 @@ function buildAssemblyWorkbook(workbook, options, h) {
   chart.getCell(`A${chartFooter}`).value = `${labels.author}${options.author || ""}`;
   chart.getRow(chartFooter).height = Math.max(30, textHeight(chart, chart.getCell(`A${chartFooter}`).value, chartFooter, 1, 3));
   chart.getCell(`A${chartFooter}`).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+  for (let row = 1; row <= chartFooter; row++) for (let col = 1; col <= 6; col++) {
+    const cell = chart.getCell(row, col);
+    if (cell.master.address === cell.address) styleChartCell(cell);
+    else cell.style = cell.master.style;
+  }
   chart.pageSetup.printTitlesRow = "1:6";
   paper(chart, `A1:F${chartFooter}`, "portrait"); chart.pageSetup.fitToHeight = 0; h.setSheetZoom(chart, 100);
 
@@ -246,7 +308,7 @@ function buildAssemblyWorkbook(workbook, options, h) {
     const groups = Math.max(1, Math.ceil(photos.length / 4));
     for (let group = 0; group < groups; group++) {
       const selected = photos.slice(group * 4, group * 4 + 4), slots = selected.length <= 1 ? 1 : selected.length === 2 ? 2 : 4;
-      const template = templateSheets[slots === 1 ? 0 : slots === 2 ? 1 : 2], layout = layoutFor(template, bom, tools), map = layout.mapRow;
+      const template = templateSheets[slots === 1 ? 0 : slots === 2 ? 1 : 2], layout = layoutFor(template, bom, tools, slots), map = layout.mapRow;
       const sheet = h.cloneWorksheet(workbook, template, group ? freshName(sheetName) : sheetName, layout); layout.compact(sheet);
       h.fillAssemblyTable(sheet, bom, 8, layout.b.rows, record => ({ index: record.index, name: record.partno, qty: record.qty, spec: record.spec }));
       h.fillAssemblyTable(sheet, tools, map(17), layout.t.rows, record => ({ index: record.index, name: record.name, qty: record.qty, spec: record.specs }));
@@ -284,6 +346,8 @@ function buildAssemblyWorkbook(workbook, options, h) {
         }
         h.embedSingleAssemblyPhoto(workbook, sheet, previousPhoto, { rowStart: map(27), rowEnd: map(29), colStart: 1, colEnd: 6 });
       }
+      // Splitting the check-text/photo merge creates new cell styles.
+      styleRange(sheet, map(23), map(29), 1, 6, { name: "黑体", size: 16, color: { argb: "FFFF0000" }, underline: true });
       writeText(sheet, textFile(folder, "Previous_Station_Check.txt"), [map(23), map(previousPhoto ? 26 : 29), 1, 6], metadataName, labels.previous);
       writeText(sheet, textFile(folder, "Self_Check.txt"), [map(31), map(35), 1, 6], metadataName, labels.self);
       paper(sheet, `A1:V${map(36)}`); h.setSheetZoom(sheet, 80); pages.push({ sheet, footer: `U${map(36)}` });
@@ -300,7 +364,7 @@ function buildAssemblyWorkbook(workbook, options, h) {
       sheet.getCell("A1").value = request.processName; sheet.getCell("A2").value = request.label;
       sheet.getCell("A3").value = `${labels.author}${options.author || ""}`;
       for (const row of [1, 2, 3, 5, 6]) {
-        sheet.getCell(`A${row}`).font = { name: "Arial", size: 11, bold: row <= 2 };
+        sheet.getCell(`A${row}`).font = row === 5 && request.font ? { ...request.font } : { name: "Arial", size: 11, bold: row <= 2 };
         sheet.getCell(`A${row}`).alignment = { horizontal: "left", vertical: "top", wrapText: true };
       }
       const chars = Array.from(remaining); let low = 1, high = chars.length;
