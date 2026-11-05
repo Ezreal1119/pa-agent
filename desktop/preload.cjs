@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('ckd', Object.freeze({
   login: input => ipcRenderer.invoke('ckd:login', input),
   logout: () => ipcRenderer.invoke('ckd:logout'),
+  me: () => ipcRenderer.invoke('ckd:me'),
+  changePassword: input => ipcRenderer.invoke('ckd:changePassword', input),
   status: () => ipcRenderer.invoke('ckd:status'),
   list: () => ipcRenderer.invoke('ckd:list'),
   deleted: () => ipcRenderer.invoke('ckd:deleted'),

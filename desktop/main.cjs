@@ -15,13 +15,17 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'ckd', privileges: { standard: t
 
 function register(name, action) {
   ipcMain.handle('ckd:' + name, async (event, ...args) => {
+    const generation = sessionGeneration, changesSession = ['login', 'logout', 'changePassword'].includes(name);
     try {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !event.senderFrame.url.startsWith('ckd://ui/')) throw new ClientError(403, '请求来源无效。');
-      return { ok: true, value: await action(...args) };
-    } catch (error) { return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
+      const value = await action(...args);
+      if (!changesSession && generation !== sessionGeneration) throw new ClientError('session_changed', '登录已改变，请重试当前操作。');
+      return { ok: true, value };
+    } catch (error) { if (!changesSession && generation !== sessionGeneration) return { ok: false, code: 'session_changed', error: '登录已改变，请重试当前操作。' }; if (error.code === 401) { sessionGeneration++; saved.clear(); backend.cancelDownloads(); } return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
   });
 }
-for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate']) register(name, (...args) => backend[name](...args));
+for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate', 'me']) register(name, (...args) => backend[name](...args));
+register('changePassword', async input => { const result = await backend.changePassword(input); sessionGeneration++; saved.clear(); return result; });
 register('login', input => { sessionGeneration++; saved.clear(); return backend.login(input); });
 register('logout', async () => { sessionGeneration++; saved.clear(); return backend.logout(); });
 register('save', async (id, index) => {

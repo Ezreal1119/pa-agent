@@ -8,3 +8,5 @@
 
 /* Recoverable task deletion and readable maintenance history. */
 .task-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;align-items:center}#task-list .task-row>button:first-child{min-width:0;width:100%}#task-list .task-row>.task-delete{width:auto;font-size:11px;padding:8px 5px;color:var(--warn)}.task-delete:disabled{opacity:.4}.sidebar-heading{flex-wrap:wrap;gap:8px}.trash-toggle{font-size:11px;padding:4px 6px}
+
+.password-layout{min-height:100vh;display:grid;place-items:center;padding:50px 20px}.password-layout form{width:min(480px,100%)}.password-layout .quiet{margin-top:12px}

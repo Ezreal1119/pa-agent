@@ -1,5 +1,25 @@
 # 桌面端云端版与重新打包
 
+## 0.1.9：用户管理与桌面改密（2026-11-05）
+
+先升级后端，再由管理员在 Web 右上角“用户管理”创建普通用户，最后分发新版桌面包。111/222 停用；初始或重置密码首次登录后必须修改，账号区新增“修改密码”，成功后用新密码重新登录。普通用户不能登录 Web；系统管理员继续由 `.env` 维护，不在用户列表改密或删除。
+
+已构建 `desktop/release/cloud/CKD-SOP-Cloud-0.1.9-mac-arm64.zip`（128,087,673 字节）和 `CKD-SOP-Cloud-0.1.9-win-x64.zip`（153,162,359 字节）。后端继续为 `https://ckd-sop.patrick-shenzhen.cn`。Windows 需完整解压后运行 `CKD SOP Cloud.exe`，本机继续提供 ZIP，未做 Windows 实机验证；Mac 未签名/公证。
+
+两包 app.asar 版本/HTTPS 地址正确，9 个客户端源码及配置文件逐字节与当前源码一致；ZIP 全成员 CRC、包内/解压目录 app.asar 一致性及二进制架构检查通过。打包后的 Mac Electron 运行时加载包内 BackendClient，对隔离本地后端完成随机初始密码登录→受限工作台拒绝→本人改密→重新登录→状态查询→退出，令牌没有返回 renderer。桌面测试 15/15、完整回归 249 项中 247 通过/2 平台跳过，类型检查、构建、脚本语法及 diff 检查通过；Windows 未做实机启动测试。没有访问生产账号、创建生产任务或修改服务器。
+
+校验和见同目录 `CKD-SOP-Cloud-0.1.9-SHA256.txt`：Mac `12f43960ce3a113c031ddf2bb8013e1ca500b5d2c5cbd32069bfd92414656b11`；Windows `6e0c07b74fca412a8ba2482a036b4ece61c5ef4e8f4868dcfb4edbb33ae6b4d4`。产物继续由 Git 忽略，已安装版本不会自动更新。
+
+新客户端登录声明改密能力，临时密码会话在后端仅允许本人信息/改密/退出。需要改密时旧客户端收到升级提示。令牌仍不进入 renderer；主进程为请求绑定登录代次，避免上一账号的迟到响应覆盖下一账号、清除新会话或暴露旧数据。退出/失效/改密清理下载及本机文件句柄，界面清空任务和密码字段；服务端原任务继续运行。
+
+## 0.1.8：切换域名 HTTPS（2026-11-05）
+
+云端客户端内置后端地址改为 `https://ckd-sop.patrick-shenzhen.cn`，版本升至 0.1.8。主进程已有 HTTPS 支持，沿用证书验证、固定客户端 API 路径和登录/下载行为；本机开发 `config.json` 不变。已安装的旧包仍使用原 IP，需替换为新版。
+
+已构建：Mac ARM64 `desktop/release/cloud/CKD-SOP-Cloud-0.1.8-mac-arm64.zip`（128,086,484 字节）；Windows x64 完整解压版 `desktop/release/cloud/CKD-SOP-Cloud-0.1.8-win-x64.zip`（153,161,261 字节），解压全部文件后运行 `CKD SOP Cloud.exe`。本机 ARM Mac 沿用 ZIP 交付，不构建已有工具架构问题的 NSIS 安装器；Windows 未做实机验证，Mac 包未签名/公证。
+
+HTTPS 客户端状态接口经系统 curl 及打包后 Mac Electron 运行时验证，均通过证书校验并返回预期的未登录 401；桌面回归 13/13 通过。两包内 app.asar 版本为 0.1.8、后端为新 HTTPS 域名，9 个客户端源码/配置文件与当前源码逐字节一致；全部 ZIP 成员 CRC 检查、包内与解压目录 app.asar Hash 一致性、Mac ARM64/Windows x64 架构检查通过。语法及 diff 检查通过。校验和见同目录 `CKD-SOP-Cloud-0.1.8-SHA256.txt`：Mac 为 `fce181327d021a1e9621ffad21092aa18279d30076825f686ee5ee21f7968149`，Windows 为 `7765ed03521c2e5e73213e72df48f0cef88a6c6516fb38cfe03f2be442983f02`。本轮不修改服务器配置、登录账号或触发任务/Library 维护，产物继续由 Git 忽略。
+
 ## 0.1.7：装配修订原因与内容（2026-11-05）
 
 仅 assemble 新建表单增加选填的“修订原因”“修订内容”，多行内容随任务保存并支持按原信息新建。后端同步修复首条制订者为空的问题，写入中英文封面。必须先更新后端，再使用新客户端字段；旧客户端省略新字段仍兼容新后端。

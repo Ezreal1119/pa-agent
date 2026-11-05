@@ -32,3 +32,30 @@ test('downloads ignore server URLs, validate binary/MIME and preserve existing d
 test('only registered saved files can open; symlink replacement, removal and logout invalidate handles',()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ckd-saved-'));try{const file=path.join(root,'a.json'),outside=path.join(root,'b.json');fs.writeFileSync(file,'{}');fs.writeFileSync(outside,'{}');const saved=new SavedFiles(),handle=saved.add(file);assert.equal(saved.get(handle),file);assert.throws(()=>saved.get(outside),/不存在/u);fs.unlinkSync(file);fs.symlinkSync(outside,file);assert.throws(()=>saved.get(handle),/不存在/u);fs.unlinkSync(file);fs.writeFileSync(file,'{}');const second=saved.add(file);saved.clear();assert.throws(()=>saved.get(second),/不存在/u);}finally{fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test('personal password routes are fixed, capability is advertised and successful changes clear bearer access',async t=>{
+ const f=await fixture(t);const user=await f.client.login({account:'sample',password:'fixture-password'});
+ assert.equal(user.token,undefined);assert.equal(user.mustChangePassword,false);
+ assert.equal(f.seen[0].headers['x-ckd-password-change'],'1');
+ await f.client.me();assert.equal(f.seen.at(-1).url,'/api/client/me');
+ await f.client.changePassword({currentPassword:'fixture-password',newPassword:'a long replacement password',userId:'someone-else'});
+ assert.equal(f.seen.at(-1).url,'/api/client/me/password');assert.deepEqual(f.seen.at(-1).data,{currentPassword:'fixture-password',newPassword:'a long replacement password'});
+ const calls=f.seen.length;await assert.rejects(f.client.status(),e=>e.code===401);assert.equal(f.seen.length,calls);
+});
+
+test('late responses from an earlier login cannot expose old data or clear the next user session',async t=>{
+ let first=true,started,release;
+ const ready=new Promise(resolve=>started=resolve),gate=new Promise(resolve=>release=resolve);
+ const server=http.createServer(async(req,res)=>{
+  res.setHeader('content-type','application/json');
+  if(req.url==='/api/client/login'){res.end(JSON.stringify({token:(first?'a':'b').repeat(64),account:first?'Alice':'Bob'}));first=false;return;}
+  if(req.url==='/api/client/runs'){started();await gate;res.writeHead(401);res.end(JSON.stringify({error:'old session'}));return;}
+  assert.equal(req.headers.authorization,'Bearer '+'b'.repeat(64));res.end('{"ok":true}');
+ });
+ server.listen(0,'127.0.0.1');await once(server,'listening');t.after(async()=>{release();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+ const client=new BackendClient('http://127.0.0.1:'+server.address().port);
+ await client.login({account:'Alice',password:'fixture'});
+ const pending=assert.rejects(client.list(),error=>error.code==='session_changed');await ready;
+ await client.login({account:'Bob',password:'fixture'});release();await pending;
+ assert.deepEqual(await client.status(),{ok:true});
+});

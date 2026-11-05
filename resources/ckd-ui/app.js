@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const adminBase = location.pathname.startsWith('/admin') ? '/admin' : '';
 const adminUrl = path => adminBase + path;
-if (!adminBase) $('admin-logout').hidden = true;
+if (!adminBase) { $('admin-logout').hidden = true; $('user-management').hidden = true; }
 const labels = { running: '正在运行', awaiting_clarification: '等待确认', completed: '已完成', failed: '运行失败', terminated: '已终止', cancelled: '已取消' };
 const stages = [['prepare-catalog','准备资料'],['resolve-project','匹配项目'],['select-sop-source','确认流程'],['resolve-processes','匹配工序'],['generate-sop','生成 Excel']];
 const types = { assemble:'Assembly', assembly_test:'Assembly Test', pcba_test:'PCBA Test', aging_test:'Aging Test', factory_test:'Factory Test' };

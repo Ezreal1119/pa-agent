@@ -18,9 +18,10 @@ import { PixelImageChecker, PIXEL_POLICY, PIXEL_CONFIG_HASH } from './image-pixe
 import { scoringContext, scoreWithContext, checkOperationFocus } from './image-scorer.js';
 import { ClientAccess, ClientAccessError } from "./client-access.js";
 import { AdminAccess, AdminAccessError } from "./admin-access.js";
+import { UserError } from './users.js';
 
 const uiRoot = fileURLToPath(new URL("../../resources/ckd-ui/", import.meta.url));
-const assets = new Map([["/", ["index.html", "text/html; charset=utf-8"]], ["/app.js", ["app.js", "text/javascript; charset=utf-8"]], ["/style.css", ["style.css", "text/css; charset=utf-8"]], ["/login", ["login.html", "text/html; charset=utf-8"]], ["/login.js", ["login.js", "text/javascript; charset=utf-8"]]]);
+const assets = new Map([["/", ["index.html", "text/html; charset=utf-8"]], ["/app.js", ["app.js", "text/javascript; charset=utf-8"]], ["/style.css", ["style.css", "text/css; charset=utf-8"]], ["/login", ["login.html", "text/html; charset=utf-8"]], ["/login.js", ["login.js", "text/javascript; charset=utf-8"]], ['/users', ['users.html', 'text/html; charset=utf-8']], ['/users.js', ['users.js', 'text/javascript; charset=utf-8']]]);
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 function view(run: CkdRun, busy: boolean, operationError?: string) {
@@ -43,7 +44,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   if (adminAccess && publicOrigin && !/^https?:\/\/[^/]+$/u.test(publicOrigin)) throw new Error("CKD_ADMIN_ORIGIN 必须是完整的 HTTP(S) Origin。");
   if (process.env.NODE_ENV === "production" && !publicOrigin) throw new Error("生产环境必须配置 CKD_ADMIN_ORIGIN。");
   const service = new CkdWorkflow(options);
-  const clientAccess = new ClientAccess(service.dataDir);
+  const clientAccess = new ClientAccess(service.dataDir, Date.now, adminAccess?.account);
   const fixedPixel=service.imageQuality instanceof PixelImageChecker;
   const imageCalibration = new AssessmentCalibrationJobs(service.dataDir, service.imageQuality instanceof PixelImageChecker?service.imageQuality.legacy():service.imageQuality);
   const calibrationJobs = new Map<string, Promise<unknown>>();
@@ -130,13 +131,33 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
         }
         if (request.method === "GET" && url.pathname === "/api/auth/session") { json(200, { account: adminAccess.account }); return; }
       }
+      if (!clientRequest && (url.pathname === '/api/users' || url.pathname.startsWith('/api/users/'))) {
+        if (!adminAccess || !adminAccess.authenticate(request.headers.cookie)) throw new HttpError(401, '请先以管理员身份登录。');
+        if (request.method === 'GET' && url.pathname === '/api/users') {
+          json(200, { users: [{ id: 'system-admin', account: adminAccess.account, role: 'admin', enabled: true, immutable: true }, ...clientAccess.users.list()] }); return;
+        }
+        if (request.method === 'POST') {
+          const input = await body(request);
+          if (!validPostOrigin) throw new HttpError(403, '请求来源无效。');
+          if (url.pathname === '/api/users') {
+            if (Object.keys(input).some(key => key !== 'account')) throw new HttpError(400, '新建用户只接受账号。');
+            json(201, await clientAccess.users.create(input.account)); return;
+          }
+          const userAction = /^\/api\/users\/([a-f0-9-]{36})\/(status|reset-password)$/u.exec(url.pathname);
+          if (userAction?.[2] === 'status' && Object.keys(input).every(key => key === 'enabled')) { json(200, { user: clientAccess.users.setEnabled(userAction[1]!, input.enabled) }); return; }
+          if (userAction?.[2] === 'reset-password' && !Object.keys(input).length) { json(200, await clientAccess.users.reset(userAction[1]!)); return; }
+        }
+        throw new HttpError(400, '用户管理操作无效，系统管理员不可修改。');
+      }
       let clientAccount: string | undefined;
       if (clientRequest) {
         // Electron main-process requests have no browser Origin. Keep browser/admin rules unchanged.
         if (request.headers.origin) throw new HttpError(403, '请从桌面客户端操作。');
-        if (url.pathname === '/api/client/login' && request.method === 'POST') { json(200, clientAccess.login(await body(request))); return; }
-        clientAccount = clientAccess.authenticate(request.headers.authorization);
+        if (url.pathname === '/api/client/login' && request.method === 'POST') { json(200, await clientAccess.login(await body(request), request.headers['x-ckd-password-change'] === '1')); return; }
+        if (url.pathname === '/api/client/me' && request.method === 'GET') { json(200, { user: clientAccess.me(request.headers.authorization) }); return; }
+        if (url.pathname === '/api/client/me/password' && request.method === 'POST') { await clientAccess.changePassword(request.headers.authorization, await body(request)); json(200, { ok: true }); return; }
         if (url.pathname === '/api/client/logout' && request.method === 'POST') { await body(request); clientAccess.logout(request.headers.authorization); json(200, { ok: true }); return; }
+        clientAccount = clientAccess.authenticate(request.headers.authorization);
         if (!/^\/api\/client\/(?:status|trash|runs(?:\/[0-9a-f-]{36}(?:\/(?:answer|resume|cancel|generate|trash|restore|artifacts\/\d+|images\/[0-9a-f-]{36}))?)?)$/u.test(url.pathname)) throw new HttpError(404, '接口不存在。');
         url.pathname = url.pathname.replace('/api/client/', '/api/');
       }
@@ -282,7 +303,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       throw new HttpError(404, "操作不存在。");
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      const status = error instanceof HttpError || error instanceof ImageInputError || error instanceof ClientAccessError || error instanceof AdminAccessError ? error.status : code === "ENOENT" ? 404 : /busy|图片确认已改变/u.test(errorText(error)) ? 409 : /Vision model requires/u.test(errorText(error)) ? 503 : /Timeout|timed out/iu.test(errorText(error)) ? 504 : 400;
+      const status = error instanceof HttpError || error instanceof ImageInputError || error instanceof ClientAccessError || error instanceof AdminAccessError || error instanceof UserError ? error.status : code === "ENOENT" ? 404 : /busy|图片确认已改变/u.test(errorText(error)) ? 409 : /Vision model requires/u.test(errorText(error)) ? 503 : /Timeout|timed out/iu.test(errorText(error)) ? 504 : 400;
       if (!response.headersSent) json(status, { error: errorText(error) }); else response.destroy();
     }
   });
