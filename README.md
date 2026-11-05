@@ -438,13 +438,13 @@ npm run desktop:pack:mac
 npm run desktop:pack:win
 ```
 
-0.1.9 起使用管理员在 Web 右上角“用户管理”创建的普通账号，停用旧测试账号 `111 / 222`。初始密码由系统随机生成、仅展示本次，首次登录必须在桌面端修改；之后可在账号区域点击“修改密码”。密码为 15–128 个字符，支持长密码、空格和粘贴，不自动填入或保存。令牌有效期 12 小时，仅保存在后端和 Electron 主进程内存；改密、重置、禁用、退出或后端重启后需要重新登录。任务按稳定用户 ID 隔离；旧测试账号和原管理员任务不分配给新用户，管理员仍可在 Web 查看。关闭窗口、退出或禁用账号不取消已运行的服务端任务。
+0.1.9 起使用管理员在 Web 右上角“用户管理”创建的普通账号，停用旧测试账号 `111 / 222`。初始密码由系统随机生成、仅展示本次，首次登录必须在桌面端修改；之后可在账号区域点击“修改密码”。密码为 8–128 个字符（0.1.10 起），支持长密码、空格和粘贴，不自动填入或保存。令牌有效期 12 小时，仅保存在后端和 Electron 主进程内存；改密、重置、禁用、退出或后端重启后需要重新登录。任务按稳定用户 ID 隔离；旧测试账号和原管理员任务不分配给新用户，管理员仍可在 Web 查看。关闭窗口、退出或禁用账号不取消已运行的服务端任务。
 
 Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不可删除、改密、禁用或修改角色；可新增普通用户、启用/禁用、重置随机临时密码，不提供永久删除或账号更名。普通用户记录与加盐 scrypt 哈希在 `<data-dir>/ckd/users/users.json` 原子保存，修改有写锁，不进入 Git；管理员凭据不复制到该文件。用户管理不会触发 Library 同步或生成任务。
 
 管理员凭据继续只用于 Web；管理员本人需要使用桌面端时，也创建一个普通账号。普通账号为 3–64 位字母、数字、点、下划线或短横线，以字母/数字开头，大小写不影响唯一性；已禁用账号仍占用原名称。
 
-输出包在 `desktop/release/`（Git 忽略）。历史本机包为 `CKD-SOP-0.1.0-mac-arm64.zip`，解压后启动 `CKD SOP.app`；当前云端 0.1.9 见下文。Mac 包未签名/公证。Windows 原生配置支持 x64 NSIS，本机 ARM Mac 提供完整 Windows x64 解压 ZIP，Windows 实机运行需另行验证。
+输出包在 `desktop/release/`（Git 忽略）。历史本机包为 `CKD-SOP-0.1.0-mac-arm64.zip`，解压后启动 `CKD SOP.app`；当前云端 0.1.10 见下文。Mac 包未签名/公证。Windows 原生配置支持 x64 NSIS，本机 ARM Mac 提供完整 Windows x64 解压 ZIP，Windows 实机运行需另行验证。
 
 本机客户端地址在 `desktop/config.json`，当前 `http://127.0.0.1:4317`，没有用户设置入口。独立云端版通过 `desktop/electron-builder.cloud.cjs` 将 `https://ckd-sop.patrick-shenzhen.cn` 写入打包元数据，主进程优先使用它；本机配置不改。Windows 上的 127.0.0.1 指 Windows 自己。云端版构建、分发及更新边界见 [桌面端发布说明](docs/desktop-releases.md)。
 
@@ -476,7 +476,7 @@ curl -X POST 'http://127.0.0.1:4317/api/images/quality?retry=true' \
 
 服务器部署、Mac 绝对路径离线迁移、systemd、Nginx 和后续代码更新见 [VPS 部署与维护](docs/vps-deployment.md)。当前桌面云端基础地址为 `https://ckd-sop.patrick-shenzhen.cn`，管理员入口为 `/admin/`，使用独立的 `.env` 凭据及 12 小时内存会话；用户已自行通过 Certbot 配置证书。后端使用 `/opt/pi-patrick` 内的密钥和业务数据。0.1.9 用户管理需要先升级后端，再由管理员创建普通用户，最后分发新客户端；本机开发客户端地址保持原样。
 
-云端 Mac ARM64 最新包：`desktop/release/cloud/CKD-SOP-Cloud-0.1.9-mac-arm64.zip`；Windows x64 解压版：`desktop/release/cloud/CKD-SOP-Cloud-0.1.9-win-x64.zip`。重新构建 Mac 包用 `npm run desktop:pack:mac:cloud`；Windows x64 机器上用 `npm run desktop:pack:win:cloud` 构建 NSIS 安装器，ARM Mac 可显式选择 `--win zip --x64`。首次安装依赖用 `npm run desktop:install`。用户管理必须先升级后端；桌面更新不会自动部署后端或更新已安装客户端，详见 [发布说明](docs/desktop-releases.md)。
+云端 Mac ARM64 最新包：`desktop/release/cloud/CKD-SOP-Cloud-0.1.10-mac-arm64.zip`；Windows x64 解压版：`desktop/release/cloud/CKD-SOP-Cloud-0.1.10-win-x64.zip`。重新构建 Mac 包用 `npm run desktop:pack:mac:cloud`；Windows x64 机器上用 `npm run desktop:pack:win:cloud` 构建 NSIS 安装器，ARM Mac 可显式选择 `--win zip --x64`。首次安装依赖用 `npm run desktop:install`。用户管理必须先升级后端；桌面更新不会自动部署后端或更新已安装客户端，详见 [发布说明](docs/desktop-releases.md)。
 
 
 ### 固定像素评分 V1.23.0（2026-10-27）
