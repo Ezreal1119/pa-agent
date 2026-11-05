@@ -23,5 +23,9 @@ export function extractedQuery(value: unknown, text: string): FirmwareQuery | nu
 }
 
 export function matchesQuery(filename: string, q: FirmwareQuery): boolean {
-  return /_uFWsign_VendorEN\.zip$/i.test(filename) && filename.split("_", 1)[0]?.toUpperCase() === q.model && new RegExp("_" + q.date + "_" + q.index + "(?=_|\\.zip$)", "i").test(filename);
+  return /\.zip$/i.test(filename) && !/UFS|_SE_OTA|定制/i.test(filename) && filename.split("_", 1)[0]?.toUpperCase() === q.model && new RegExp("_" + q.date + "_" + q.index + "(?=_|\\.zip$)", "i").test(filename);
+}
+
+export function isPreferredFirmware(filename: string): boolean {
+  return /_uFWsign_VendorEN\.zip$/i.test(filename);
 }

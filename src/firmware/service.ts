@@ -73,7 +73,7 @@ export class FirmwareService {
     db.replies = Object.fromEntries(Object.entries(db.replies).filter(([, r]) => r.at > this.now() - 86400000).slice(-500));
     db.notices = db.notices.filter(n => !n.sent || n.sent > this.now() - 86400000);
     const flow = db.active;
-    if (flow && !["starting", "running", "cancelling"].includes(flow.phase) && flow.matchVersion !== 3) {
+    if (flow && !["starting", "running", "cancelling"].includes(flow.phase) && flow.matchVersion !== 4) {
       this.clearPrompts(db, flow.id); this.notice(db, flow, "固件查询规则已更新，旧的未确认流程已结束，请重新发送 /firmware。"); delete db.active; return;
     }
     if (flow && !["starting", "running", "cancelling"].includes(flow.phase) && flow.expiresAt <= this.now()) {
@@ -114,7 +114,7 @@ export class FirmwareService {
         if (!flow) {
           if (!cmd.command) answer = { text: "固件流程已结束或超时，请重新发送 /firmware。", awaiting: false };
           else {
-            flow = { id: randomUUID().replaceAll("-", ""), owner: { botId: cmd.botId, userId: cmd.userId, target: cmd.target, chatType: cmd.chatType }, phase: "filename", matchVersion: 3, expiresAt: this.now() + INPUT_TTL, candidates: [], notified: [] };
+            flow = { id: randomUUID().replaceAll("-", ""), owner: { botId: cmd.botId, userId: cmd.userId, target: cmd.target, chatType: cmd.chatType }, phase: "filename", matchVersion: 4, expiresAt: this.now() + INPUT_TTL, candidates: [], notified: [] };
             db.active = flow;
           }
         }
@@ -219,7 +219,7 @@ export class FirmwareService {
         this.clearPrompts(db, current.id);
         if (!result.complete) { this.notice(db, current, "固件查询不完整，本次任务已结束。请稍后重新发送 /firmware。"); delete db.active; return; }
         const summary = `${criteria.model} / ${criteria.date}_${criteria.index}`;
-        if (!result.total) { this.notice(db, current, `未找到 ${summary} 的 uFWsign_VendorEN 固件。本次任务已结束。`); delete db.active; return; }
+        if (!result.total) { this.notice(db, current, `未找到 ${summary} 的固件。本次任务已结束。`); delete db.active; return; }
         current.criteria = criteria; current.candidates = candidates; current.candidateTotal = result.total;
         if (result.total > 1) {
           current.phase = "choose"; current.expiresAt = this.now() + INPUT_TTL;

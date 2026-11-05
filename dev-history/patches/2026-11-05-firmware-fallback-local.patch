@@ -1,0 +1,107 @@
+--- a/local-download-service/firmware.py
++++ b/local-download-service/firmware.py
+@@ -414,7 +414,7 @@
+                         entries = ftp.names(directory)
+                         checked.append(directory)
+                         for name, kind in entries:
+-                            if kind in ("dir", "cdir", "pdir") or not is_os_zip(name) or not name.lower().endswith("_ufwsign_vendoren.zip") or name.split("_", 1)[0].upper() != model or not pattern.search(name):
++                            if kind in ("dir", "cdir", "pdir") or not is_os_zip(name) or name.split("_", 1)[0].upper() != model or not pattern.search(name):
+                                 continue
+                             try:
+                                 if basename(name) != name:
+@@ -425,6 +425,12 @@
+                             files[remote] = {"path": remote, "filename": name, "model": model, "score": 1, "exact": False, "differences": [], "criteria": criteria}
+                     except ftplib.all_errors as error:
+                         inaccessible.append({"path": directory, "error": self.safe_error(error)})
++                # Select the preferred tier only after enumerating every directory.
++                # Other suffixes are eligible only when no VendorEN match exists.
++                preferred = {remote: item for remote, item in files.items() if item["filename"].lower().endswith("_ufwsign_vendoren.zip")}
++                selection = "vendoren" if preferred else "fallback"
++                if preferred:
++                    files = preferred
+                 candidates = []
+                 for item in sorted(files.values(), key=lambda item: item["path"])[:limit]:
+                     try:
+@@ -437,7 +443,8 @@
+                     candidates.append(candidate)
+         else:
+             candidates = []
+-        return {"criteria": criteria, "candidates": candidates, "total": len(files), "truncated": len(files) > limit, "complete": not inaccessible, "checked_paths": checked, "inaccessible_paths": inaccessible, "requires_confirmation": True, "matching": "model_date_index_vendoren_and"}
++            selection = "fallback"
++        return {"criteria": criteria, "candidates": candidates, "total": len(files), "truncated": len(files) > limit, "complete": not inaccessible, "checked_paths": checked, "inaccessible_paths": inaccessible, "requires_confirmation": True, "matching": "model_date_index_vendoren_preferred_and", "selection": selection}
+
+     def search(self, filename, model=None, limit=20):
+         requested = basename(filename)
+--- a/local-download-service/tests/test_service.py
++++ b/local-download-service/tests/test_service.py
+@@ -147,7 +147,8 @@
+
+     def test_33_structured_query_uses_real_ftp_and_can_download_unique_match(self):
+         result = self.terms()
+-        self.assertEqual(result["matching"], "model_date_index_vendoren_and")
++        self.assertEqual(result["matching"], "model_date_index_vendoren_preferred_and")
++        self.assertEqual(result["selection"], "vendoren")
+         self.assertTrue(result["complete"])
+         self.assertEqual(result["total"], 1)
+         self.assertEqual(result["candidates"][0]["filename"], NAME)
+@@ -185,7 +186,49 @@
+         self.assertFalse(result["truncated"])
+         self.assertEqual([c["filename"] for c in result["candidates"]], [NAME])
+         (self.directory / NAME).unlink()
+-        self.assertEqual(self.terms()["total"], 0)
++        fallback = self.terms(limit=2)
++        self.assertEqual(fallback["selection"], "fallback")
++        self.assertEqual(fallback["total"], 24)
++        self.assertTrue(fallback["truncated"])
++        self.assertEqual(len(fallback["candidates"]), 2)
++
++    def test_39_structured_query_falls_back_to_rel_and_can_download(self):
++        (self.directory / NAME).unlink()
++        rel = NAME.replace("_rel_uFWsign_VendorEN", "_REL")
++        (self.directory / rel).write_bytes(self.content)
++        for name in [rel.replace("_REL", "_UFS_REL"), rel.replace("_REL", "_SE_OTA_REL"), rel.replace("_REL", "_定制_REL"), rel.replace("_02_", "_020_"), rel.replace("SQ27M_", "SQ27MB_")]:
++            (self.directory / name).write_bytes(b"excluded")
++        result = self.terms()
++        self.assertEqual(result["selection"], "fallback")
++        self.assertTrue(result["complete"])
++        self.assertEqual(result["total"], 1)
++        self.assertEqual(result["candidates"][0]["filename"], rel)
++        job = self.submit(result["candidates"][0], upload=False)
++        self.assertEqual(self.wait_job(job["id"])["state"], "succeeded")
++
++    def test_40_structured_query_prefers_vendoren_across_all_directories(self):
++        second = self.ftp_root / "FTP7/OS/12.0/SQ27M/EN/XX"
++        second.mkdir(parents=True)
++        preferred = NAME.replace("VendorEN.zip", "vendoren.ZIP")
++        (second / preferred).write_bytes(self.content)
++        (self.directory / NAME).unlink()
++        for index in range(14):
++            (self.directory / NAME.replace("_uFWsign_VendorEN", f"_OTHER{index}")).write_bytes(b"fallback")
++        (self.root / "config/FTP-path.jsonl").write_text(json.dumps({"13.0": {"SQ27M": [REMOTE_DIR, "/FTP7/OS/12.0/SQ27M/EN/XX"]}}) + "\n")
++        result = self.terms(limit=1)
++        self.assertEqual(result["selection"], "vendoren")
++        self.assertEqual(result["total"], 1)
++        self.assertFalse(result["truncated"])
++        self.assertEqual(result["candidates"][0]["filename"], preferred)
++        self.assertEqual(len(result["checked_paths"]), 2)
++
++    def test_41_structured_query_incomplete_fallback_is_not_complete(self):
++        (self.directory / NAME).rename(self.directory / NAME.replace("_uFWsign_VendorEN", ""))
++        (self.root / "config/FTP-path.jsonl").write_text(json.dumps({"13.0": {"SQ27M": [REMOTE_DIR, REMOTE_DIR + "/missing"]}}) + "\n")
++        result = self.terms()
++        self.assertEqual(result["selection"], "fallback")
++        self.assertEqual(result["total"], 1)
++        self.assertFalse(result["complete"])
+
+     def test_36_structured_query_reports_incomplete_directory_access(self):
+         index = self.root / "config/FTP-path.jsonl"
+--- a/local-download-service/README.md
++++ b/local-download-service/README.md
+@@ -165,6 +165,6 @@
+
+ ## 三条件查询（机器人）
+
+-机器人通过 `/firmware-api/search` 提交 `{"criteria":{"model":"SQ68MB","date":"260422","index":"01"},"limit":12}`。按原 OS 索引的精确型号目录查询，文件名完整型号与 `_260422_01` 段必须同时匹配，且仅接受以 `_uFWsign_VendorEN.zip` 结尾的文件（忽略大小写）；后缀过滤先于计数和截断，响应协议标记为 `model_date_index_vendoren_and`；没有模糊机型或相似度阈值。`total` 在截断前统计，`truncated` 表示列表限制，`complete=false` 表示某个目录/文件元信息查询失败，不能用残缺结果判断唯一性。
++机器人通过 `/firmware-api/search` 提交 `{"criteria":{"model":"SQ68MB","date":"260422","index":"01"},"limit":12}`。按原 OS 索引的精确型号目录查询，文件名完整型号与 `_260422_01` 段必须同时匹配，先汇总全部索引目录中符合条件的 ZIP，优先选择以 `_uFWsign_VendorEN.zip` 结尾的文件（忽略大小写）；全部没有时才回退其他后缀，包括 `_REL.zip`。UFS、`_SE_OTA` 和定制包仍排除。优先级选择先于计数、截断和元信息读取，响应协议标记为 `model_date_index_vendoren_preferred_and`，`selection` 为 `vendoren` 或 `fallback`；没有模糊机型或相似度阈值。`total` 在截断前统计，`truncated` 表示列表限制，`complete=false` 表示某个目录/文件元信息查询失败，不能用残缺结果判断唯一性。
+
+ AI 语义提取、0 匹配结束、多匹配选包及下载前确认由 Agent 负责。机器人界面仅显示文件名等必要信息，不展示来源协议或源文件路径。本机只接受已验证的结构化条件，不执行自然语言。旧 filename 查询保留供本机 CLI 及原测试使用，新的机器人流程不调用该分支。更新后按原 stop/start 命令重启；现有路径、token、代理及存储配置不用修改。

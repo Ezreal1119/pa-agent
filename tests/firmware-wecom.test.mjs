@@ -17,7 +17,7 @@ import { bridgeConfig } from '../integrations/wecom-bridge/config.mjs';
 
 const filename = 'SQ27M_EN_XX_WE__DS_FI_S02_U_251205_02_rel_uFWsign_VendorEN.zip';
 const criteria = { model: 'SQ27M', date: '251205', index: '02' };
-const searchResult = candidates => ({ candidates, total: candidates.length, truncated: false, complete: true, matching: 'model_date_index_vendoren_and' });
+const searchResult = candidates => ({ candidates, total: candidates.length, truncated: false, complete: true, matching: 'model_date_index_vendoren_preferred_and', selection: 'vendoren' });
 const candidate = { id: 'b'.repeat(32), filename, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + filename, size: 1234567, modified: '20261028100000', score: 1, exact: true, differences: [] };
 const message = (text, userId = 'alice', chat) => ({ headers: { req_id: randomUUID() }, body: { msgtype: 'text', msgid: randomUUID(), chattype: chat ? 'group' : 'single', ...(chat ? { chatid: chat } : {}), from: { userid: userId }, text: { content: text } } });
 const until = async fn => { const end = Date.now() + 6000; while (!await fn()) { if (Date.now() > end) throw new Error('wait timeout'); await new Promise(r => setTimeout(r, 10)); } };
