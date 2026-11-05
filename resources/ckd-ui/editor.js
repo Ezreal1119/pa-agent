@@ -21,10 +21,20 @@
     current: null,
     photos: [],
     dirty: false,
-    dragFolder: null
+    dragFolder: null,
+    /** library = 正式库；public = 待审核区（桌面客户端固定走这里） */
+    scope: "library",
+    /** 桌面客户端（Bearer）只能待在 public，管理员才给切换开关 */
+    canSwitch: false
   };
 
   /* ---------------------------------------------------------------- 基础 */
+
+  /** 待审核区的请求统一带 scope=public；正式库保持原路径不动。 */
+  function scoped(path) {
+    if (state.scope !== "public") return path;
+    return `${path}${path.includes("?") ? "&" : "?"}scope=public`;
+  }
 
   const escapeHtml = value =>
     String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -33,7 +43,7 @@
     const { method = "GET", body } = options;
     const headers = { "X-CKD-UI": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const response = await fetch(adminBase + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await fetch(adminBase + scoped(path), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await response.text();
     let value = null;
     try {
@@ -91,12 +101,21 @@
   async function loadProjects() {
     const value = await api("/api/editor");
     state.projects = value.projects || [];
+    if (value.scope === "public" || value.scope === "library") state.scope = value.scope;
+    state.canSwitch = value.canSwitch === true;
+    renderScope();
     if (!state.projectId && state.projects.length) state.projectId = state.projects[0].projectId;
     if (state.projectId && !state.projects.some(project => project.projectId === state.projectId)) {
       state.projectId = state.projects[0] ? state.projects[0].projectId : "";
     }
     renderProjects();
     renderSopInfo();
+  }
+
+  /** 待审核区开关：只有管理员（cookie 登录）能看到，桌面客户端固定锁在 public。 */
+  function renderScope() {
+    $("scope-toggle").hidden = !state.canSwitch;
+    $("scope-public").checked = state.scope === "public";
   }
 
   /* ---------------------------------------------------------------- 工序列表 */
@@ -148,7 +167,7 @@
   /* ---------------------------------------------------------------- 表单填充 */
 
   function photoUrl(name) {
-    return `${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}`;
+    return scoped(`${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}`);
   }
 
   function renderPhotos() {
@@ -542,6 +561,23 @@
 
   function bind() {
     bindSopInfo();
+    $("scope-public").addEventListener("change", async event => {
+      if (state.dirty && !confirm("当前工序有未保存的改动，确定切换区域吗？")) {
+        event.target.checked = !event.target.checked;
+        return;
+      }
+      storeSopInfo();
+      state.scope = event.target.checked ? "public" : "library";
+      state.projectId = "";
+      state.current = null;
+      state.dirty = false;
+      state.processes = [];
+      showForm(false);
+      renderProcessList();
+      notice(state.scope === "public" ? "当前为待审核区（public）：这里的工序不会进入正式库。" : "");
+      await loadProjects();
+      await loadProcesses();
+    });
     $("project").addEventListener("change", async event => {
       if (state.dirty && !confirm("当前工序有未保存的改动，确定切换项目吗？")) {
         event.target.value = state.projectId;

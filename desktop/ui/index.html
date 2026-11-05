@@ -12,7 +12,7 @@
     <form id="login-form" class="login-card"><div class="eyebrow">欢迎使用</div><h2>登录工作台</h2><p class="muted">使用你的账号继续。</p><label>账号<input id="account" name="account" required autocomplete="username" autofocus></label><label>密码<input id="password" name="password" type="password" required autocomplete="off"></label><button class="primary" id="login-submit">登录 →</button><p class="muted small">任务保存在服务端，关闭应用后可继续。</p></form>
   </section>
   <div id="workspace" class="workspace" hidden>
-    <aside><div class="brand">CKD SOP <span>V3</span></div><button id="new-task" class="primary">＋ 新建 SOP</button><div class="sidebar-heading"><h3>最近任务</h3><button id="refresh" class="quiet" aria-label="刷新任务">↻</button></div><nav id="task-list" aria-label="最近任务"></nav><div class="sidebar-bottom"><span id="account-label"></span><button id="logout" class="quiet">退出登录</button><p class="small muted">关闭应用不会中断生成。</p></div></aside>
+    <aside><div class="brand">CKD SOP <span>V3</span></div><button id="new-task" class="primary">＋ 新建 SOP</button><div class="sidebar-heading"><h3>最近任务</h3><button id="refresh" class="quiet" aria-label="刷新任务">↻</button></div><nav id="task-list" aria-label="最近任务"></nav><div class="sidebar-bottom"><span id="account-label"></span><button id="open-editor" class="quiet" title="逐道填写工序，提交到待审核区（public）">✎ 逐工序录入</button><button id="logout" class="quiet">退出登录</button><p class="small muted">关闭应用不会中断生成。</p></div></aside>
     <main>
       <section id="create-view"><div class="eyebrow">CREATE CKD SOP</div><h1>创建你的 SOP</h1><p class="muted">填写基本信息，然后确认工序流程。</p>
         <form id="create-form" class="card form-grid">

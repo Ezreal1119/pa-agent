@@ -189,6 +189,7 @@ $('refresh').addEventListener('click',safely(refreshList));
 $('resume').addEventListener('click',safely(()=>mutate('resume')));
 $('cancel').addEventListener('click',safely(()=>mutate('cancel')));
 $('reuse').addEventListener('click',()=>{if(!pending)newTask(current?.inputs);});
+$('open-editor').addEventListener('click',safely(()=>call('openEditor')));
 $('logout').addEventListener('click',safely(async()=>{try{await call('logout');}finally{loginView();notice();}}));
 $('retry').addEventListener('click',safely(async()=>{notice();if(!logged){$('account').focus();return;}await call('status');if(selected)await selectTask(selected);else await refreshList();}));
 setInterval(async()=>{if(!logged||offline||!current||pending||polling||!['running','awaiting_clarification'].includes(current.status))return;const ticket=generation,id=current.id;polling=true;try{const {run}=await call('get',id);if(ticket===generation&&logged){render(run);if(!run.busy)await refreshList();}}catch{}finally{polling=false;}},1500);

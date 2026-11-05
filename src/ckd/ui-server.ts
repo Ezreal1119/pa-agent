@@ -64,6 +64,12 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   if (process.env.NODE_ENV === "production" && !publicOrigin) throw new Error("生产环境必须配置 CKD_ADMIN_ORIGIN。");
   const service = new CkdWorkflow(options);
   const clientAccess = new ClientAccess(service.dataDir);
+  /**
+   * 待审核区：<库根>/public，内部结构与库根一致（public/product_lib/<项目>/assemble/...）。
+   * catalog 只扫 <库根>/product_lib，所以这里的草稿不会被生成流程读到；
+   * 管理员确认后把整个项目目录挪进 product_lib 即可，sops.json 跟着走。
+   */
+  const publicEditorRoot = () => { const root = path.join(service.libraryPath, "public"); fs.mkdirSync(root, { recursive: true }); return root; };
   const fixedPixel=service.imageQuality instanceof PixelImageChecker;
   const imageCalibration = new AssessmentCalibrationJobs(service.dataDir, service.imageQuality instanceof PixelImageChecker?service.imageQuality.legacy():service.imageQuality);
   const calibrationJobs = new Map<string, Promise<unknown>>();
@@ -128,6 +134,15 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       const adminPrefix = prefixedAdmin ? "/admin" : "";
       const expectedOrigin = prefixedAdmin ? publicOrigin : `http://${host}`;
       const validPostOrigin = !request.headers.origin || (request.headers.origin === expectedOrigin && request.headers["x-ckd-ui"] === "1");
+      // 逐工序录入：桌面客户端用 Bearer 访问，落盘被限制在 <库根>/public（待审核区），碰不到 product_lib。
+      // 管理员仍走 cookie；带 scope=public 时可以切到待审核区查看员工提交的工序。
+      const editorSurface = url.pathname === "/editor" || url.pathname === "/editor.js" || url.pathname === "/editor.css"
+        || url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/");
+      let editorClient = false;
+      if (!clientRequest && editorSurface && request.headers.authorization) {
+        try { clientAccess.authenticate(request.headers.authorization); editorClient = true; }
+        catch { /* 不是有效的客户端令牌：回落到管理员 cookie 校验 */ }
+      }
       if (!clientRequest && adminAccess) {
         if (prefixedAdmin && url.pathname.startsWith("/api/client/")) throw new HttpError(404, "接口不存在。");
         if (request.method === "POST" && !validPostOrigin) throw new HttpError(403, "请求来源无效。");
@@ -137,7 +152,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           response.setHeader("Set-Cookie", adminAccess.cookie(token, adminPrefix, expectedOrigin?.startsWith("https://") ?? false));
           json(200, { account: adminAccess.account }); return;
         }
-        if (!publicAsset && !adminAccess.authenticate(request.headers.cookie)) {
+        if (!publicAsset && !editorClient && !adminAccess.authenticate(request.headers.cookie)) {
           if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/app.js")) {
             response.writeHead(302, { Location: `${adminPrefix}/login` }); response.end(); return;
           }
@@ -169,10 +184,12 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       if (url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/")) {
         // DELETE 不在上面的 POST 来源校验覆盖范围内，单独补一次，避免跨站删除工序。
         if (request.method === "DELETE" && !validPostOrigin) throw new HttpError(403, "请求来源无效，请从 CKD 页面操作。");
-        const editorLibrary = service.libraryPath;
+        // 桌面客户端只认待审核区；管理员默认正式库，显式带 scope=public 时才看待审核区。
+        const wantsPublic = editorClient || url.searchParams.get("scope") === "public";
+        const editorLibrary = wantsPublic ? publicEditorRoot() : service.libraryPath;
         try {
           if (url.pathname === "/api/editor" && request.method === "GET") {
-            json(200, { sopType: EDITOR_SOP_TYPE, languages: EDITOR_LANGUAGES, projects: listProjects(editorLibrary) });
+            json(200, { sopType: EDITOR_SOP_TYPE, languages: EDITOR_LANGUAGES, projects: listProjects(editorLibrary), scope: wantsPublic ? "public" : "library", canSwitch: !editorClient });
             return;
           }
           if (url.pathname === "/api/editor/projects" && request.method === "POST") {

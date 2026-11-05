@@ -23,6 +23,8 @@ class BackendClient {
     this.timeouts = { request: 60000, idle: 60000, total: 30 * 60000, ...options.timeouts };
     for (const value of Object.values(this.timeouts)) if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Invalid timeout');
   }
+  /** 只读令牌：录入窗口需要它把自己的请求认证成「已登录的客户端账号」。 */
+  get token() { return this.#token; }
   async request(route, data, timeout = this.timeouts.request, binary = false, options = {}) {
     if (route !== '/login' && !this.#token) throw new ClientError(401, '请先登录。');
     let response;

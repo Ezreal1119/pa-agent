@@ -23,7 +23,7 @@ function register(name, action) {
 }
 for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate']) register(name, (...args) => backend[name](...args));
 register('login', input => { sessionGeneration++; saved.clear(); return backend.login(input); });
-register('logout', async () => { sessionGeneration++; saved.clear(); return backend.logout(); });
+register('logout', async () => { sessionGeneration++; saved.clear(); closeEditor(); return backend.logout(); });
 register('save', async (id, index) => {
   const key = id + ':' + index, generation = sessionGeneration;
   if (saving.has(key)) throw new ClientError('download_busy', '此文件正在保存，请等待完成。');
@@ -43,6 +43,40 @@ register('save', async (id, index) => {
 register('open', async handle => { const error = await shell.openPath(saved.get(handle)); if (error) throw new ClientError('open', error); return { ok: true }; });
 register('show', handle => { shell.showItemInFolder(saved.get(handle)); return { ok: true }; });
 
+/**
+ * 逐工序录入窗口：整页加载服务器的 /admin/editor。
+ * 服务端按凭证决定写入范围——带客户端 Bearer 只能写 <库根>/public（待审核区），
+ * 碰不到 product_lib。令牌由主进程注入到该窗口的请求头，页面本身看不到它。
+ */
+let editorWindow, editorSession;
+function ensureEditorSession() {
+  if (editorSession) return editorSession;
+  editorSession = session.fromPartition('editor');
+  editorSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  editorSession.setPermissionCheckHandler(() => false);
+  // 只给后端这一个源注入令牌；主窗口走 ckd:// 协议，不受影响。
+  editorSession.webRequest.onBeforeSendHeaders({ urls: [new URL(backendUrl).origin + '/*'] }, (details, callback) => {
+    const token = backend.token;
+    if (token) details.requestHeaders.Authorization = 'Bearer ' + token;
+    callback({ requestHeaders: details.requestHeaders });
+  });
+  return editorSession;
+}
+function closeEditor() { if (editorWindow && !editorWindow.isDestroyed()) editorWindow.close(); editorWindow = undefined; }
+register('openEditor', () => {
+  if (!backend.token) throw new ClientError(401, '请先登录。');
+  if (editorWindow && !editorWindow.isDestroyed()) { editorWindow.focus(); return { ok: true }; }
+  ensureEditorSession();
+  editorWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 1040, minHeight: 660, title: productName + ' · 逐工序录入', backgroundColor: '#101b17', autoHideMenuBar: true,
+    webPreferences: { partition: 'editor', contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  editorWindow.setMenu(null);
+  editorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  editorWindow.webContents.on('will-navigate', event => event.preventDefault());
+  editorWindow.on('closed', () => { editorWindow = undefined; });
+  void editorWindow.loadURL(new URL('/admin/editor', backendUrl).href);
+  return { ok: true };
+});
+
 function createWindow() {
   window = new BrowserWindow({ width: 1180, height: 820, minWidth: 900, minHeight: 640, title: productName, backgroundColor: '#101b17', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
@@ -52,7 +86,7 @@ function createWindow() {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.on('will-prevent-unload', event => event.preventDefault());
-  window.on('closed', () => { sessionGeneration++; window = undefined; saved.clear(); void backend.logout().catch(() => {}); });
+  window.on('closed', () => { sessionGeneration++; window = undefined; saved.clear(); closeEditor(); void backend.logout().catch(() => {}); });
   window.loadURL('ckd://ui/index.html');
 }
 if (!app.requestSingleInstanceLock()) app.quit();

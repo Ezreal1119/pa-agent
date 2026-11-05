@@ -58,3 +58,9 @@
 .editor-layout #sop-info-panel.disabled{opacity:.55;pointer-events:none}
 .editor-layout #sop-info-panel .hint{margin-bottom:12px}
 .editor-layout input[readonly]{color:var(--muted);background:transparent;cursor:default}
+
+/* 顶栏右侧：待审核区切换（只有管理员会看到） */
+.topbar-actions{display:flex;align-items:center;gap:20px}
+.scope-switch{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.scope-switch input{width:auto;margin:0;accent-color:#a2c292}
+.scope-switch:hover{color:var(--text)}
