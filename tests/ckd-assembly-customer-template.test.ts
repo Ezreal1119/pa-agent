@@ -136,6 +136,11 @@ test('Assembly long operation/check text remains complete on bounded continuatio
     const chunks = workbook.worksheets.filter(sheet => sheet.getCell('A2').value === label);
     assert.ok(chunks.length > 1); assert.equal(chunks.map(sheet => sheet.getCell('A5').value).join(''), long.trim());
     assert.ok(chunks.every(sheet => sheet.getRow(5).height === 660 && sheet.pageSetup.fitToHeight === 1));
+    for (const sheet of chunks) {
+      const font = sheet.getCell('A5').font;
+      assert.equal(font.name, '黑体'); assert.equal(font.size, label.startsWith('操作说明') ? 22 : 16);
+      if (!label.startsWith('操作说明')) { assert.equal(font.color!.argb, 'FFFF0000'); assert.equal(font.underline, true); }
+    }
   }
   assert.equal(result.warnings.length, 3);
   const pageCount = workbook.worksheets.length - 2; assert.equal(workbook.worksheets[0]!.getCell('D4').value, pageCount);
@@ -143,11 +148,11 @@ test('Assembly long operation/check text remains complete on bounded continuatio
   validReferences(workbook);
 });
 
-test('Assembly borrows bounded photo height for normal four-cell captions while preserving tables and the page height', async t => {
-  const root = fixture(t), text = 'Install the connector in the indicated position. Check orientation and secure the cable. 按图安装连接器，确认方向并固定线材。';
+test('Assembly fits 22-point captions within available photo height and retains constrained captions in matching-font continuations', async t => {
+  const root = fixture(t), text = 'Install the connector. 按图安装连接器并确认方向。';
   source(root, 'caption-fit', 4, Array.from({ length: 4 }, (_, i) => `${i + 1}. ${text}`).join('\n\n'), 8, 6);
   const { result, workbook } = await generate(root, ['caption-fit'], '中文'), sheet = workbook.worksheets[2]!;
-  assert.deepEqual(result.warnings, []); assert.equal(result.sheetCount, 3);
+  assert.equal(result.warnings.length, 2); assert.equal(result.sheetCount, 5);
   const template = new ExcelJS.Workbook(); await template.xlsx.readFile(path.join(assets, 'assemble-sop-template.xlsx'));
   const original = template.getWorksheet('4格模版')!;
   const map = (row: number) => row + (row >= 15 ? 1 : 0) + (row >= 22 ? 1 : 0);
@@ -155,9 +160,15 @@ test('Assembly borrows bounded photo height for normal four-cell captions while 
   for (const [first, last, caption] of [[6, 18, 19], [21, 33, 34]]) {
     const span = (s: ExcelJS.Worksheet, a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => s.getRow(a + i).height || 30).reduce((a, b) => a + b, 0);
     assert.ok(span(sheet, map(first!), map(last!)) >= span(original, first!, last!) * .8 - .001);
-    assert.ok(sheet.getRow(map(caption!)).height! > original.getRow(caption!).height!);
+    assert.ok(sheet.getRow(map(caption!)).height! >= original.getRow(caption!).height!);
   }
-  for (const [i, cell] of ['G20', 'O20', 'G36', 'O36'].entries()) assert.equal(sheet.getCell(cell).value, `${i + 1}. ${text}`);
+  assert.ok(sheet.getRow(map(19)).height! > original.getRow(19).height!);
+  for (const [i, cell] of ['G20', 'O20'].entries()) assert.equal(sheet.getCell(cell).value, `${i + 1}. ${text}`);
+  for (const i of [3, 4]) {
+    const continuation = workbook.worksheets.find(s => s.getCell('A2').value === `操作说明 ${i}`)!;
+    assert.equal(continuation.getCell('A5').value, `${i}. ${text}`);
+    assert.equal(continuation.getCell('A5').font.name, '黑体'); assert.equal(continuation.getCell('A5').font.size, 22);
+  }
   assert.equal(sheet.getCell('B15').value, 'PN-8'); assert.equal(sheet.getCell('B23').value, 'Tool-6');
 });
 
@@ -266,8 +277,8 @@ test('Assembly chart supports 30 ordered processes, reserved sheet names and no 
   const root = fixture(t), ids = ['封面', '排位图', ...Array.from({ length: 28 }, (_, i) => `工序${i + 3}`)];
   for (const id of ids) source(root, id, 1);
   const { workbook } = await generate(root, ids, '中文'), chart = workbook.worksheets[1]!;
-  assert.equal(workbook.worksheets.length, 32); assert.equal(chart.getCell('A36').value, 'OP030'); assert.equal(chart.getCell('D36').value, ids[29]);
-  assert.equal(chart.getCell('A37').value, '编制人：Cover! "Author"'); assert.equal(chart.pageSetup.printArea, 'A1:F37');
+  assert.equal(workbook.worksheets.length, 32); assert.equal(chart.getCell('A36').value, 'OP030'); assert.equal(chart.getCell('D36').text, ids[29]);
+  assert.equal(chart.getCell('A37').text, '编制人：Cover! "Author"'); assert.equal(chart.pageSetup.printArea, 'A1:F37');
   assert.equal(workbook.worksheets[2]!.name, '封面 (2)'); assert.equal(workbook.worksheets[3]!.name, '排位图 (2)');
   assert.equal((workbook.worksheets[31]!.getCell('E3').value as ExcelJS.CellFormulaValue).formula, "'排位图'!D36");
   validReferences(workbook);
@@ -290,4 +301,81 @@ test('Assembly generator CLI selects the customer workbook without --template', 
   assert.equal(workbook.worksheets[1]!.name, '排位图'); assert.equal(workbook.worksheets[2]!.getCell('G30').value, '操作说明 1. Instruction 1.');
   assert.equal(workbook.worksheets[0]!.getCell('A22').value, '编制人：A');
   assert.equal(workbook.worksheets[2]!.getCell('A36').value, '编制人：A');
+});
+
+test('Assembly customer typography follows logical regions across languages, tile counts, expanded tables and check-photo splits', async t => {
+  const root = fixture(t), templatePath = path.join(assets, 'assemble-sop-template.xlsx'), before = hash(fs.readFileSync(templatePath));
+  for (const language of ['中文', 'English']) for (const count of [1, 2, 4]) {
+    const id = `fonts-${count}`, dir = source(root, id, count, undefined, 8, 6);
+    put(path.join(dir, 'Previous_Station_Check_Photo.png'), png);
+    const { workbook, result } = await generate(root, [id], language), sheet = workbook.worksheets[2]!;
+    assert.deepEqual(result.warnings, []);
+    assert.equal(workbook.worksheets[0]!.getCell('A1').alignment.vertical, 'middle');
+    assert.equal(sheet.getCell('E1').font.size, 36);
+    for (const ref of ['A3', 'A4', 'A5', 'S3', 'S4', 'S5']) assert.equal(sheet.getCell(ref).font.size, 16);
+    const footer = Number(sheet.pageSetup.printArea!.match(/V(\d+)$/u)![1]);
+    assert.equal(footer, 38, 'Inserted table rows keep mapped styles and footer positions');
+    const map = (row: number) => row + (row >= 15 ? 1 : 0) + (row >= 22 ? 1 : 0);
+    for (const row of [6, 15, 22, 30, 36]) {
+      assert.equal(sheet.getCell(map(row), 1).font.name, '黑体'); assert.equal(sheet.getCell(map(row), 1).font.size, 16);
+    }
+    for (const [first, last] of [[7, 14], [16, 21], [23, 29], [31, 35]]) {
+      const end = map(last!) + (last === 14 || last === 21 ? 1 : 0);
+      for (let row = map(first!); row <= end; row++) for (let col = 1; col <= 6; col++) {
+        const cell = sheet.getCell(row, col).master;
+        assert.equal(cell.font.name, '黑体', cell.address); assert.equal(cell.font.size, 16, cell.address);
+        if (first! >= 23) { assert.equal(cell.font.color!.argb, 'FFFF0000'); assert.equal(cell.font.underline, true); }
+      }
+    }
+    const captions = count === 1 ? [[30, 7]] : count === 2 ? [[30, 7], [30, 15]] : [[19, 7], [19, 15], [34, 7], [34, 15]];
+    for (const [row, col] of captions) {
+      assert.equal(sheet.getCell(map(row!), col!).font.name, '黑体'); assert.equal(sheet.getCell(map(row!), col!).font.size, 22);
+    }
+    assert.equal(sheet.getCell(8, 1).value, '1'); assert.equal(sheet.getCell(map(17), 1).value, '1', 'Process table keeps its index');
+    validReferences(workbook);
+  }
+  assert.equal(hash(fs.readFileSync(templatePath)), before);
+});
+
+test('Assembly chart centers every cell, separates mixed-script fonts, omits only tool indices and preserves live formulas', async t => {
+  const root = fixture(t), dir = source(root, '混合工序 Test', 1);
+  put(path.join(dir, 'Tools.jsonl'), [
+    { index: '91', name: '电批 Driver', qty: 2, specs: 'M3规格' },
+    { index: '92', name: '夹具 Fixture', qty: 0, specs: 'NA' },
+  ].map(r => JSON.stringify(r)).join('\n'));
+  for (const language of ['中文', 'English']) {
+    const { workbook, output } = await generate(root, ['混合工序 Test'], language), chart = workbook.worksheets[1]!;
+    assert.equal(chart.getCell('E7').text, '电批 Driver x2 (M3规格)\n夹具 Fixture x0');
+    assert.equal(chart.getCell('A7').value, 'OP001'); assert.equal(chart.getCell('B7').value, 1);
+    for (let row = 1; row <= 27; row++) for (let col = 1; col <= 6; col++) {
+      const cell = chart.getCell(row, col);
+      assert.equal(cell.alignment.horizontal, 'center', cell.address); assert.equal(cell.alignment.vertical, 'middle', cell.address);
+    }
+    for (const ref of ['D7', 'E7']) {
+      const runs = (chart.getCell(ref).value as ExcelJS.CellRichTextValue).richText;
+      assert.ok(runs.some(run => run.font!.name === '黑体')); assert.ok(runs.some(run => run.font!.name === 'Calibri'));
+      for (const run of runs) assert.equal(run.font!.name, /[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/u.test(run.text) ? '黑体' : 'Calibri');
+    }
+    assert.equal(chart.getCell('A7').font.name, 'Calibri'); assert.equal(chart.getCell('F7').font.name, 'Calibri');
+    assert.equal((chart.getCell('C4').value as ExcelJS.CellFormulaValue).result, 'D-001');
+    assert.ok((chart.getCell('F3').value as ExcelJS.CellFormulaValue).formula.startsWith('SUM('));
+    const zip = await JSZip.loadAsync(fs.readFileSync(output)), theme = await zip.file('xl/theme/theme1.xml')!.async('string');
+    const minor = theme.match(/<a:minorFont>[\s\S]*?<\/a:minorFont>/u)![0];
+    assert.match(minor, /<a:latin typeface="Calibri"/u); assert.match(minor, /script="Hans" typeface="黑体"/u);
+    validReferences(workbook);
+  }
+});
+
+test('Assembly 16-point tables give wrapped records spare row height and retain every remaining record', async t => {
+  const root = fixture(t), dir = source(root, 'wrapped-tools', 4);
+  const records = Array.from({ length: 6 }, (_, i) => ({index: String(i + 1), name: `夹具 Fixture-${i + 1}`, qty: 1, specs: `M${i + 1}`}));
+  put(path.join(dir, 'Tools.jsonl'), records.map(r => JSON.stringify(r)).join('\n'));
+  const { workbook, result } = await generate(root, ['wrapped-tools'], '中文'), sheet = workbook.worksheets[2]!;
+  assert.equal(sheet.getCell('B17').value, records[0]!.name); assert.equal(sheet.getCell('B18').value, null);
+  assert.ok(sheet.getRow(17).height! >= 44.4); assert.ok(sheet.getRow(18).height! >= 24);
+  assert.equal(sheet.getRow(19).height, 33.6, 'Caption rows remain protected');
+  const appendix = workbook.worksheets.find(s => s.name.startsWith('工具续表'))!;
+  assert.deepEqual(Array.from({length: 5}, (_, i) => appendix.getCell(5 + i, 2).value), records.slice(1).map(r => r.name));
+  assert.equal(result.warnings.length, 1); assert.match(result.warnings[0], /原页1行/u);
+  validReferences(workbook);
 });
