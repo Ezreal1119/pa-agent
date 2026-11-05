@@ -21,13 +21,13 @@ function register(name, action) {
       const value = await action(...args);
       if (!changesSession && generation !== sessionGeneration) throw new ClientError('session_changed', '登录已改变，请重试当前操作。');
       return { ok: true, value };
-    } catch (error) { if (!changesSession && generation !== sessionGeneration) return { ok: false, code: 'session_changed', error: '登录已改变，请重试当前操作。' }; if (error.code === 401) { sessionGeneration++; saved.clear(); backend.cancelDownloads(); } return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
+    } catch (error) { if (!changesSession && generation !== sessionGeneration) return { ok: false, code: 'session_changed', error: '登录已改变，请重试当前操作。' }; if (error.code === 401) { sessionGeneration++; saved.clear(); backend.cancelDownloads(); closeEditor(); } return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
   });
 }
 for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate', 'me']) register(name, (...args) => backend[name](...args));
-register('changePassword', async input => { const result = await backend.changePassword(input); sessionGeneration++; saved.clear(); return result; });
-register('login', input => { sessionGeneration++; saved.clear(); return backend.login(input); });
-register('logout', async () => { sessionGeneration++; saved.clear(); return backend.logout(); });
+register('changePassword', async input => { const result = await backend.changePassword(input); sessionGeneration++; saved.clear(); closeEditor(); return result; });
+register('login', input => { sessionGeneration++; saved.clear(); closeEditor(); return backend.login(input); });
+register('logout', async () => { sessionGeneration++; saved.clear(); closeEditor(); return backend.logout(); });
 register('save', async (id, index) => {
   const key = id + ':' + index, generation = sessionGeneration;
   if (saving.has(key)) throw new ClientError('download_busy', '此文件正在保存，请等待完成。');
@@ -47,6 +47,45 @@ register('save', async (id, index) => {
 register('open', async handle => { const error = await shell.openPath(saved.get(handle)); if (error) throw new ClientError('open', error); return { ok: true }; });
 register('show', handle => { shell.showItemInFolder(saved.get(handle)); return { ok: true }; });
 
+/**
+ * 逐工序录入窗口：整页加载服务器的 /admin/editor。
+ * 保留正式库录入功能；服务端使用新用户体系校验每次请求。
+ * 令牌由主进程注入当前窗口的请求头，页面本身看不到它。
+ */
+let editorWindow, editorSession;
+function ensureEditorSession() {
+  if (editorSession) return editorSession;
+  editorSession = session.fromPartition('editor');
+  editorSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  editorSession.setPermissionCheckHandler(() => false);
+  // 只给后端这一个源注入令牌；主窗口走 ckd:// 协议，不受影响。
+  editorSession.webRequest.onBeforeSendHeaders({ urls: [new URL(backendUrl).origin + '/*'] }, (details, callback) => {
+    if (!editorWindow || editorWindow.isDestroyed() || details.webContentsId !== editorWindow.webContents.id) { callback({ cancel: true }); return; }
+    const token = backend.token;
+    if (token) details.requestHeaders.Authorization = 'Bearer ' + token;
+    callback({ requestHeaders: details.requestHeaders });
+  });
+  return editorSession;
+}
+function closeEditor() { const previous = editorWindow; editorWindow = undefined; if (previous && !previous.isDestroyed()) previous.destroy(); }
+register('openEditor', async () => {
+  const generation = sessionGeneration;
+  if (!backend.token) throw new ClientError(401, '请先登录。');
+  await backend.status(); // Also rejects first-password and revoked sessions.
+  if (generation !== sessionGeneration) throw new ClientError('session_changed', '登录已改变，请重新打开录入窗口。');
+  if (editorWindow && !editorWindow.isDestroyed()) { editorWindow.focus(); return { ok: true }; }
+  ensureEditorSession();
+  editorWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 1040, minHeight: 660, title: productName + ' · 逐工序录入', backgroundColor: '#101b17', autoHideMenuBar: true,
+    webPreferences: { partition: 'editor', contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  editorWindow.setMenu(null);
+  editorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  editorWindow.webContents.on('will-navigate', event => event.preventDefault());
+  const openedEditor = editorWindow;
+  editorWindow.on('closed', () => { if (editorWindow === openedEditor) editorWindow = undefined; });
+  void editorWindow.loadURL(new URL('/admin/editor', backendUrl).href);
+  return { ok: true };
+});
+
 function createWindow() {
   window = new BrowserWindow({ width: 1180, height: 820, minWidth: 900, minHeight: 640, title: productName, backgroundColor: '#101b17', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
@@ -56,7 +95,7 @@ function createWindow() {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.on('will-prevent-unload', event => event.preventDefault());
-  window.on('closed', () => { sessionGeneration++; window = undefined; saved.clear(); void backend.logout().catch(() => {}); });
+  window.on('closed', () => { sessionGeneration++; window = undefined; saved.clear(); closeEditor(); void backend.logout().catch(() => {}); });
   window.loadURL('ckd://ui/index.html');
 }
 if (!app.requestSingleInstanceLock()) app.quit();

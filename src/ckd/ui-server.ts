@@ -16,12 +16,14 @@ import { AssessmentCalibrationJobs } from "./image-assessment-calibration.js";
 import { readImagePolicy, saveImagePolicy, DEFAULT_POLICY } from "./image-assessment.js";
 import { PixelImageChecker, PIXEL_POLICY, PIXEL_CONFIG_HASH } from './image-pixel.js';
 import { scoringContext, scoreWithContext, checkOperationFocus } from './image-scorer.js';
+import { createProject, deleteProcess, listProcesses, listProjects, readPhoto, readProcess, reorderProcesses, saveProcess, EDITOR_SOP_TYPE } from "./editor-library.js";
+import { EditorInputError, EDITOR_LANGUAGES, type EditorProcessInput } from "./editor-types.js";
 import { ClientAccess, ClientAccessError } from "./client-access.js";
 import { AdminAccess, AdminAccessError } from "./admin-access.js";
 import { UserError } from './users.js';
 
 const uiRoot = fileURLToPath(new URL("../../resources/ckd-ui/", import.meta.url));
-const assets = new Map([["/", ["index.html", "text/html; charset=utf-8"]], ["/app.js", ["app.js", "text/javascript; charset=utf-8"]], ["/style.css", ["style.css", "text/css; charset=utf-8"]], ["/login", ["login.html", "text/html; charset=utf-8"]], ["/login.js", ["login.js", "text/javascript; charset=utf-8"]], ['/users', ['users.html', 'text/html; charset=utf-8']], ['/users.js', ['users.js', 'text/javascript; charset=utf-8']]]);
+const assets = new Map([["/", ["index.html", "text/html; charset=utf-8"]], ["/app.js", ["app.js", "text/javascript; charset=utf-8"]], ["/style.css", ["style.css", "text/css; charset=utf-8"]], ["/login", ["login.html", "text/html; charset=utf-8"]], ["/login.js", ["login.js", "text/javascript; charset=utf-8"]], ['/users', ['users.html', 'text/html; charset=utf-8']], ['/users.js', ['users.js', 'text/javascript; charset=utf-8']], ["/editor", ["editor.html", "text/html; charset=utf-8"]], ["/editor.js", ["editor.js", "text/javascript; charset=utf-8"]], ["/editor.css", ["editor.css", "text/css; charset=utf-8"]]]);
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 function view(run: CkdRun, busy: boolean, operationError?: string) {
@@ -37,6 +39,24 @@ async function body(request: http.IncomingMessage): Promise<Record<string, unkno
   try { const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(); return value as Record<string, unknown>; }
   catch { throw new HttpError(400, "输入必须是 JSON 对象。"); }
 }
+/**
+ * 逐工序录入专用：一次提交带 4 张裁剪图，base64 后远超普通接口的 64KB。
+ * 上限放在 48 MB，仍远低于 Node 默认堆；超过时提示用户先压图而不是静默失败。
+ */
+const EDITOR_BODY_LIMIT = 48 * 1024 * 1024;
+async function editorBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+  if (!/^application\/json(?:\s*;|$)/iu.test(request.headers["content-type"] ?? "")) throw new HttpError(415, "请使用 JSON 请求。");
+  const declared = Number(request.headers["content-length"] ?? 0);
+  if (declared > EDITOR_BODY_LIMIT) throw new HttpError(413, "本次提交超过 48 MB，请减少图片数量或压缩后再试。");
+  const chunks: Buffer[] = []; let size = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.from(chunk); size += bytes.length;
+    if (size > EDITOR_BODY_LIMIT) throw new HttpError(413, "本次提交超过 48 MB，请减少图片数量或压缩后再试。");
+    chunks.push(bytes);
+  }
+  try { const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(); return value as Record<string, unknown>; }
+  catch { throw new HttpError(400, "输入必须是 JSON 对象。"); }
+}
 export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: LibraryMaintenanceOptions["model"]; maintenanceModelTimeoutMs?: number; adminAuth?: AdminAccess | false } = {}) {
   const adminAccess = options.adminAuth === false ? undefined : options.adminAuth ?? (process.env.CKD_ADMIN_USER && process.env.CKD_ADMIN_PASSWORD_HASH ? new AdminAccess(process.env.CKD_ADMIN_USER, process.env.CKD_ADMIN_PASSWORD_HASH) : undefined);
   if (process.env.NODE_ENV === "production" && !adminAccess) throw new Error("生产环境必须配置 CKD_ADMIN_USER 和 CKD_ADMIN_PASSWORD_HASH。");
@@ -45,6 +65,12 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   if (process.env.NODE_ENV === "production" && !publicOrigin) throw new Error("生产环境必须配置 CKD_ADMIN_ORIGIN。");
   const service = new CkdWorkflow(options);
   const clientAccess = new ClientAccess(service.dataDir, Date.now, adminAccess?.account);
+  /**
+   * 待审核区：<库根>/public，内部结构与库根一致（public/product_lib/<项目>/assemble/...）。
+   * catalog 只扫 <库根>/product_lib，所以这里的草稿不会被生成流程读到；
+   * 管理员确认后把整个项目目录挪进 product_lib 即可，sops.json 跟着走。
+   */
+  const publicEditorRoot = () => { const root = path.join(service.libraryPath, "public"); fs.mkdirSync(root, { recursive: true }); return root; };
   const fixedPixel=service.imageQuality instanceof PixelImageChecker;
   const imageCalibration = new AssessmentCalibrationJobs(service.dataDir, service.imageQuality instanceof PixelImageChecker?service.imageQuality.legacy():service.imageQuality);
   const calibrationJobs = new Map<string, Promise<unknown>>();
@@ -109,6 +135,15 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       const adminPrefix = prefixedAdmin ? "/admin" : "";
       const expectedOrigin = prefixedAdmin ? publicOrigin : `http://${host}`;
       const validPostOrigin = !request.headers.origin || (request.headers.origin === expectedOrigin && request.headers["x-ckd-ui"] === "1");
+      // Desktop editor is a scoped Bearer surface; user management and the rest
+      // of the Web workbench still require the administrator cookie.
+      const editorSurface = url.pathname === "/editor" || url.pathname === "/editor.js" || url.pathname === "/editor.css"
+        || url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/");
+      let editorClient = false;
+      if (!clientRequest && editorSurface && request.headers.authorization) {
+        clientAccess.authenticate(request.headers.authorization);
+        editorClient = true;
+      }
       if (!clientRequest && adminAccess) {
         if (prefixedAdmin && url.pathname.startsWith("/api/client/")) throw new HttpError(404, "接口不存在。");
         if (request.method === "POST" && !validPostOrigin) throw new HttpError(403, "请求来源无效。");
@@ -118,7 +153,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           response.setHeader("Set-Cookie", adminAccess.cookie(token, adminPrefix, expectedOrigin?.startsWith("https://") ?? false));
           json(200, { account: adminAccess.account }); return;
         }
-        if (!publicAsset && !adminAccess.authenticate(request.headers.cookie)) {
+        if (!publicAsset && !editorClient && !adminAccess.authenticate(request.headers.cookie)) {
           if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/app.js")) {
             response.writeHead(302, { Location: `${adminPrefix}/login` }); response.end(); return;
           }
@@ -164,6 +199,67 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       if (!clientRequest && request.method === "POST" && !((/^\/api\/(?:images\/(?:quality|policy|calibrate|calibration\/jobs\/[0-9a-f-]{36}\/(?:resume|cancel))|library\/(?:validate|translate|summaries|sync|jobs\/[0-9a-f-]{36}\/(?:resume|cancel)))$/u.test(url.pathname)) && !request.headers.origin) && (request.headers.origin !== expectedOrigin || request.headers["x-ckd-ui"] !== "1")) throw new HttpError(403, "请求来源无效，请从 CKD 页面操作。");
       if (request.method === "GET" && assets.has(url.pathname)) {
         const [name, type] = assets.get(url.pathname)!; response.writeHead(200, { "Content-Type": type! }); response.end(fs.readFileSync(path.join(uiRoot, name!))); return;
+      }
+      /* -------------------------------------------------------- 逐工序录入 */
+      // 页面把一道工序（文本 + 裁剪图）直接写进 Library；出表仍走原来的工作流。
+      if (url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/")) {
+        // DELETE 不在上面的 POST 来源校验覆盖范围内，单独补一次，避免跨站删除工序。
+        if (request.method === "DELETE" && !validPostOrigin) throw new HttpError(403, "请求来源无效，请从 CKD 页面操作。");
+        // 桌面客户端（Bearer）直接写正式库 product_lib；只有管理员显式带 scope=public 时才看待审核区。
+        // 之前让 Bearer 固定落 public，会导致「项目建在正式库、工序写 public」时校验不到 project.json，故统一回正式库。
+        const wantsPublic = !editorClient && url.searchParams.get("scope") === "public";
+        const editorLibrary = wantsPublic ? publicEditorRoot() : service.libraryPath;
+        try {
+          if (url.pathname === "/api/editor" && request.method === "GET") {
+            json(200, { sopType: EDITOR_SOP_TYPE, languages: EDITOR_LANGUAGES, projects: listProjects(editorLibrary), scope: wantsPublic ? "public" : "library", canSwitch: !editorClient });
+            return;
+          }
+          if (url.pathname === "/api/editor/projects" && request.method === "POST") {
+            const input = await editorBody(request);
+            // 项目是容器，统一建在正式库 product_lib；待审核区只放工序，不放项目。
+            json(200, { project: createProject(service.libraryPath, { projectId: input.projectId, displayName: input.displayName }) });
+            return;
+          }
+          if (url.pathname === "/api/editor/process" && request.method === "GET") {
+            const projectId = url.searchParams.get("project") ?? "";
+            const language = url.searchParams.get("language") ?? "中文";
+            const order = url.searchParams.get("order");
+            if (order === null) {
+              json(200, { processes: listProcesses(editorLibrary, { projectId, language }) });
+              return;
+            }
+            json(200, { process: readProcess(editorLibrary, { projectId, language, order }, { includePhotos: url.searchParams.get("photos") !== "0" }) });
+            return;
+          }
+          if (url.pathname === "/api/editor/process" && request.method === "POST") {
+            const input = await editorBody(request);
+            json(200, { result: saveProcess(editorLibrary, input as unknown as EditorProcessInput) });
+            return;
+          }
+          if (url.pathname === "/api/editor/reorder" && request.method === "POST") {
+            const input = await editorBody(request);
+            json(200, { result: reorderProcesses(editorLibrary, { projectId: input.projectId, language: input.language, folders: input.folders }) });
+            return;
+          }
+          if (url.pathname === "/api/editor/process" && request.method === "DELETE") {
+            const projectId = url.searchParams.get("project") ?? "";
+            const language = url.searchParams.get("language") ?? "中文";
+            const removed = deleteProcess(editorLibrary, { projectId, language, order: url.searchParams.get("order") ?? "" });
+            // 删掉中间一道后把编号补齐，避免留下 process_01、process_03 这种空号。
+            const remaining = listProcesses(editorLibrary, { projectId, language }).map(process => process.folder);
+            if (remaining.length) reorderProcesses(editorLibrary, { projectId, language, folders: remaining });
+            json(200, { result: removed });
+            return;
+          }
+          if (url.pathname === "/api/editor/photo" && request.method === "GET") {
+            const photo = readPhoto(editorLibrary, { projectId: url.searchParams.get("project") ?? "", language: url.searchParams.get("language") ?? "中文", order: url.searchParams.get("order") ?? "", name: url.searchParams.get("name") ?? "" });
+            response.writeHead(200, { "Content-Type": photo.mimeType, "Content-Length": photo.bytes.length }); response.end(photo.bytes); return;
+          }
+          throw new HttpError(404, "接口不存在。");
+        } catch (error) {
+          if (error instanceof EditorInputError) { json(error.status, { error: error.message }); return; }
+          throw error;
+        }
       }
       const referenceImage = /^\/api\/images\/references\/([a-f0-9]{64})$/u.exec(url.pathname);
       if (request.method === "GET" && referenceImage) {

@@ -25,5 +25,6 @@ contextBridge.exposeInMainWorld('ckd', Object.freeze({
     return () => ipcRenderer.removeListener('ckd:download-progress', listener);
   },
   open: handle => ipcRenderer.invoke('ckd:open', handle),
-  show: handle => ipcRenderer.invoke('ckd:show', handle)
+  show: handle => ipcRenderer.invoke('ckd:show', handle),
+  openEditor: () => ipcRenderer.invoke('ckd:openEditor')
 }));

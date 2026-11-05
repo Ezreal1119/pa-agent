@@ -17,6 +17,7 @@ const DEFAULT_ROW_HEIGHT_PX_FALLBACK = 15;
 const BAND_BORDER_ROW_HEIGHT = 15;
 const SPACER_ROW_HEIGHT = 15;
 const BORDER_MEDIUM = { style: "medium" };
+const BORDER_THIN = { style: "thin" };
 const PX_TO_EMU = 9525;
 
 const MATERIAL_HEADER_ROW = 7;
@@ -541,9 +542,19 @@ function prepareWorkstationChartRows(worksheet, processCount) {
         ? firstStyles
         : middleStyles;
     for (let column = 1; column <= 6; column += 1) {
-      worksheet.getCell(rowNumber, column).value = null;
+      const cell = worksheet.getCell(rowNumber, column);
+      cell.value = null;
       const style = styles[column - 1];
-      if (style) worksheet.getCell(rowNumber, column).style = JSON.parse(JSON.stringify(style));
+      if (style) cell.style = JSON.parse(JSON.stringify(style));
+      // 模板数据行（R7/R8）的框线在样式克隆后会丢，这里逐边补齐，避免工序行看起来是白底无边。
+      // 「编制人 / 审核人」在 R27，不在本循环范围内，保持原来的无框线。
+      const border = cell.border || {};
+      cell.border = {
+        top: border.top && border.top.style ? border.top : BORDER_THIN,
+        left: border.left && border.left.style ? border.left : BORDER_THIN,
+        bottom: border.bottom && border.bottom.style ? border.bottom : BORDER_THIN,
+        right: border.right && border.right.style ? border.right : BORDER_THIN,
+      };
     }
   }
 

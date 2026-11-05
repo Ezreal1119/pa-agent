@@ -1,0 +1,83 @@
+/* 逐工序录入页：沿用工作台的深色主题变量，只补布局与表格样式。 */
+.editor-layout{grid-template-columns:280px minmax(0,920px);gap:40px}
+.editor-layout .sidebar{position:sticky;top:24px;align-self:start}
+.editor-layout .field>span{font-size:12px;color:var(--muted);font-weight:500}
+.editor-layout .field{margin-bottom:16px}
+.editor-layout .button.full{margin-top:4px}
+
+.process-list{display:grid;gap:6px;max-height:52vh;overflow:auto;margin-bottom:8px}
+.process-item{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:8px;padding:10px 12px;border:1px solid transparent;border-radius:10px;background:transparent;cursor:grab;font-size:13px}
+.process-item:hover{background:#202d24}
+.process-item.selected{background:#233227;border-color:#4a6350}
+.process-item.dragging{opacity:.4}
+.process-item.drop-target{border-color:var(--accent)}
+.process-index{font-size:11px;color:var(--accent);font-variant-numeric:tabular-nums}
+.process-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.process-count{font-size:11px;color:var(--muted)}
+.process-empty{padding:14px 12px;font-size:12px;color:var(--muted)}
+
+.photo-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:16px}
+.photo-card{border:1px solid var(--border);border-radius:12px;background:var(--input);overflow:hidden;display:flex;flex-direction:column}
+.photo-card img{display:block;width:100%;height:170px;object-fit:contain;background:#0d1210}
+.photo-card textarea{border:0;border-top:1px solid var(--border);border-radius:0;background:transparent;min-height:74px;font-size:13px;padding:10px 12px}
+.photo-card textarea:focus{box-shadow:none;border-color:var(--border)}
+.photo-head{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border)}
+.photo-head button{background:transparent;border:0;color:var(--danger);font-size:11px;padding:2px 0}
+
+.dropzone{display:grid;place-items:center;gap:6px;padding:22px;border:1px dashed var(--border);border-radius:12px;color:var(--muted);font-size:13px;text-align:center;cursor:pointer}
+.dropzone:hover,.dropzone.over{border-color:var(--accent);color:var(--accent)}
+.dropzone input{display:none}
+
+.grid-table{width:100%;border-collapse:collapse;font-size:13px}
+.grid-table th{font-weight:500;font-size:11px;color:var(--muted);text-align:left;padding:0 6px 8px}
+.grid-table td{padding:4px 6px;vertical-align:middle}
+.grid-table td:first-child{width:34px;color:var(--muted);font-size:11px;text-align:center}
+.grid-table td:last-child{width:34px}
+.grid-table input{padding:8px 10px;font-size:13px}
+.grid-table .row-remove{background:transparent;border:0;color:var(--danger);font-size:16px;line-height:1;padding:4px 6px}
+.grid-empty{color:var(--muted);font-size:12px;padding:10px 6px}
+
+.form-footer{position:sticky;bottom:0;background:linear-gradient(to top,var(--bg) 70%,transparent);padding:18px 0 12px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.form-footer p{margin:0}
+.save-state{font-size:12px;color:var(--muted)}
+.save-state.dirty{color:#e3c98a}
+.save-state.ok{color:var(--accent)}
+.save-state.bad{color:var(--danger)}
+
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.section-head h2{font-size:16px}
+.hint{font-size:12px;color:var(--muted);margin:0 0 14px}
+.tag{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--muted)}
+@media(max-width:900px){.editor-layout{grid-template-columns:1fr;gap:20px}.editor-layout .sidebar{position:static}.photo-list{grid-template-columns:1fr 1fr}}
+@media(max-width:650px){.photo-list{grid-template-columns:1fr}.form-footer{flex-direction:column;align-items:stretch}.form-footer .button{width:100%}}
+
+/* 「作业前检查」自动带出上一道自检时的弱化显示，用户一改就恢复正常色 */
+.editor-layout textarea.inherited{color:var(--muted)}
+
+/* SOP 基本信息（封面）：没选项目时禁用；项目 ID 只读 */
+.editor-layout #sop-info-panel.disabled{opacity:.55;pointer-events:none}
+.editor-layout #sop-info-panel .hint{margin-bottom:12px}
+.editor-layout input[readonly]{color:var(--muted);background:transparent;cursor:default}
+
+/* 顶栏右侧：待审核区切换（只有管理员会看到） */
+.topbar-actions{display:flex;align-items:center;gap:20px}
+.scope-switch{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.scope-switch input{width:auto;margin:0;accent-color:#a2c292}
+.scope-switch:hover{color:var(--text)}
+
+/* 新建项目弹窗：Electron 的渲染进程不支持 window.prompt()，两端统一用页面内 dialog */
+.editor-dialog{border:1px solid var(--border);border-radius:16px;background:var(--panel);color:var(--text);padding:0;width:min(92vw,440px);box-shadow:0 24px 60px #0009}
+.editor-dialog::backdrop{background:#080c0aad}
+.editor-dialog form{display:grid;gap:16px;padding:26px}
+.editor-dialog .eyebrow{margin:0;letter-spacing:1.6px}
+.editor-dialog h2{font-size:19px;margin:0}
+.editor-dialog .hint{margin:0;font-size:12px;line-height:1.65;color:var(--muted)}
+.editor-dialog .hint code{font-size:11px;padding:1px 5px;border-radius:4px;background:var(--input);border:1px solid var(--border)}
+.editor-dialog .field{margin:0;gap:8px}
+.editor-dialog .field>span{font-size:13px;font-weight:550;display:flex;align-items:center;gap:8px}
+.editor-dialog .field em{font-size:10px;font-style:normal;color:var(--muted);font-weight:400;margin-left:auto}
+.editor-dialog .field small{font-size:11px;color:var(--muted)}
+.editor-dialog input{padding:10px 12px;font-size:14px}
+.dialog-error{margin:0;font-size:12px;color:var(--danger);border:1px solid #8d5d4b;background:#35251f;padding:9px 12px;border-radius:8px}
+.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
+.dialog-actions .button{min-width:88px}

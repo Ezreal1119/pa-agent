@@ -7,7 +7,7 @@
 <body>
   <header class="topbar"><a class="brand" href="./" aria-label="CKD SOP 首页"><span class="brand-icon">C</span> CKD <span class="brand-light">SOP 工作台</span></a><span id="library-status" class="connection">正在检查资料库…</span><div class="topbar-actions"><a id="user-management" class="text-button" href="users">用户管理</a><button id="admin-logout" class="text-button" type="button">退出管理员</button></div></header>
   <main class="layout">
-    <aside class="sidebar"><button class="button primary full" id="new-task">＋ 新建 SOP</button><button class="button secondary full" id="sync-library" type="button">同步更新 Library</button><button class="button secondary full" id="open-reference-calibration" type="button">参考图片校准</button><button class="button secondary full" id="check-library" type="button">检查资料库</button><button class="button secondary full" id="image-settings" type="button">图片评分与设置</button><div class="sidebar-heading"><h2>最近任务</h2><button id="refresh" class="icon-button" title="刷新任务" aria-label="刷新任务">↻</button></div><div id="task-list" class="task-list"><p class="muted small">正在加载…</p></div><p class="sidebar-note">任务自动保存在本机。<br>关闭页面后，可回来继续。</p></aside>
+    <aside class="sidebar"><button class="button primary full" id="new-task">＋ 导出 SOP</button><a class="button secondary full" id="open-editor" href="editor">✎ 逐工序录入</a><button class="button secondary full" id="sync-library" type="button">同步更新 Library</button><button class="button secondary full" id="open-reference-calibration" type="button">参考图片校准</button><button class="button secondary full" id="check-library" type="button">检查资料库</button><button class="button secondary full" id="image-settings" type="button">图片评分与设置</button><div class="sidebar-heading"><h2>最近任务</h2><button id="refresh" class="icon-button" title="刷新任务" aria-label="刷新任务">↻</button></div><div id="task-list" class="task-list"><p class="muted small">正在加载…</p></div><p class="sidebar-note">任务自动保存在本机。<br>关闭页面后，可回来继续。</p></aside>
     <section class="main-column">
       <div id="notice" class="notice" role="alert" hidden></div>
       <section id="library-sync-panel" class="panel" hidden aria-labelledby="library-sync-title">
@@ -41,18 +41,23 @@
         <p id="validation-summary" role="status" aria-live="polite"></p><div id="validation-errors" class="validation-errors"></div>
       </section>
       <section id="create-view">
-        <div class="eyebrow">CREATE CKD SOP V3</div><h1>创建你的 SOP</h1><p class="intro">填写基本信息，然后确认工序流程。完成后即可下载 Excel。</p>
+        <div class="eyebrow">EXPORT CKD SOP V3</div><h1>导出 SOP</h1><p class="intro">选择 SOP 类型与模板语言，确认工序流程后导出 Excel。</p>
         <form id="create-form" class="panel">
           <div class="panel-heading"><h2>基本信息</h2><button class="text-button" id="fill-example" type="button">填写示例</button></div>
+          <p class="field-help" style="margin:-12px 0 18px">SOP 类型和模板语言只决定读哪个库、哪种语言，不写进封面。</p>
           <div class="fields two-columns">
             <label class="field"><span>SOP 类型 <small>SOP Type</small></span><select name="sopType" id="sop-type"><option value="assembly_test">Assembly Test · 整机测试</option><option value="assemble">Assembly · 装配</option><option value="pcba_test">PCBA Test · 主板测试</option><option value="aging_test">Aging Test · 老化测试</option><option value="factory_test">Factory Test · 工厂测试</option></select></label>
             <label class="field"><span>模板语言 <small>Template Language</small></span><select name="templateLanguage"><option value="English">English · 英文</option><option value="中文">中文</option></select><span class="field-help">使用对应语言资料，不自动翻译。</span></label>
           </div>
           <div class="fields">
-            <label class="field"><span>项目名称 <small>Project Name</small><em>必填</em></span><input name="projectName" placeholder="例如 GPOS730" maxlength="200" required autocomplete="off"><span class="field-help">填写本次要生成 SOP 的产品项目。</span></label>
-            <label class="field"><span>文档编号 <small>Document Number</small><em>必填</em></span><input name="documentNumber" placeholder="例如 CKD-001" maxlength="200" required></label>
-            <label class="field"><span>SOP 名称 <small>SOP Name</small><em>必填</em></span><input name="sopName" placeholder="例如 Assembly Activate Device SOP" maxlength="200" required></label>
-            <label class="field"><span>作者 <small>Author</small><em>必填</em></span><input name="author" placeholder="填写编制人姓名" maxlength="200" required autocomplete="name"></label>
+            <label class="field"><span>项目名称 <small>Project Name</small><em>必填</em></span><input name="projectName" placeholder="例如 GPOS730" maxlength="200" required autocomplete="off"><span class="field-help">只用来匹配 Library 里的项目与工序，不写进封面。</span></label>
+          </div>
+          <div class="cover-divider"><span>封面信息</span><em>留空 = 用逐工序录入时填的；填了就覆盖封面对应单元格</em></div>
+          <p class="field-help" id="cover-hint">填了项目名称后，如果录入页已经给这个项目填过封面信息，留空的字段会自动使用它。</p>
+          <div class="fields">
+            <label class="field"><span>文档编号 <small>Document Number</small><em>选填</em></span><input name="documentNumber" placeholder="留空 = 用录入页的文件编号" maxlength="200"></label>
+            <label class="field"><span>SOP 名称 <small>SOP Name</small><em>选填</em></span><input name="sopName" placeholder="留空 = 用录入页的 SOP 名称" maxlength="200"></label>
+            <label class="field"><span>编制人 <small>Author</small><em>选填</em></span><input name="author" placeholder="留空 = 用录入页的编制人" maxlength="200" autocomplete="name"></label>
             <label class="field" id="revision-reason-field" hidden><span>修订原因 <small>Revision Reason</small></span><textarea name="revisionReason" rows="3" maxlength="1000" disabled placeholder="例如：调整装配流程"></textarea><span class="field-help">选填，写入封面首条修订记录。</span></label>
             <label class="field" id="revision-content-field" hidden><span>修订内容 <small>Revision Content</small></span><textarea name="revisionContent" rows="3" maxlength="4000" disabled placeholder="填写本次新增或调整的内容"></textarea><span class="field-help">选填，支持多行文字。</span></label>
             <label class="field" id="factory-field" hidden><span>工厂测试工序 <small>Factory Test Processes</small><em>必填</em></span><textarea name="factoryTestProcesses" rows="5" placeholder="Camera Test&#10;Key Test"></textarea><span class="field-help">每行一个工序，按 SOP 执行顺序填写，共 1–30 项。</span></label>
@@ -68,7 +73,7 @@
         <section id="working-panel" class="panel working" hidden><span class="spinner" aria-hidden="true"></span><div><h2 id="working-title">正在处理…</h2><p id="working-detail" class="muted">任务在服务端执行，进度会自动更新。</p></div></section>
         <section id="result-panel" class="panel" hidden><div class="eyebrow">已生成</div><h2>文件与检查报告</h2><p id="delivery-status" role="status"></p><div id="downloads" class="downloads"></div><div id="reviews"></div></section>
         <div id="run-error" class="notice" hidden></div>
-        <div class="run-actions"><button id="resume-button" class="button primary" hidden>继续任务</button><button id="cancel-button" class="button secondary" hidden>取消任务</button><button id="reuse-button" class="text-button">按此信息新建 SOP</button></div>
+        <div class="run-actions"><button id="resume-button" class="button primary" hidden>继续任务</button><button id="cancel-button" class="button secondary" hidden>取消任务</button><button id="reuse-button" class="text-button">按此信息再导出</button></div>
       </section>
       <footer>CKD SOP · 本地工作台</footer>
     </section>

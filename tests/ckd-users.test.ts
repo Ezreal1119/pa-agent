@@ -90,6 +90,7 @@ test('administrator-only user APIs, ordinary desktop isolation and legacy tasks 
   let cookie = '';
   const admin = (route: string, data?: unknown, origin = 'https://admin.example') => fetch(base + '/admin' + route, { method: data === undefined ? 'GET' : 'POST', headers: { Cookie: cookie, ...(data === undefined ? {} : { Origin: origin, 'X-CKD-UI': '1', 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), redirect: 'manual' });
   const client = (route: string, token = '', data?: unknown, method?: string) => fetch(base + '/api/client' + route, { method: method || (data === undefined ? 'GET' : 'POST'), headers: { Authorization: 'Bearer ' + token, 'X-CKD-Password-Change': '1', ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data) });
+  const editor = (route: string, token: string, data?: unknown, adminCookie = '') => fetch(base + '/admin' + route, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer ' + token, ...(adminCookie ? { Cookie: adminCookie } : {}), ...(data === undefined ? {} : { Origin: 'https://admin.example', 'X-CKD-UI': '1', 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), redirect: 'manual' });
   assert.equal((await admin('/api/users')).status, 401); assert.equal((await admin('/users')).status, 401);
   const login = await admin('/api/auth/login', { account: 'SystemAdmin', password: 'admin-only-password' }); cookie = login.headers.get('set-cookie')!;
   const list = await (await admin('/api/users')).json(); assert.equal(list.users[0].immutable, true); assert.equal(list.users.length, 1);
@@ -102,10 +103,22 @@ test('administrator-only user APIs, ordinary desktop isolation and legacy tasks 
   assert.equal((await admin('/api/auth/login', { account: 'Alice', password: alice.initialPassword })).status, 401);
   assert.equal((await client('/login', '', { account: 'SystemAdmin', password: 'admin-only-password' })).status, 401);
   const a = await (await client('/login', '', { account: 'Alice', password: alice.initialPassword })).json();
+  for (const route of ['/editor', '/editor.js', '/api/editor']) assert.equal((await editor(route, a.token)).status, 403);
   assert.equal((await client('/me', a.token)).status, 200);
   for (const route of ['/status', '/runs', '/trash', '/runs/11111111-1111-4111-8111-111111111111/artifacts/0']) assert.equal((await client(route, a.token)).status, 403);
   assert.equal((await client('/me/password', a.token, { currentPassword: alice.initialPassword, newPassword: password })).status, 200);
   const a2 = await (await client('/login', '', { account: 'Alice', password })).json();
+  for (const route of ['/editor', '/editor.js', '/editor.css']) assert.equal((await editor(route, a2.token)).status, 200);
+  assert.equal((await editor('/api/users', a2.token)).status, 401);
+  assert.equal((await editor('/api/runs', a2.token)).status, 401);
+  assert.equal((await editor('/api/editor/projects', a2.token, { projectId: 'EDITOR' })).status, 200);
+  const saved = await editor('/api/editor/process', a2.token, { projectId: 'EDITOR', language: '中文', order: 1, metadata: '录入工序', paragraphs: ['安装连接器'], photos: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }] });
+  assert.equal(saved.status, 200, await saved.text());
+  const scope = await (await editor('/api/editor?scope=public', a2.token)).json();
+  assert.equal(scope.scope, 'library'); assert.equal(scope.canSwitch, false);
+  const editorProcess = await (await editor('/api/editor/process?project=EDITOR&language=中文&order=1', a2.token)).json();
+  assert.equal(editorProcess.process.metadata, '录入工序');
+  assert.ok(fs.existsSync(path.join(libraryPath, 'product_lib/EDITOR/assemble/CN_process/process_01/metadata.txt')));
   const b = await (await client('/login', '', { account: 'Bob', password: bob.initialPassword })).json();
   await client('/me/password', b.token, { currentPassword: bob.initialPassword, newPassword: password });
   const b2 = await (await client('/login', '', { account: 'Bob', password })).json();
@@ -122,6 +135,7 @@ test('administrator-only user APIs, ordinary desktop isolation and legacy tasks 
   assert.equal((await (await admin('/api/runs')).json()).runs.length, 2);
   assert.equal((await admin('/api/users/' + alice.user.id + '/status', { enabled: false })).status, 200);
   assert.equal((await client('/me', a2.token)).status, 401);
+  for (const route of ['/editor', '/api/editor']) assert.equal((await editor(route, a2.token, undefined, cookie)).status, 401, 'Revoked Bearer cannot fall back to an administrator cookie');
   assert.equal((await client('/login', '', { account: '111', password: '222' })).status, 401);
   assert.equal((await admin('/api/runs/' + old.id)).status, 200);
 });

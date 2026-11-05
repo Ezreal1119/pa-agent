@@ -191,6 +191,7 @@ $('refresh').addEventListener('click',safely(refreshList));
 $('resume').addEventListener('click',safely(()=>mutate('resume')));
 $('cancel').addEventListener('click',safely(()=>mutate('cancel')));
 $('reuse').addEventListener('click',()=>{if(!pending)newTask(current?.inputs);});
+$('open-editor').addEventListener('click',safely(()=>call('openEditor')));
 $('logout').addEventListener('click',safely(async()=>{try{await call('logout');}finally{loginView();notice();}}));
 $('change-password').addEventListener('click',safely(async()=>{await call('me');passwordView(false);}));
 $('password-back').addEventListener('click',()=>{$('password-form').reset();$('password-view').hidden=true;$('workspace').hidden=false;notice();});

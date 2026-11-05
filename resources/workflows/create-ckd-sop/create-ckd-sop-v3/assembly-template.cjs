@@ -1,6 +1,9 @@
 /** Customer's 2026-11 Assembly templates. Other SOP types keep their existing generator. */
 const fs = require("node:fs");
 
+// 排位图工序行的框线：只有工序数据行补，编制人/审核人行不补。
+const CHART_BORDER_THIN = { style: "thin" };
+
 const TEMPLATE_NAMES = {
   中文: { cover: "封面", chart: "排位图", templates: ["1格模版", "2格模版", "4格模版"], authorRow: 22 },
   English: { cover: "Cover", chart: "Workstation Layout Chart", templates: ["1 compartments Template ", "2 compartments Template ", "4 compartments Template"], authorRow: 26 },
@@ -89,7 +92,14 @@ function buildAssemblyWorkbook(workbook, options, h) {
     }
   }
   templateSheets.forEach((template, index) => {
-    for (const [, , left, , first] of TILES[[1, 2, 4][index]]) fontPatch(template.getCell(first, left), { name: "黑体", size: 22 });
+    for (const [, , left, right, first, last] of TILES[[1, 2, 4][index]]) {
+      // 图片对应的操作说明不加粗：合并区内的每个格子都清掉 bold，取消合并时也不会露出粗体。
+      for (let row = first; row <= last; row++) for (let col = left; col <= right; col++) {
+        const cell = template.getCell(row, col);
+        cell.font = { ...cell.font, bold: false };
+      }
+      fontPatch(template.getCell(first, left), { name: "黑体", size: 22, bold: false });
+    }
   });
   cover.getCell("A1").style = { ...cover.getCell("A1").style,
     alignment: { ...cover.getCell("A1").alignment, vertical: "middle" } };
@@ -289,6 +299,17 @@ function buildAssemblyWorkbook(workbook, options, h) {
     const cell = chart.getCell(row, col);
     if (cell.master.address === cell.address) styleChartCell(cell);
     else cell.style = cell.master.style;
+  }
+  // 工序数据行（R7 起）在写值后模板原有的框线会丢，逐边补细线；
+  // 「编制人 / 审核人」在 chartFooter 行，不在本循环内，保持原样不加框。
+  for (let row = 7; row <= chartEnd; row++) for (let col = 1; col <= 6; col++) {
+    const cell = chart.getCell(row, col), border = cell.border || {};
+    cell.border = {
+      top: border.top && border.top.style ? border.top : CHART_BORDER_THIN,
+      left: border.left && border.left.style ? border.left : CHART_BORDER_THIN,
+      bottom: border.bottom && border.bottom.style ? border.bottom : CHART_BORDER_THIN,
+      right: border.right && border.right.style ? border.right : CHART_BORDER_THIN,
+    };
   }
   chart.pageSetup.printTitlesRow = "1:6";
   paper(chart, `A1:F${chartFooter}`, "portrait"); chart.pageSetup.fitToHeight = 0; h.setSheetZoom(chart, 100);
