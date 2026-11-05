@@ -1,3 +1,4 @@
+import { readyClientUser, clientCredentials } from './helpers/client-user.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,18 +21,19 @@ async function fixture(t:{after(fn:()=>Promise<void>|void):void}) {
   put(path.join(folder,'photos/p2.png'),await sharp(png).resize(60,40).png().toBuffer());
  }
  let calls=0;const model={async complete(request:any){calls++;return {model:'controlled',text:JSON.stringify(request.mode==='vision'?assessmentSeen:{subjectIndex:0,detailsVisible:'yes',confidence:.95,comment:'Visible'})};}};
+ await readyClientUser(dataDir);
  let app=createCkdUiServer({libraryPath,dataDir,imageQualityModel:model});let url='',token='';
  async function listen(){app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const a=app.server.address();assert(a&&typeof a==='object');url=`http://127.0.0.1:${a.port}`;}
  await listen();
+ t.after(async()=>{app.server.closeAllConnections();await new Promise<void>(r=>app.server.close(()=>r()));fs.rmSync(root,{recursive:true,force:true});});
  const request=(route:string,value?:unknown,origin?:string)=>fetch(url+route,{method:value===undefined?'GET':'POST',headers:{...(token?{Authorization:'Bearer '+token}:{}),...(route==='/api/client/runs'&&value?{'X-CKD-Image-Review':'1'}:{}),...(value===undefined?{}:{'Content-Type':'application/json'}),...(origin?{Origin:origin}: {})},body:value===undefined?undefined:JSON.stringify(value)});
- const login=async()=>{const response=await request('/api/client/login',{account:'111',password:'222'});assert.equal(response.status,200);token=(await response.json()).token;};
+ const login=async()=>{const response=await request('/api/client/login',clientCredentials);assert.equal(response.status,200);token=(await response.json()).token;};
  await login();
  const wait=async(id:string)=>{for(let i=0;i<250;i++){const response=await request('/api/client/runs/'+id);assert.equal(response.status,200);const {run}=await response.json();if(!run.busy)return run;await new Promise(r=>setTimeout(r,20));}throw new Error('Task did not settle');};
  const start=async()=>{const r=await request('/api/client/runs',input);assert.equal(r.status,202);return wait((await r.json()).run.id);};
  const crop=async(run:any,index:number,rect:any)=>{const r=await request(`/api/client/runs/${run.id}/images/${run.imageReview.images[index].id}`,{reviewId:run.imageReview.id,revision:run.imageReview.revision,rect});return r;};
  const generate=async(run:any)=>request(`/api/client/runs/${run.id}/generate`,{reviewId:run.imageReview.id,revision:run.imageReview.revision});
  const restart=async()=>{await new Promise<void>(r=>app.server.close(()=>r()));app=createCkdUiServer({libraryPath,dataDir,imageQualityModel:model});await listen();};
- t.after(async()=>{await new Promise<void>(r=>app.server.close(()=>r()));fs.rmSync(root,{recursive:true,force:true});});
  return {root,png,libraryPath,dataDir,request,wait,start,crop,generate,restart,login,calls:()=>calls,service:()=>app.service};
 }
 

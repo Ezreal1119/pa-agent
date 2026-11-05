@@ -13,7 +13,9 @@ const savedFiles = new Map(), downloadsInFlight = new Map();
 function el(tag, text, cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=text; if(cls)n.className=cls; return n; }
 function notice(text='', retry=false) { $('notice').hidden=!text; $('notice-text').textContent=text; $('retry').hidden=!retry; }
 function remember(id) { try { if(id)localStorage.setItem('ckd.client.selected',id);else localStorage.removeItem('ckd.client.selected'); } catch {} }
-function loginView() { cropDialog.close(true);renderedReview='';logged=false;generation++;current=null;selected=null;pending=false;polling=false;savedFiles.clear();downloadsInFlight.clear();$('workspace').hidden=true;$('login-view').hidden=false;$('password').value=''; }
+let currentAccount = '';
+function loginView() { cropDialog.close(true);renderedReview='';logged=false;generation++;current=null;selected=null;pending=false;polling=false;currentAccount='';savedFiles.clear();downloadsInFlight.clear();for(const id of ['task-list','run-details','scores','downloads','image-review-scores','question-options','steps'])$(id).replaceChildren();for(const id of ['account-label','password-account','run-title','run-subtitle','run-error','question-title','question-help','working-title','working-detail','delivery-status'])$(id).textContent='';$('answer-text').value='';$('create-form').reset();$('password-form').reset();$('password-view').hidden=true;$('workspace').hidden=true;$('login-view').hidden=false;$('password').value='';remember(null); }
+function passwordView(required) { cropDialog.close(true);$('password-form').reset();$('password-title').textContent=required?'设置你的新密码':'修改密码';$('password-help').textContent=required?'首次登录或密码已被重置，设置新密码后才能使用工作台。':'修改后所有登录将失效，请使用新密码重新登录。';$('password-account').textContent='账号：'+currentAccount;$('password-back').hidden=required;$('workspace').hidden=true;$('login-view').hidden=true;$('password-view').hidden=false;notice();$('password-form').elements.currentPassword.focus(); }
 async function call(method,...args) {
   const result=await window.ckd[method](...args);
   if(!result.ok) {
@@ -171,7 +173,7 @@ function renderScores(output, target=$('scores'), review) {
 }
 $('login-form').addEventListener('submit',safely(async event=>{
   event.preventDefault();$('login-submit').disabled=true;notice();
-  try{const user=await call('login',{account:$('account').value.trim(),password:$('password').value});logged=true;$('account-label').textContent='账号 '+user.account;$('login-view').hidden=true;$('workspace').hidden=false;newTask();await call('status');await refreshList();let last;try{last=localStorage.getItem('ckd.client.selected');}catch{}if(last){try{await selectTask(last);}catch(error){if(error.code===404){notice();selected=null;newTask();}else throw error;}}}
+  try{const user=await call('login',{account:$('account').value.trim(),password:$('password').value});logged=true;currentAccount=user.account;$('account-label').textContent='账号 '+user.account;if(user.mustChangePassword){passwordView(true);return;}$('password-view').hidden=true;$('login-view').hidden=true;$('workspace').hidden=false;newTask();await call('status');await refreshList();let last;try{last=localStorage.getItem('ckd.client.selected');}catch{}if(last){try{await selectTask(last);}catch(error){if(error.code===404){notice();selected=null;newTask();}else throw error;}}}
   finally{$('login-submit').disabled=false;$('password').value='';}
 }));
 $('create-form').addEventListener('submit',safely(async event=>{
@@ -191,6 +193,18 @@ $('cancel').addEventListener('click',safely(()=>mutate('cancel')));
 $('reuse').addEventListener('click',()=>{if(!pending)newTask(current?.inputs);});
 $('open-editor').addEventListener('click',safely(()=>call('openEditor')));
 $('logout').addEventListener('click',safely(async()=>{try{await call('logout');}finally{loginView();notice();}}));
+$('change-password').addEventListener('click',safely(async()=>{await call('me');passwordView(false);}));
+$('password-back').addEventListener('click',()=>{$('password-form').reset();$('password-view').hidden=true;$('workspace').hidden=false;notice();});
+$('password-logout').addEventListener('click',safely(async()=>{try{await call('logout');}finally{loginView();notice();}}));
+$('password-form').addEventListener('submit',safely(async event=>{
+  event.preventDefault();const form=event.currentTarget;
+  const passwordLength=Array.from(form.elements.newPassword.value).length;
+  if(passwordLength<15||passwordLength>128)throw new Error('新密码须为 15–128 个字符。');
+  if(form.elements.newPassword.value!==form.elements.confirmation.value)throw new Error('两次输入的新密码不一致。');
+  $('password-submit').disabled=true;
+  try{await call('changePassword',{currentPassword:form.elements.currentPassword.value,newPassword:form.elements.newPassword.value});loginView();notice('密码已更新，请使用新密码登录。');}
+  finally{$('password-submit').disabled=false;form.reset();}
+}));
 $('retry').addEventListener('click',safely(async()=>{notice();if(!logged){$('account').focus();return;}await call('status');if(selected)await selectTask(selected);else await refreshList();}));
-setInterval(async()=>{if(!logged||offline||!current||pending||polling||!['running','awaiting_clarification'].includes(current.status))return;const ticket=generation,id=current.id;polling=true;try{const {run}=await call('get',id);if(ticket===generation&&logged){render(run);if(!run.busy)await refreshList();}}catch{}finally{polling=false;}},1500);
+setInterval(async()=>{if(!logged||!$('password-view').hidden||offline||!current||pending||polling||!['running','awaiting_clarification'].includes(current.status))return;const ticket=generation,id=current.id;polling=true;try{const {run}=await call('get',id);if(ticket===generation&&logged){render(run);if(!run.busy)await refreshList();}}catch{}finally{polling=false;}},1500);
 factoryVisibility();

@@ -5,7 +5,7 @@
   <title>CKD SOP · 工作台</title><link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
 </head>
 <body>
-  <header class="topbar"><a class="brand" href="./" aria-label="CKD SOP 首页"><span class="brand-icon">C</span> CKD <span class="brand-light">SOP 工作台</span></a><span id="library-status" class="connection">正在检查资料库…</span><button id="admin-logout" class="text-button" type="button">退出管理员</button></header>
+  <header class="topbar"><a class="brand" href="./" aria-label="CKD SOP 首页"><span class="brand-icon">C</span> CKD <span class="brand-light">SOP 工作台</span></a><span id="library-status" class="connection">正在检查资料库…</span><div class="topbar-actions"><a id="user-management" class="text-button" href="users">用户管理</a><button id="admin-logout" class="text-button" type="button">退出管理员</button></div></header>
   <main class="layout">
     <aside class="sidebar"><button class="button primary full" id="new-task">＋ 导出 SOP</button><a class="button secondary full" id="open-editor" href="editor">✎ 逐工序录入</a><button class="button secondary full" id="sync-library" type="button">同步更新 Library</button><button class="button secondary full" id="open-reference-calibration" type="button">参考图片校准</button><button class="button secondary full" id="check-library" type="button">检查资料库</button><button class="button secondary full" id="image-settings" type="button">图片评分与设置</button><div class="sidebar-heading"><h2>最近任务</h2><button id="refresh" class="icon-button" title="刷新任务" aria-label="刷新任务">↻</button></div><div id="task-list" class="task-list"><p class="muted small">正在加载…</p></div><p class="sidebar-note">任务自动保存在本机。<br>关闭页面后，可回来继续。</p></aside>
     <section class="main-column">

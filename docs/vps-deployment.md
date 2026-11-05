@@ -1,7 +1,7 @@
 # Ubuntu VPS 部署与维护
 
 服务器：`8.133.254.83`，Ubuntu 24.04 x64，Node 22；项目：`/opt/pi-patrick`。
-按用户要求只使用 **IP + HTTP**，客户端后端地址为 `http://8.133.254.83`，不启用 HTTPS 或证书续期。
+当前域名入口为 `https://ckd-sop.patrick-shenzhen.cn`，用户已自行通过 Certbot 配置 Nginx HTTPS；0.1.8 起的云端客户端使用该域名。最初的 IP + HTTP 方案属于历史配置，旧客户端不会自动切换地址。仓库内原 Nginx 模板仍记录首次 IP 部署，不能直接覆盖服务器现有的 Certbot 配置。
 
 ## 首次上传与离线迁移
 
@@ -56,25 +56,27 @@ systemctl restart ckd-sop
 
 Nginx 配置见 `deploy/ckd-sop-nginx.conf`。`/api/client/` 保持桌面专用；新增 `/admin/` 代理到同一后端，路径保持原样，内部 Host 为 `127.0.0.1:4317`。管理员页面、管理 API、图片预览和下载均使用 `/admin/` 前缀并验证独立登录。两个登录入口按来源 IP 限流。现有 `/` 上游继续指向 3000。
 
-生产服务启动前在仅服务账号可读的 `/opt/pi-patrick/.env` 配置 `CKD_ADMIN_USER`、`CKD_ADMIN_PASSWORD_HASH`（随机盐 scrypt 格式）和 `CKD_ADMIN_ORIGIN=http://8.133.254.83`。缺少配置时生产服务拒绝启动。不要把明文密码写进代码、Nginx 配置或 Git。管理员会话只保存在后端内存，12 小时到期或服务重启后重新登录；Cookie 为 HttpOnly、SameSite=Strict。HTTP 登录内容和会话 Cookie 在网络中不加密，适用范围由用户确认。
+生产服务启动前在仅服务账号可读的 `/opt/pi-patrick/.env` 配置 `CKD_ADMIN_USER`、`CKD_ADMIN_PASSWORD_HASH`（随机盐 scrypt 格式）和 `CKD_ADMIN_ORIGIN=https://ckd-sop.patrick-shenzhen.cn`（无末尾斜杠及 /admin）。缺少配置时生产服务拒绝启动。不要把明文密码写进代码、Nginx 配置或 Git。管理员会话只保存在后端内存，12 小时到期或服务重启后重新登录；Cookie 为 HttpOnly、SameSite=Strict，HTTPS Origin 下同时设置 Secure。首次 IP 部署的 Origin 为 `http://8.133.254.83`；迁移域名后需在服务器手动更新并重启服务，本轮客户端构建不代替该操作。
 
-保留原 `sites-enabled/api`、3000 上游、系统 Certbot 及已有证书。新增 IP 虚拟主机的其余路径仍代理原 3000 服务。没有新增 443 监听；阿里云安全组只需当前已开放的 TCP 80，4317 不需要开放。HTTP 流量没有 TLS 加密。
+首次 IP 部署保留原 `sites-enabled/api`、3000 上游、系统 Certbot 及已有证书，当时没有新增 443 监听。2026-11-05 用户已将 CKD 域名配置为 HTTPS：当前公网需放行 TCP 80/443，内部 4317 继续仅本机监听，根路径仍代理原 3000 服务。应保留现有 Certbot 证书及续期配置。
 
 ```bash
 nginx -t
 systemctl reload nginx
-curl -i http://8.133.254.83/api/client/status
+curl -i https://ckd-sop.patrick-shenzhen.cn/api/client/status
 # 未登录应返回 401；这表明公网反代已到达后端。
 ```
 
-管理员 API 需要登录后的 Cookie，本机通过 SSH 调用也一样。浏览器管理入口在 Nginx 配置后是 `http://8.133.254.83/admin/`。
+管理员 API 需要登录后的 Cookie，本机通过 SSH 调用也一样。当前浏览器管理入口是 `https://ckd-sop.patrick-shenzhen.cn/admin/`。
 
 ```bash
 curl -i http://127.0.0.1:4317/admin/api/status
 # 未登录应返回 401。
 ```
 
-Mac 现有 Web 仍操作 Mac 数据，并不会自动改连服务器。当前固定账号 111/222、单账号归属、12 小时会话沿用首版约定，没有增加正式多用户账号管理。
+Mac 本机 Web 仍操作 Mac 数据，不会自动改连服务器。0.1.9 起停止接受固定账号 111/222，改用管理员在服务器 Web“用户管理”创建的普通账号。用户及哈希保存在服务器 `.data/ckd/users/`，任务按稳定用户 ID 隔离；旧任务及原归属文件不迁移给新用户，管理员仍能查看。普通用户只登录桌面端，首次或重置密码后强制改密；会话有效期仍为 12 小时，改密/重置/禁用会撤销旧会话。
+
+用户管理升级顺序：按下文手动流程更新后端并构建/重启，使用现有 `.env` 管理员登录 `/admin/`，点击右上角“用户管理”创建账号并保存一次性初始密码，然后分发 0.1.9 桌面包。没有新的必填环境变量；不要预置 111 或把测试用户文件复制到生产，也不要从 Git 覆盖 `.data/ckd/users/`。升级前按原维护方式备份 `.data/` 与 `.env`；重启会使旧内存会话失效，已运行任务按既有恢复流程处理。
 
 ## 后续代码更新
 
@@ -152,7 +154,7 @@ Library 修改/增加/删除属于独立的数据维护：备份后修改目标�
 
 ## 桌面应用分发
 
-桌面包只含界面，不含密钥/Library/后端。云端版使用 `desktop/electron-builder.cloud.cjs` 写入后端地址 `http://8.133.254.83`，Mac执行 `npm run desktop:pack:mac:cloud`，Windows x64机器执行 `npm run desktop:pack:win:cloud`。本机开发继续使用config.json，不覆盖本机包。修改地址或客户端不会更新已经安装的应用，需重新打包分发。详见 [桌面发布说明](desktop-releases.md)。Windows二进制及实机测试单独交付。
+桌面包只含界面，不含密钥/Library/后端。云端版使用 `desktop/electron-builder.cloud.cjs` 写入后端地址 `https://ckd-sop.patrick-shenzhen.cn`，Mac执行 `npm run desktop:pack:mac:cloud`，Windows x64机器执行 `npm run desktop:pack:win:cloud`。本机开发继续使用config.json，不覆盖本机包。修改地址或客户端不会更新已经安装的应用，需重新打包分发。详见 [桌面发布说明](desktop-releases.md)。ARM Mac 上可交叉构建 Windows x64 ZIP；NSIS 安装器需工具架构兼容，Windows 实机测试仍需另行进行。
 
 
 ## 固定像素评分 V1.23.0

@@ -146,7 +146,7 @@ markClean(`已保存：${result.relativePath}`);  // ← 到这一步才 dirty=f
 
 1. 用户点「取消」→ `openProcess` 直接 return，表单不刷新
 2. 但 `state.photos` 已经被改成 `{kind:"keep", name:""}`（文件名被置空）
-3. 用户再点一次保存 → `currentPhotosPayload()` 发出 `{name:""}` → 后端 `resolvePhoto` 抛出  
+3. 用户再点一次保存 → `currentPhotosPayload()` 发出 `{name:""}` → 后端 `resolvePhoto` 抛出<br>
    「第 1 张图既没有上传内容，也不是已保存的图片名。」→ 图片必须重新上传
 
 **触发条件**：改过任意字段再点保存（正常路径），confirm 里点「取消」。

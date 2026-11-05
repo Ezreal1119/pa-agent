@@ -58,7 +58,7 @@ test('customer Assembly uses bilingual 1/2/4-cell sheets, ordered captions, logo
     assert.deepEqual(workbook.worksheets.slice(0, 2).map(s => s.name), language === '中文' ? ['封面', '排位图'] : ['Cover', 'Workstation Layout Chart']);
     assert.equal(sheet.pageSetup.printArea, 'A1:V36'); assert.equal(sheet.pageSetup.fitToHeight, 1);
     const captions = count === 1 ? ['G30'] : count === 2 ? ['G30', 'O30'] : ['G19', 'O19', 'G34', 'O34'];
-    for (const [i, cell] of captions.entries()) assert.equal(sheet.getCell(cell).value, i < count ? `操作说明 ${i + 1}. Instruction ${i + 1}.` : null);
+    for (const [i, cell] of captions.entries()) { assert.equal(sheet.getCell(cell).value, i < count ? `操作说明 ${i + 1}. Instruction ${i + 1}.` : null); assert.notEqual(sheet.getCell(cell).font.bold, true); assert.equal(sheet.getCell(cell).font.size, 22); }
     assert.equal(sheet.getCell('G7').value, null, 'Old shared instruction anchor is empty');
     assert.equal(sheet.getCell('A23').value, '检查来料。Inspect parts.'); assert.equal(sheet.getCell('A31').value, '检查完成品。Check finished parts.');
     const images = sheet.getImages(); assert.equal(images.length, count + 3);
@@ -69,6 +69,7 @@ test('customer Assembly uses bilingual 1/2/4-cell sheets, ordered captions, logo
       assert.ok(anchor.nativeRow >= (count > 2 && i >= 2 ? 20 : 5));
     }
     const cover = workbook.worksheets[0]!, chart = workbook.worksheets[1]!;
+    for (let col = 1; col <= 6; col++) for (const edge of ['top', 'bottom', 'left', 'right'] as const) assert.ok(chart.getCell(7, col).border[edge]?.style);
     assert.equal(cover.getCell('C7').value, 'Cover! "Author"');
     assert.equal(cover.getCell('D7').value, null); assert.equal(cover.getCell('F7').value, null);
     assert.equal(cover.getCell('D4').value, 1); assert.equal((chart.getCell('F2').value as ExcelJS.CellFormulaValue).result, 1);

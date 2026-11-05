@@ -15,14 +15,18 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'ckd', privileges: { standard: t
 
 function register(name, action) {
   ipcMain.handle('ckd:' + name, async (event, ...args) => {
+    const generation = sessionGeneration, changesSession = ['login', 'logout', 'changePassword'].includes(name);
     try {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !event.senderFrame.url.startsWith('ckd://ui/')) throw new ClientError(403, '请求来源无效。');
-      return { ok: true, value: await action(...args) };
-    } catch (error) { return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
+      const value = await action(...args);
+      if (!changesSession && generation !== sessionGeneration) throw new ClientError('session_changed', '登录已改变，请重试当前操作。');
+      return { ok: true, value };
+    } catch (error) { if (!changesSession && generation !== sessionGeneration) return { ok: false, code: 'session_changed', error: '登录已改变，请重试当前操作。' }; if (error.code === 401) { sessionGeneration++; saved.clear(); backend.cancelDownloads(); closeEditor(); } return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
   });
 }
-for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate']) register(name, (...args) => backend[name](...args));
-register('login', input => { sessionGeneration++; saved.clear(); return backend.login(input); });
+for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate', 'me']) register(name, (...args) => backend[name](...args));
+register('changePassword', async input => { const result = await backend.changePassword(input); sessionGeneration++; saved.clear(); closeEditor(); return result; });
+register('login', input => { sessionGeneration++; saved.clear(); closeEditor(); return backend.login(input); });
 register('logout', async () => { sessionGeneration++; saved.clear(); closeEditor(); return backend.logout(); });
 register('save', async (id, index) => {
   const key = id + ':' + index, generation = sessionGeneration;
@@ -45,8 +49,8 @@ register('show', handle => { shell.showItemInFolder(saved.get(handle)); return {
 
 /**
  * 逐工序录入窗口：整页加载服务器的 /admin/editor。
- * 服务端按凭证决定写入范围——带客户端 Bearer 只能写 <库根>/public（待审核区），
- * 碰不到 product_lib。令牌由主进程注入到该窗口的请求头，页面本身看不到它。
+ * 保留正式库录入功能；服务端使用新用户体系校验每次请求。
+ * 令牌由主进程注入当前窗口的请求头，页面本身看不到它。
  */
 let editorWindow, editorSession;
 function ensureEditorSession() {
@@ -56,15 +60,19 @@ function ensureEditorSession() {
   editorSession.setPermissionCheckHandler(() => false);
   // 只给后端这一个源注入令牌；主窗口走 ckd:// 协议，不受影响。
   editorSession.webRequest.onBeforeSendHeaders({ urls: [new URL(backendUrl).origin + '/*'] }, (details, callback) => {
+    if (!editorWindow || editorWindow.isDestroyed() || details.webContentsId !== editorWindow.webContents.id) { callback({ cancel: true }); return; }
     const token = backend.token;
     if (token) details.requestHeaders.Authorization = 'Bearer ' + token;
     callback({ requestHeaders: details.requestHeaders });
   });
   return editorSession;
 }
-function closeEditor() { if (editorWindow && !editorWindow.isDestroyed()) editorWindow.close(); editorWindow = undefined; }
-register('openEditor', () => {
+function closeEditor() { const previous = editorWindow; editorWindow = undefined; if (previous && !previous.isDestroyed()) previous.destroy(); }
+register('openEditor', async () => {
+  const generation = sessionGeneration;
   if (!backend.token) throw new ClientError(401, '请先登录。');
+  await backend.status(); // Also rejects first-password and revoked sessions.
+  if (generation !== sessionGeneration) throw new ClientError('session_changed', '登录已改变，请重新打开录入窗口。');
   if (editorWindow && !editorWindow.isDestroyed()) { editorWindow.focus(); return { ok: true }; }
   ensureEditorSession();
   editorWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 1040, minHeight: 660, title: productName + ' · 逐工序录入', backgroundColor: '#101b17', autoHideMenuBar: true,
@@ -72,7 +80,8 @@ register('openEditor', () => {
   editorWindow.setMenu(null);
   editorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   editorWindow.webContents.on('will-navigate', event => event.preventDefault());
-  editorWindow.on('closed', () => { editorWindow = undefined; });
+  const openedEditor = editorWindow;
+  editorWindow.on('closed', () => { if (editorWindow === openedEditor) editorWindow = undefined; });
   void editorWindow.loadURL(new URL('/admin/editor', backendUrl).href);
   return { ok: true };
 });

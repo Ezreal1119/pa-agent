@@ -1,3 +1,4 @@
+import { readyClientUser, clientCredentials } from './helpers/client-user.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -25,8 +26,9 @@ test('recoverable deletion checks ownership and live locks; restart/restore reta
  const root=fixture(t),dataDir=path.join(root,'data'),library=path.join(root,'ckd-library-v2');write(path.join(library,'product_lib/A/project.json'),'{}');
  const app=createCkdUiServer({dataDir,libraryPath:library,adminAuth:false});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(()=>new Promise<void>(r=>app.server.close(()=>r())));
  const address=app.server.address();assert.ok(address&&typeof address==='object');const base=`http://127.0.0.1:${address.port}`;
- const desktop=new BackendClient(base);await desktop.login({account:'111',password:'222'});
- const owned=app.service.create(input),foreign=app.service.create(input);new ClientAccess(dataDir).claim(owned.id,'111');
+ const clientUser=await readyClientUser(dataDir);
+ const desktop=new BackendClient(base);await desktop.login(clientCredentials);
+ const owned=app.service.create(input),foreign=app.service.create(input);new ClientAccess(dataDir).claim(owned.id,clientUser.id);
  const file=path.join(owned.workspaceRoot,owned.workspaceRelative,'outputs/retained.xlsx');write(file,'retained workbook');
  const stateFile=path.join(owned.workspaceRoot,owned.workspaceRelative,'state.json'),before=fs.readFileSync(stateFile);
  await assert.rejects(desktop.trash(foreign.id),/任务不存在/u);

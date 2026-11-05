@@ -1,3 +1,4 @@
+import { readyClientUser, clientCredentials } from './helpers/client-user.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -59,11 +60,12 @@ async function appFixture(t:{after(fn:()=>void|Promise<void>):void},model:Librar
  const root=fixture(t),libraryPath=path.join(root,'ckd-library-v2'),dataDir=path.join(root,'data');
  write(path.join(libraryPath,'product_lib/TARGET/project.json'),JSON.stringify({version:1,projectId:'TARGET',displayName:'Target',aliases:['TARGET']}));
  const folder=path.join(libraryPath,'processes_lib/factory_test/camera_test');write(path.join(folder,'metadata'),'Camera Test');write(path.join(folder,'operation_steps.txt'),'Check camera connector.');write(path.join(folder,'photos/p1.png'),await png());
+ await readyClientUser(dataDir);
  const app=createCkdUiServer({libraryPath,dataDir,imageScorer:'pixel-v1.23.0',imageQualityModel:model});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
  const address=app.server.address();assert(address&&typeof address==='object');const base=`http://127.0.0.1:${address.port}`;
  t.after(async()=>{app.server.closeAllConnections();await new Promise<void>(r=>app.server.close(()=>r()));});
  let token='';const request=(route:string,value?:unknown,options:{partial?:boolean;review?:boolean;auth?:boolean;method?:string}={})=>fetch(base+route,{method:options.method??(value===undefined?'GET':'POST'),headers:{...(options.auth===false?{}:{Authorization:'Bearer '+token}),...(options.partial===false?{}:{'X-CKD-Partial-Results':'1'}),...(options.review?{'X-CKD-Image-Review':'1'}:{}),...(value===undefined?{}:{'Content-Type':'application/json'})},body:value===undefined?undefined:JSON.stringify(value)});
- const login=await request('/api/client/login',{account:'111',password:'222'});assert.equal(login.status,200);token=(await login.json()).token;
+ const login=await request('/api/client/login',clientCredentials);assert.equal(login.status,200);token=(await login.json()).token;
  const start=async(review=false)=>{const response=await request('/api/client/runs',{projectName:'TARGET',documentNumber:'EARLY-1',sopName:'Early workbook',author:'Test',sopType:'factory_test',templateLanguage:'English',factoryTestProcesses:['Camera Test']},{review});assert.equal(response.status,202);return (await response.json()).run.id as string;};
  const get=async(id:string)=>(await (await request('/api/client/runs/'+id)).json()).run;
  return {...app,root,dataDir,libraryPath,request,start,get};

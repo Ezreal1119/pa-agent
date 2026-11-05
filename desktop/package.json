@@ -1,6 +1,6 @@
 {
   "name": "ckd-sop-desktop",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "private": true,
   "description": "CKD SOP 用户桌面客户端",
   "author": "Patrick Xu",

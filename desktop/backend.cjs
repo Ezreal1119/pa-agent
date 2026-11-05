@@ -14,6 +14,7 @@ function runId(id) {
 }
 class BackendClient {
   #token;
+  #epoch = 0;
   #downloads = new Set();
   constructor(baseUrl, options = {}) {
     const url = new URL(baseUrl);
@@ -27,6 +28,8 @@ class BackendClient {
   get token() { return this.#token; }
   async request(route, data, timeout = this.timeouts.request, binary = false, options = {}) {
     if (route !== '/login' && !this.#token) throw new ClientError(401, '请先登录。');
+    let epoch = this.#epoch;
+    const checkSession = () => { if (epoch !== this.#epoch) throw new ClientError('session_changed', '登录已改变，请重试当前操作。'); };
     let response;
     try {
       response = await fetch(this.baseUrl + '/api/client' + route, {
@@ -34,11 +37,13 @@ class BackendClient {
         headers: { 'X-CKD-Partial-Results': '1', ...(this.#token ? { Authorization: 'Bearer ' + this.#token } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }), ...options.headers },
         body: data === undefined ? undefined : JSON.stringify(data)
       });
-      if (response.status === 401) this.#token = undefined;
+      checkSession();
+      if (response.status === 401) { epoch = ++this.#epoch; this.#token = undefined; this.cancelDownloads(); }
       if (response.ok && binary) return response;
       if (options.method === 'HEAD') throw new ClientError(response.status, response.status === 401 ? '登录已失效，请重新登录。' : response.status === 405 ? '服务端尚未支持新版下载，请先更新服务器。' : '文件信息读取失败，请重试。');
       if (!response.headers.get('content-type')?.includes('application/json')) throw new ClientError(response.ok ? 502 : response.status, '服务返回了无效响应，请稍后重试。');
       const value = await response.json();
+      checkSession();
       if (!response.ok) throw new ClientError(response.status, value.error || '操作失败，请重试。');
       return value;
     } catch (error) {
@@ -50,15 +55,22 @@ class BackendClient {
     }
   }
   async login(input) {
+    const epoch = ++this.#epoch;
     this.cancelDownloads();
     this.#token = undefined;
-    const value = await this.request('/login', input);
+    const value = await this.request('/login', input, this.timeouts.request, false, { headers: { 'X-CKD-Password-Change': '1' } });
+    if (epoch !== this.#epoch) throw new ClientError('session_changed', '登录已改变，请重新登录。');
     if (typeof value.token !== 'string') throw new ClientError('offline', '服务返回无效登录结果。');
     this.#token = value.token;
-    return { account: value.account, expiresAt: value.expiresAt };
+    return { account: value.account, userId: value.userId, mustChangePassword: value.mustChangePassword === true, expiresAt: value.expiresAt };
+  }
+  me() { return this.request('/me'); }
+  async changePassword(input) {
+    const value = await this.request('/me/password', { currentPassword: input?.currentPassword, newPassword: input?.newPassword });
+    this.#epoch++; this.#token = undefined; this.cancelDownloads(); return value;
   }
   cancelDownloads() { for (const controller of this.#downloads) controller.abort(new ClientError('download_cancelled', '下载已取消，请重新保存。')); }
-  async logout() { this.cancelDownloads(); try { if (this.#token) await this.request('/logout', {}); } finally { this.#token = undefined; } return { ok: true }; }
+  async logout() { const epoch = ++this.#epoch; this.cancelDownloads(); try { if (this.#token) await this.request('/logout', {}); } finally { if (epoch === this.#epoch) this.#token = undefined; } return { ok: true }; }
   status() { return this.request('/status'); }
   list() { return this.request('/runs'); }
   deleted() { return this.request('/trash'); }

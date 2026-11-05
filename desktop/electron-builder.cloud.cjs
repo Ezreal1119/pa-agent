@@ -23,7 +23,7 @@ module.exports = {
   extraMetadata: {
     name: 'ckd-sop-desktop-cloud',
     productName: 'CKD SOP Cloud',
-    ckdBackendUrl: 'http://8.133.254.83',
+    ckdBackendUrl: 'https://ckd-sop.patrick-shenzhen.cn',
   },
   artifactName: 'CKD-SOP-Cloud-${version}-${os}-${arch}.${ext}',
 };
