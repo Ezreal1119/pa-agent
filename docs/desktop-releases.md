@@ -1,5 +1,18 @@
 # 桌面端云端版与重新打包
 
+## 0.1.10：密码至少 8 字符，并包含合并后的录入器（2026-11-05）
+
+用户要求将密码规则改为 8–128 字符。后端、桌面校验、输入框和提示同步；初始密码仍为随机 20 字符，已有密码不变，不要求重置。使用 8 字符密码前须更新后端、运行 `npm run build` 并重启服务，再使用新包；旧 0.1.9 客户端仍会要求至少 15 字符。
+
+本版包含此前合并的逐工序录入、用户管理和桌面改密，继续连接 `https://ckd-sop.patrick-shenzhen.cn`。已构建 `desktop/release/cloud/CKD-SOP-Cloud-0.1.10-mac-arm64.zip`（128,088,597 字节）与 `CKD-SOP-Cloud-0.1.10-win-x64.zip`（153,163,275 字节）；Windows 完整解压后运行 EXE，保留资源及 DLL。用户/桌面专项 22/22、类型检查及构建通过；两个 ZIP 完整性、ASAR 与本次源文件一致、版本/HTTPS 地址/8 字符规则和录入/改密入口均已核对，包内无 `.env` 或 `.data`。Mac 二进制为 ARM64，Windows 为 x64；Mac 未签名/公证，Windows 未实机运行。本轮不部署服务器、不修改生产数据。
+
+SHA-256 同时保存于忽略的 `desktop/release/cloud/CKD-SOP-Cloud-0.1.10-SHA256.txt`：
+
+```text
+7ce21203940e92ef1c057540d9a5a4ce0e1d6e3ea03db3d902dc29a876f3c6b2  CKD-SOP-Cloud-0.1.10-mac-arm64.zip
+9f9c13d157f05c08012bde79f8bad2a9e8db49c32daf5ad76b162e35944004d4  CKD-SOP-Cloud-0.1.10-win-x64.zip
+```
+
 ## 2026-11-05：录入器与用户管理源码合并
 
 合并保留逐工序录入入口、修改密码、导出 SOP 文案及 NSIS 定制脚本。录入窗口使用新的普通账号体系；首次改密前不能打开，登录变更、改密或会话失效时关闭旧窗口，当前窗口才能注入 Bearer。普通用户录入仍按远端既有实现写正式 Library；用户管理和其他 Web 工作台保持管理员专用。

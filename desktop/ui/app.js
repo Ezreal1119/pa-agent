@@ -199,7 +199,7 @@ $('password-logout').addEventListener('click',safely(async()=>{try{await call('l
 $('password-form').addEventListener('submit',safely(async event=>{
   event.preventDefault();const form=event.currentTarget;
   const passwordLength=Array.from(form.elements.newPassword.value).length;
-  if(passwordLength<15||passwordLength>128)throw new Error('新密码须为 15–128 个字符。');
+  if(passwordLength<8||passwordLength>128)throw new Error('新密码须为 8–128 个字符。');
   if(form.elements.newPassword.value!==form.elements.confirmation.value)throw new Error('两次输入的新密码不一致。');
   $('password-submit').disabled=true;
   try{await call('changePassword',{currentPassword:form.elements.currentPassword.value,newPassword:form.elements.newPassword.value});loginView();notice('密码已更新，请使用新密码登录。');}

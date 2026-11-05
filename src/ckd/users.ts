@@ -29,7 +29,7 @@ export async function verifyUserPassword(password: string, hash?: string) {
   return !!match && timingSafeEqual(actual, Buffer.from(match[2]!, 'hex'));
 }
 export function validateNewPassword(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || Array.from(value).length < 15 || Array.from(value).length > 128) throw new UserError(400, '新密码须为 15–128 个字符，可包含空格，不会自动去除首尾空格。');
+  if (typeof value !== 'string' || Array.from(value).length < 8 || Array.from(value).length > 128) throw new UserError(400, '新密码须为 8–128 个字符，可包含空格，不会自动去除首尾空格。');
 }
 
 /** One atomic registry; no plaintext credentials, immutable user IDs and accounts. */

@@ -4,13 +4,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import test from 'node:test';
-import { UserStore, verifyUserPassword } from '../src/ckd/users.js';
+import { UserStore, validateNewPassword, verifyUserPassword } from '../src/ckd/users.js';
 import { ClientAccess } from '../src/ckd/client-access.js';
 import { AdminAccess, hashAdminPassword } from '../src/ckd/admin-access.js';
 import { createCkdUiServer } from '../src/ckd/ui-server.js';
 
 function temp(t: { after(fn: () => void): void }) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ckd-users-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 const password = 'my long personal password 你好';
+
+test('password minimum is eight Unicode characters and an eight-character password supports change and login', async t => {
+  for (const value of ['12345678', '密码安全测试字符', 'a'.repeat(128)]) assert.doesNotThrow(() => validateNewPassword(value));
+  for (const value of ['1234567', '密码测试七字符', 'a'.repeat(129), undefined]) assert.throws(() => validateNewPassword(value), /8–128/u);
+  const access = new ClientAccess(temp(t)), created = await access.users.create('eight-test');
+  const initial = await access.login({ account: 'eight-test', password: created.initialPassword }, true);
+  await access.changePassword('Bearer ' + initial.token, { currentPassword: created.initialPassword, newPassword: '12345678' });
+  const logged = await access.login({ account: 'eight-test', password: '12345678' });
+  assert.equal(logged.mustChangePassword, false); assert.equal(access.authenticate('Bearer ' + logged.token), created.user.id);
+});
 
 test('users persist only salted hashes; account identity is immutable, reserved and unique even when disabled', async t => {
   const root = temp(t), store = new UserStore(root, 'SystemAdmin');
@@ -41,7 +51,7 @@ test('temporary sessions cannot use SOP, old clients must upgrade, password rese
   for (let i = 0; i < 10; i++) await assert.rejects(access.login({ account: 'Alice', password: created.initialPassword }), /升级/u);
   const initial = await access.login({ account: 'Alice', password: created.initialPassword }, true), header = 'Bearer ' + initial.token;
   assert.equal(access.me(header).mustChangePassword, true); assert.throws(() => access.authenticate(header), /初始密码/u);
-  await assert.rejects(access.changePassword(header, { currentPassword: created.initialPassword, newPassword: 'short' }), /15/u);
+  await assert.rejects(access.changePassword(header, { currentPassword: created.initialPassword, newPassword: 'short' }), /8/u);
   await assert.rejects(access.changePassword(header, { currentPassword: 'wrong', newPassword: password }), /原密码/u);
   await assert.rejects(access.changePassword(header, { currentPassword: created.initialPassword, newPassword: password, userId: 'other' }));
   await access.changePassword(header, { currentPassword: created.initialPassword, newPassword: password });
