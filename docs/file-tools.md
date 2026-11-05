@@ -30,6 +30,8 @@ VISION_LLM_MODEL=your-vision-model
 | text_file_create | filename、content | UTF-8新文本/源码附件；不执行/编译/部署，保持内容及换行，最多262144字符且编码后≤1MiB |
 | image_read | path、question、region | PNG/JPEG/WebP；视觉描述、原始/处理尺寸、缩放/裁剪信息；region 为原图像素坐标 |
 
+JPEG 完整性检查按段长度和扫描边界定位结束标记，兼容企微图片结束标记后的尾随数据；元数据中的标记字节不能代替真正的扫描和结束标记。图片仍须经过原生解码、大小和像素限制后才调用视觉模型，原附件保持原样。专项回归：`npm run build` 后执行 `node --test tests/image-jpeg.test.mjs`；无新增依赖或环境变量，VPS 生效需更新代码、构建并重启 `product-expert.service`。
+
 路径使用附件列表返回的 inputs/... 或 outputs/...，也可使用允许的知识文件绝对路径。模板patch输出接受新.xlsx文件名（可带outputs/前缀）；两个创建工具只接受文件名、不接受目录，服务端生成实际存储 ID。禁止任意输出目录、覆盖和修改知识库、Skill 记忆。Excel 按指定 XML 部分修改，校验结构、原有内部部分摘要及意外变更后才发布；不计算公式，打开时请求重算。不得把缓存公式结果当作刚计算的结果。
 
 ExcelJS 读取失败时按原逻辑回退到只读 OOXML，再回退到 MarkItDown。最后一级失去结构化单元格、范围、批注、公式及图片语义，会明确标注。Word/Excel 图片失败时保留可读文本并报告 unavailable。PDF 没有文字时可显式请求页面视觉分析。视觉结果存在识别误差，缩放后的概览不能保证小字完整；可对重要区域逐块读取。

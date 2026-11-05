@@ -222,12 +222,58 @@ export function validateImageStructure(buffer: Buffer, format: SupportedImageFor
     validatePngStructure(buffer);
     return;
   }
-  if (format === "jpeg"
-    && (buffer.length < 4 || buffer[buffer.length - 2] !== 0xff || buffer[buffer.length - 1] !== 0xd9
-      || buffer.indexOf(Buffer.from([0xff, 0xda])) < 0)) {
-    throw new Error("Image content is corrupt or incomplete.");
+  if (format === "jpeg") {
+    validateJpegStructure(buffer);
+    return;
   }
   if (format === "webp") validateWebpStructure(buffer);
+}
+
+function validateJpegStructure(buffer: Buffer): void {
+  const invalid = (): never => { throw new Error("Image content is corrupt or incomplete."); };
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) invalid();
+  let offset = 2;
+  let inScan = false;
+  let hasFrame = false;
+  let hasScan = false;
+  while (offset < buffer.length) {
+    if (inScan) {
+      // Entropy-coded bytes may include stuffed FF00 and standalone restart markers.
+      const nextMarker = buffer.indexOf(0xff, offset);
+      if (nextMarker < 0) break;
+      offset = nextMarker;
+    }
+    if (buffer[offset++] !== 0xff) invalid();
+    while (offset < buffer.length && buffer[offset] === 0xff) offset++;
+    if (offset >= buffer.length) break;
+    const marker = buffer[offset++]!;
+    const restart = marker >= 0xd0 && marker <= 0xd7;
+    if (inScan && (marker === 0x00 || marker === 0x01 || restart)) continue;
+    const resumeScan: boolean = inScan && marker === 0xdc; // DNL can occur inside a scan.
+    inScan = false;
+    // EOI ends the JPEG, not necessarily the containing file (e.g. WeCom trailers).
+    // Traverse segment lengths so thumbnail/metadata bytes cannot supply a fake EOI.
+    // The vision bridge still decodes the original bytes before any model request.
+    if (marker === 0xd9 && hasFrame && hasScan) return;
+    if (marker === 0x00 || marker === 0xd8 || marker === 0xd9 || restart) invalid();
+    if (marker === 0x01) continue;
+    if (offset + 2 > buffer.length) break;
+    const length = buffer.readUInt16BE(offset);
+    if (length < 2 || offset + length > buffer.length) invalid();
+    if (isJpegStartOfFrame(marker)) {
+      if (length < 8 || buffer[offset + 7] === 0 || length !== 8 + 3 * buffer[offset + 7]!) invalid();
+      hasFrame = true;
+    }
+    if (marker === 0xda) {
+      if (!hasFrame || length < 6 || buffer[offset + 2] === 0 || length !== 6 + 2 * buffer[offset + 2]!) invalid();
+      hasScan = true;
+      inScan = true;
+    } else {
+      inScan = resumeScan;
+    }
+    offset += length;
+  }
+  invalid();
 }
 
 function validatePngStructure(buffer: Buffer): void {
