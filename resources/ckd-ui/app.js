@@ -53,7 +53,7 @@ function newTask(input) {
 }
 async function refreshList() {
   const isTrash=viewingTrash,ticket=++listRequest,result=await api(isTrash?'/api/trash':'/api/runs');if(ticket!==listRequest||isTrash!==viewingTrash)return; const list=$('task-list'); list.replaceChildren();
-  if(!result.runs.length) list.append(node('p',isTrash?'回收站为空。':'还没有任务，从新建 SOP 开始。','muted small'));
+  if(!result.runs.length) list.append(node('p',isTrash?'回收站为空。':'还没有任务，从导出 SOP 开始。','muted small'));
   for(const run of result.runs.slice(0,isTrash?result.runs.length:30)) {
     const button=node('button',undefined,`task-card${run.id===selectedId?' selected':''}`); button.type='button';
     button.append(node('strong',run.inputs.sopName || '未命名 SOP'));

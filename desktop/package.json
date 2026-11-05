@@ -59,7 +59,8 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "include": "installer.nsh"
     },
     "artifactName": "CKD-SOP-${version}-${os}-${arch}.${ext}"
   }
