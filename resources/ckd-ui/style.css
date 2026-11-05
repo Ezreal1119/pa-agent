@@ -9,3 +9,11 @@
 
 /* Recoverable task deletion and readable maintenance history. */
 .task-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}.task-row .task-card{min-width:0;width:100%}.task-delete{font-size:11px;padding:8px 5px;color:var(--danger);background:transparent;border:1px solid var(--border);border-radius:7px}.task-delete:disabled{opacity:.4}.sidebar-heading{flex-wrap:wrap;gap:8px}#library-sync-history{display:grid;gap:10px}#library-sync-history .text-button{display:block;width:100%;text-align:left;line-height:1.6;border-bottom:1px solid var(--border);padding:8px 0}.issue-path{display:block;white-space:pre-wrap;overflow-wrap:anywhere}.copy-error{font-size:11px;padding:4px 8px;margin-bottom:8px}
+
+#open-editor{margin-top:10px;display:inline-flex}
+
+/* 基本信息里的「封面信息」分界：上半只做匹配，下半留空则用录入页的值 */
+.cover-divider{display:flex;align-items:baseline;gap:12px;margin:4px 0 10px;padding-top:24px;border-top:1px solid var(--border)}
+.cover-divider span{font-size:14px;font-weight:600;color:var(--text)}
+.cover-divider em{font-style:normal;font-size:11px;color:var(--muted);margin-left:auto;text-align:right}
+#cover-hint{margin:0 0 20px}

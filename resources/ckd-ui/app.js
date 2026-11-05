@@ -21,12 +21,35 @@ function factoryVisibility() {
   const type=$('sop-type').value,form=$('create-form');$('factory-field').hidden=type!=='factory_test';form.elements.factoryTestProcesses.required=type==='factory_test';
   for(const [id,key] of [['revision-reason-field','revisionReason'],['revision-content-field','revisionContent']]) {$(id).hidden=type!=='assemble';form.elements[key].disabled=type!=='assemble';}
 }
+/** 录入页存的封面信息（localStorage）。传 projectId 精确匹配，否则按最近录入的项目。 */
+function editorSopInfo(projectId) {
+  try {
+    const id = String(projectId || localStorage.getItem('ckd-sop-info:last') || '').trim();
+    if (!id) return null;
+    const info = JSON.parse(localStorage.getItem(`ckd-sop-info:${id}`) || '{}');
+    if (!info || !info.updatedAt) return null;
+    return { projectId: id, documentNumber: info.document || '', sopName: info.name || '', author: info.author || '', reviewer: info.reviewer || '', version: info.version || '', versionNote: info.versionNote || '', date: info.date || '', revisionReason: info.revisionReason || '', revisionContent: info.revisionContent || '' };
+  } catch { return null; }
+}
+/** 封面信息区的一行提示：告诉用户这个项目从录入页能拿到哪些值。 */
+function refreshCoverHint() {
+  const hint = $('cover-hint'), form = $('create-form');
+  if (!hint || !form) return;
+  const projectId = String(form.elements.projectName.value || '').trim();
+  if (!projectId) { hint.textContent = '填了项目名称后，如果录入页已经给这个项目填过封面信息，留空的字段会自动使用它。'; return; }
+  const info = editorSopInfo(projectId);
+  if (!info) { hint.textContent = `逐工序录入里还没有「${projectId}」的封面信息，下面三项请在这里填全。`; return; }
+  const parts = [info.documentNumber && `文件编号 ${info.documentNumber}`, info.sopName && `SOP 名称 ${info.sopName}`, info.author && `编制人 ${info.author}`].filter(Boolean);
+  hint.textContent = parts.length ? `录入页已填：${parts.join(' · ')}。留空自动使用，改了则覆盖。` : `逐工序录入里「${projectId}」的封面信息是空的，下面三项请在这里填全。`;
+}
+/** 首屏「基本信息」也刷一次提示（首屏不经过 newTask）。 */
+function prefillEditorInfo() { refreshCoverHint(); }
 function newTask(input) {
   generation++; selectedId=null; current=null; shownQuestion=null; remember(null); notice('');
   $('create-view').hidden=false; $('run-view').hidden=true;
   $('create-form').reset();
-  if(input) { const form=$('create-form'); for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent']) if(input[key]!==undefined) form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
-  factoryVisibility(); void refreshList();
+  if(input) { const form=$('create-form'); for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent']) if(input[key]!==undefined && input[key]!=='') form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
+  factoryVisibility(); refreshCoverHint(); void refreshList();
 }
 async function refreshList() {
   const isTrash=viewingTrash,ticket=++listRequest,result=await api(isTrash?'/api/trash':'/api/runs');if(ticket!==listRequest||isTrash!==viewingTrash)return; const list=$('task-list'); list.replaceChildren();
@@ -115,14 +138,21 @@ async function mutate(action,data={}) {
 function answer(text,questionId) { return mutate('answer',{questionId,text}); }
 $('create-form').addEventListener('submit',async event=>{
   event.preventDefault();if(pending) return;const form=event.currentTarget;const values=Object.fromEntries(new FormData(form));
+  const editorInfo=editorSopInfo(String(values.projectName||'').trim());
+  const missing=[];
+  for(const [key,label] of [['documentNumber','文档编号'],['sopName','SOP 名称'],['author','编制人']]) {
+    if(!String(values[key]||'').trim()) { if(editorInfo&&editorInfo[key]) values[key]=editorInfo[key]; else missing.push(label); }
+  }
+  if(missing.length) { notice(`${missing.join('、')} 没填，逐工序录入里也没有这个项目的封面信息。在这里补上，或先去「逐工序录入」填一次。`); return; }
   if(values.sopType==='factory_test') values.factoryTestProcesses=String(values.factoryTestProcesses).split(/\r?\n/u).map(value=>value.trim()).filter(Boolean); else delete values.factoryTestProcesses;
-  for(const key of ['revisionReason','revisionContent']) {if(values.sopType==='assemble')values[key]=(values[key]||'').trim();else delete values[key];}
+  for(const key of ['revisionReason','revisionContent']) {if(values.sopType==='assemble')values[key]=String(values[key]||'').trim()||(editorInfo?editorInfo[key]||'':'');else delete values[key];}
   pending=true;$('start-button').disabled=true;notice('');
   try { const result=await api('/api/runs',values);selectedId=result.run.id;remember(selectedId);generation++;pending=false;render(result.run);await refreshList(); }
   catch(error){notice(error.message);}finally{pending=false;$('start-button').disabled=false;}
 });
 $('answer-form').addEventListener('submit',event=>{event.preventDefault();if(current?.pendingQuestion) void answer($('answer-text').value,current.pendingQuestion.id);});
 $('sop-type').addEventListener('change',factoryVisibility);
+$('create-form').elements.projectName.addEventListener('input',refreshCoverHint);
 $('new-task').addEventListener('click',()=>newTask());
 $('fill-example').addEventListener('click',()=>{const form=$('create-form');form.elements.projectName.value='GPOS730';form.elements.documentNumber.value='CKD-001';form.elements.sopName.value='Assembly Test SOP';form.elements.author.value='Patrick Xu';if(form.elements.sopType.value==='factory_test')form.elements.factoryTestProcesses.value='Camera Test\nKey Test';});
 $('resume-button').addEventListener('click',()=>mutate('resume'));
@@ -131,7 +161,7 @@ $('reuse-button').addEventListener('click',()=>{if(current)newTask(current.input
 $('refresh').addEventListener('click',()=>refreshList().catch(error=>notice(error.message)));
 let polling=false;
 setInterval(async()=>{if(polling||pending||!selectedId||!current||(!current.busy&&current.status!=='running'))return;polling=true;const id=selectedId,ticket=generation;try{const result=await api(`/api/runs/${id}`);if(ticket===generation){render(result.run);await refreshList();}}catch(error){if(ticket===generation)notice(`无法连接本地服务：${error.message}`);}finally{polling=false;}},1200);
-(async()=>{try{const status=await api('/api/status');$('library-status').textContent=status.libraryReady?'本地资料库已就绪':'资料库未找到';if(!status.libraryReady)notice('未找到 Library。请设置 CKD_LIBRARY 指向 ckd-library-v2，再重新启动本地界面。');await refreshList();let saved;try{saved=localStorage.getItem('ckd.selectedTask');}catch{}if(saved)await selectTask(saved);}catch(error){notice(error.message);}factoryVisibility();})();
+(async()=>{try{const status=await api('/api/status');$('library-status').textContent=status.libraryReady?'本地资料库已就绪':'资料库未找到';if(!status.libraryReady)notice('未找到 Library。请设置 CKD_LIBRARY 指向 ckd-library-v2，再重新启动本地界面。');await refreshList();let saved;try{saved=localStorage.getItem('ckd.selectedTask');}catch{}if(saved)await selectTask(saved);}catch(error){notice(error.message);}factoryVisibility();prefillEditorInfo();})();
 
 $('check-library').addEventListener('click',()=>{ $('validation-panel').hidden=false; $('validation-panel').scrollIntoView({block:'start',behavior:'smooth'}); });
 $('close-validation').addEventListener('click',()=>{ $('validation-panel').hidden=true; });

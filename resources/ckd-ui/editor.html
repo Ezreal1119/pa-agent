@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>逐工序录入 · CKD SOP</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="editor.css">
+  <script src="editor.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="CKD SOP 首页"><span class="brand-icon">C</span> CKD <span class="brand-light">逐工序录入</span></a>
+    <a class="text-button" href="./">返回工作台</a>
+  </header>
+
+  <main class="layout editor-layout">
+    <aside class="sidebar">
+      <label class="field"><span>项目</span><select id="project"></select></label>
+      <label class="field"><span>语言</span><select id="language"><option value="中文">中文</option><option value="English">English</option></select></label>
+      <button class="button secondary full" id="new-project" type="button">＋ 新建项目</button>
+
+      <div class="sidebar-heading">
+        <h2>工序（可拖拽排序）</h2>
+        <button id="add-process" class="icon-button" type="button" title="新建工序" aria-label="新建工序">＋</button>
+      </div>
+      <div id="process-list" class="process-list"></div>
+      <p class="sidebar-note">文件夹名按列表顺序自动编号 process_01、process_02…；工序名写入 metadata.txt，Excel 里显示的就是它。</p>
+    </aside>
+
+    <section class="main-column">
+      <div id="notice" class="notice" role="alert" hidden></div>
+
+      <section class="panel" id="sop-info-panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">SOP 基本信息</div>
+            <h2>封面信息（整个项目填一次）</h2>
+          </div>
+          <span class="tag" id="sop-info-state">只存在本机</span>
+        </div>
+        <p class="hint">这些内容不进 Library，生成 Excel 时自动带到工作台的「基本信息」，由出表流程写进封面单元格。</p>
+        <div class="fields two-columns">
+          <label class="field"><span>项目 ID <small>= product_lib 下的目录名</small></span><input id="sop-project" readonly></label>
+          <label class="field"><span>SOP 名称</span><input id="sop-name" maxlength="200" placeholder="例如 SQ69BXP Assembly SOP" autocomplete="off"></label>
+          <label class="field"><span>编制人</span><input id="sop-author" maxlength="200" placeholder="填写编制人姓名" autocomplete="off"></label>
+          <label class="field"><span>审核人</span><input id="sop-reviewer" maxlength="200" placeholder="填写审核人姓名；不填留空" autocomplete="off"></label>
+          <label class="field"><span>文件编号</span><input id="sop-document" maxlength="200" placeholder="例如 CKD-001" autocomplete="off"></label>
+          <label class="field"><span>版本 <small>封面「版本」列</small></span><input id="sop-version" maxlength="50" placeholder="例如 A1" autocomplete="off"></label>
+          <label class="field"><span>原版本 <small>封面「原版本」列</small></span><input id="sop-version-note" maxlength="100" placeholder="上一版版本号，如 A0；首版留空" autocomplete="off"></label>
+          <label class="field"><span>日期</span><input id="sop-date" type="date"></label>
+        </div>
+        <div class="fields">
+          <label class="field"><span>修订原因</span><textarea id="sop-revision-reason" rows="2" maxlength="1000" placeholder="这一版为什么改；不填就空着"></textarea></label>
+          <label class="field"><span>修订内容</span><textarea id="sop-revision-content" rows="2" maxlength="4000" placeholder="这一版改了什么；不填就空着"></textarea></label>
+        </div>
+      </section>
+
+      <section id="empty" class="panel">
+        <h2>还没有可编辑的工序</h2>
+        <p class="muted">先选一个项目；如果项目里还没有工序，点左侧的「＋」新建一道。</p>
+      </section>
+
+      <form id="process-form" hidden>
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow" id="folder-label">PROCESS_01</div>
+              <h2 id="form-title">工序</h2>
+            </div>
+            <button class="text-button" id="delete-process" type="button">删除这道工序</button>
+          </div>
+          <label class="field">
+            <span>工序名 <small>写入 metadata.txt，Excel 里显示的工序名</small></span>
+            <input id="metadata" maxlength="200" placeholder="例如：前加工1-上料" autocomplete="off">
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>操作图片与步骤</h2>
+            <span class="tag" id="photo-count">0 张</span>
+          </div>
+          <p class="hint">每张图对应一段步骤，按顺序一一对应。模板支持 1 / 2 / 4 张；上传后自动压到长边 1600px。</p>
+          <div id="photos" class="photo-list"></div>
+          <label class="dropzone" id="dropzone">
+            <input id="photo-input" type="file" accept="image/png,image/jpeg" multiple>
+            <span>点击选择，或把图片拖到这里</span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>物料清单</h2>
+            <button class="text-button" id="add-bom" type="button">＋ 添加一行</button>
+          </div>
+          <table class="grid-table">
+            <thead><tr><th>#</th><th>料号</th><th>规格</th><th>数量</th><th></th></tr></thead>
+            <tbody id="bom-body"></tbody>
+          </table>
+          <p class="hint">模板标准 7 行，超出会排到续页。</p>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>工具与治具</h2>
+            <button class="text-button" id="add-tool" type="button">＋ 添加一行</button>
+          </div>
+          <table class="grid-table">
+            <thead><tr><th>#</th><th>名称</th><th>规格</th><th>数量</th><th></th></tr></thead>
+            <tbody id="tool-body"></tbody>
+          </table>
+          <p class="hint">模板标准 5 行，超出会排到续页。</p>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><h2>检查与工时</h2></div>
+          <div class="fields two-columns">
+            <label class="field"><span>作业前检查（上一道工序）</span><textarea id="prev-check" placeholder="例如：上一道来料是否齐全？"></textarea></label>
+            <label class="field"><span>自检</span><textarea id="self-check" placeholder="例如：螺丝是否全部锁附到位？"></textarea></label>
+          </div>
+          <div class="fields two-columns">
+            <label class="field"><span>标准工时（秒）</span><input id="hours" type="number" min="0" step="1" inputmode="decimal" placeholder="例如 35"></label>
+            <label class="field"><span>标准人力</span><input id="manpower" type="number" min="0" step="1" inputmode="decimal" placeholder="例如 2"></label>
+          </div>
+        </section>
+
+        <div class="form-footer">
+          <p class="save-state" id="save-state">改动还没有保存。</p>
+          <button class="button primary" id="save" type="submit">保存到 Library</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

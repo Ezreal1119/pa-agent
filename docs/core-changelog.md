@@ -467,3 +467,61 @@ SQ69BXP 的 Excel 写入约6–8秒，后续独立AI检查仍挂在“生成Exce
 - 原因：`origin/create-ckd-sop` 的压缩提交 `b98f978` 与本地 `f339b05` 的文件树完全相同，但历史不同，合并时将 assemble 生成器及测试判为 add/add 冲突，并与更新后的变更记录产生冲突。
 - 处理：保留本地 `4ace11e` 已完成的客户字体/字号、排位图和表格排版及配套测试/历史记录，同时合并远端历史；没有丢弃远端独有功能，也没有新增业务行为或修改模板、Library、客户端和运行配置。
 - 验证：远端与 `f339b05` 的文件树差异为空，生成器/测试恢复后与合并前 HEAD 一致；脚本语法检查及 assemble 专项 16/16 通过，冲突标记清除。仅本机合并，不调用真实模型或部署服务器。
+
+## 2026-11-05：逐工序录入（SOP Editor）替代手工建文件夹
+
+assemble 类型新增浏览器端录入路径：员工在页面上逐道填工序，保存后直接落成 Library 的工序文件夹，替代原来在电脑上手工建目录、放图、写 txt 的做法。出表仍走原有工作流，未改动任何脚本。
+
+- 新增 `src/ckd/editor-library.ts` / `editor-types.ts`：录入侧读写器。落盘结构为 `product_lib/<项目>/assemble/{processes|CN_process}/process_NN/`，文件按既有约定写 `metadata.txt`（第一行 = Excel 显示名）、`Bill_of_Materials.jsonl`（index/partno/spec/qty）、`Tools.jsonl`（index/name/specs/qty）、`Operation_Instruction.txt`（每图一段、空行分隔，与 `instructionParagraphs()` 的分段规则一致）、`Operation_Photos/pN.png`、`Self_Check.txt`、`Previous_Station_Check.txt`；另加本项目扩展的 `standard_time.txt` / `manpower.txt`（工时、人力，catalog 暂不读，出表引擎可用）。
+- 文件夹名固定 `process_NN` 两位补零：catalog 按文件夹名字典序排工序，不补零会让 `process_10` 排到 `process_2` 前面。拖拽排序走两段式重命名（先全改临时名再改终名），避免互换时互相覆盖；删除后自动补齐编号。
+- 新增页面 `resources/ckd-ui/editor.html / editor.js / editor.css`，侧栏入口 `#open-editor`。图片在浏览器端压到长边 1600px / JPEG 0.82 再上传；改文字不必重传图片（`photos: [{name}]` 表示沿用，服务端按新顺序重命名）。
+- `ui-server.ts` 新增 `/api/editor`（项目与工序的增删改查、排序、单图预览）。编辑器请求单独放开到 48 MB（普通接口仍是 64 KB），并在写入时持 Library 排他锁、走临时目录 + rename。
+- 校验：图数必须 1/2/4；段落数必须等于图数（否则打印会串位）；BOM ≤7 行、工具 ≤5 行超出仅告警；工序名非空且不含换行；图片按 `inspectImage` 校验 PNG/JPEG 且 ≤10 MiB。
+- 语言：只写当前语言目录，另一种语言交给既有翻译同步任务，避免双写冲突。
+- 验证：`tools/editor-check.ts` 造库 → 写两道工序 → 用真实 `build-ckd-catalog-v3` 扫描，工序顺序与显示名正确；HTTP 链路实测建项目 → 存工序 → 读回 → 沿用图片保存 → 拖拽排序（互换）→ catalog 扫描全部通过；`npm run typecheck` 通过。
+- 未做：图片评分（走既有 `/api/images/quality`）、裁剪、文档级元数据（版本/审核人/份数/修订）仍在新 SOP 表单里填。
+
+## 2026-11-05：录入页同步维护 assemble/sops.json
+
+接本地真实库（`D:/CKD-agent`）联调时发现：catalog 的工序顺序取自 `product_lib/<项目>/assemble/sops.json` 的 `processSequence`，目录存在但没写进 sequence 的工序不会被扫到。只写文件夹时，`build-ckd-catalog-v3` 会输出 `0 SOP definition(s)`，生成端拿不到顺序。
+
+- `editor-library.ts` 新增 sops.json 维护：保存工序时把 `process_NN` 追加进 `processSequence`；拖拽重排后按新顺序改写 `process_NN` 段（存量里 `ass1`/`qjg1` 这类非 `process_NN` 条目原样保留、不被清掉）；删除工序时摘掉对应条目，sequence 变空则把该 SOP 从 `sops` 数组移除，避免 catalog 报「必须 1–30 道」。
+- SOP 条目匹配规则：优先 `sopId` 与项目同名；其次「该项目只有一条 SOP」的存量结构；多条且都不匹配时新建一条（`sopId` = 项目名）。
+- 只改 `processSequence`，不动 `aliases` / `description` / `displayNameCN` 等其他字段；写入走临时文件 + rename，与工序目录写入同持 Library 排他锁。
+- 格式错误（非合法 JSON、`version` 不是 1、`sops` 不是数组）在动目录之前就报错，提示先修复，不覆盖用户文件。
+- `tools/editor-check.ts` 增加断言：保存后 sequence 为 `["process_01","process_02"]`；新建再删除不留悬空条目；重排后 sequence 与 `process_NN` 顺序一致；catalog 摘要应为 `1 SOP definition(s)`。已跑通，catalog 无警告。
+- 边界：录入页只认 `process_NN`，真实库里 `ass1`/`qjg1`/`zhijia` 这类存量命名不会出现在列表中（按既定约定不兼容），新建项目不受影响。
+
+## 2026-11-05：修复 Library 位于盘根时建项目失败（EPERM）
+
+录入页点「新建项目」无反应，接口实际返回 `400 {"error":"EPERM: operation not permitted, mkdir 'D:/'"}`。
+
+- 原因：`acquireLibraryLock()` 把锁目录放在 Library 的同级，即 `D:/.CKD-agent.pi-operation.lock`，其父目录是盘根 `D:/`；Windows 上 `fs.mkdirSync("D://", { recursive: true })` 会抛 EPERM，导致拿锁即失败。库放在多级目录（如临时测试库）时不会触发，所以此前自检没暴露。
+- 修复：`acquireDirectoryLock()` 先 `existsSync(parent)`，父目录已存在就不再 mkdir。只影响建锁这一步，锁语义不变。
+- 验证：对真实库 `D:/CKD-agent` 实测「建项目 → 存 2 道工序」，返回 200，`product_lib/ZZTEST/project.json`、`assemble/CN_process/process_01|02`、`assemble/sops.json`（processSequence = 01,02）均正确生成，项目列表显示 2 道工序；验证后已删除该测试项目。
+
+## 2026-11-05：录入页两处可用性修正
+
+- 数量校验文案：物料行填了料号但没填数量时，提示「物料第 N 行（料号 XXX）没填数量。」；填了非数字时提示「…的数量「abc」不是数字。」，不再笼统说「数量必须是数字」——原占位符是灰色的 `1`，看起来像已填，容易误判成料号报错。
+- 物料数量占位符由 `1` 改为「必填」，避免把占位符当默认值。
+- 「作业前检查（上一道工序）」留空时自动带出上一道工序的「自检」内容：新工序创建时、以及打开存在但该字段为空的工序时都会带出，颜色弱化表示是自动值，输入即恢复正常色；用户仍可改写或清空。
+
+## 2026-11-05：录入页新增「SOP 基本信息」区块（封面字段）
+
+pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，所以封面信息此前在录入侧没有入口。现于录入页顶部补一块「SOP 基本信息」，按旧工具弹窗字段排布：项目 ID（只读 = 目录名）、SOP 名称、编制人、审核人、文件编号、版本、日期、版本本、修订原因、修订内容；去掉「输出位置」（那是客户端目录，不属于库，留在生成时选）。
+
+- 不写 Library：与对方一致，封面内容在导出时才写进 Excel 对应单元格。数据按项目存 `localStorage`（键 `ckd-sop-info:<项目>`，最近项目记在 `ckd-sop-info:last`），输入后 400ms 防抖落盘，切换项目前强制落盘。
+- 默认值：SOP 名称 = `<项目显示名> Assemble`，日期 = 今天；都只在为空时填，不覆盖已有值。
+- 带到生成：工作台「新建 SOP」打开时自动预填 项目名称（=项目 ID）、文档编号、SOP 名称、作者、修订原因、修订内容；只在字段为空时填。
+- 审核人 / 版本 / 日期 / 版本本 目前仅本地记录：工作台的「基本信息」还没有这四个输入，需要对方生成流程支持后才能真正写进封面对应单元格。
+- 未做：录入页没有改动保存策略，仍是逐道保存（每道工序独立文件夹、独立校验）。
+
+## 2026-11-05：「基本信息」拆成「匹配资料 / 封面信息」，封面可留空回落录入页
+
+- 修正录入页字段笔误：「版本本」→「原版本」，并挪到「版本」后面，日期排最后；标签补「封面『版本』列 / 封面『原版本』列」。内部 localStorage key（`versionNote`）不变，老数据仍能读到。
+- 工作台「基本信息」重新分区：
+  - 上半（SOP 类型 / 模板语言 / 项目名称）加说明「只决定读哪个库、哪种语言，不写进封面」；项目名称仍必填，用于匹配。
+  - 新增「封面信息」分隔区，含文档编号 / SOP 名称 / 编制人（原「作者」，与录入页统一叫法）。三项去掉 `required` 与「必填」标记，占位符写明「留空 = 用录入页的…」。
+  - 分区下新增一行动态提示 `#cover-hint`：按项目名称匹配录入页存的封面信息，显示「录入页已填：文件编号 … · SOP 名称 … · 编制人 …。留空自动使用，改了则覆盖。」；没有则提示需在此填全。
+- 提交合并逻辑：`submit` 时用 `editorSopInfo(projectName)` 精确匹配该项目（取不到才用最近录入项目），空字段回落到录入页值；补齐后仍为空则在本地提示缺哪几项，不发请求（后端仍要求这四项非空，不动后端校验）。
+- 取消上一版「打开新建 SOP 就预填输入框」的行为：改为表单留空 + 提示行说明，避免用户误以为已经填过；`reuse`（按此信息新建）仍按原任务输入预填。

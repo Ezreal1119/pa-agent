@@ -5,7 +5,11 @@ import { atomicJson } from "./store.js";
 import { currentLockIdentity, isLockOwnerAlive, type LockOwner } from "./lock-owner.js";
 export function acquireDirectoryLock(lock: string): () => void {
     const guard = `${lock}.reclaim`;
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    // Library 直接放在盘根时（如 D:\CKD-agent），锁的父目录就是 D:\；
+    // Windows 上 mkdirSync("D:\\", { recursive: true }) 会抛 EPERM，所以先判断再建。
+    const parent = path.dirname(lock);
+    if (!fs.existsSync(parent))
+        fs.mkdirSync(parent, { recursive: true });
     for (let attempt = 0;; attempt++) {
         try {
             if (fs.existsSync(guard))
