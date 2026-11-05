@@ -22,9 +22,9 @@
     photos: [],
     dirty: false,
     dragFolder: null,
-    /** library = 正式库；public = 待审核区（桌面客户端固定走这里） */
+    /** library = 正式库；public = 待审核区（只有管理员能切） */
     scope: "library",
-    /** 桌面客户端（Bearer）只能待在 public，管理员才给切换开关 */
+    /** 管理员（cookie）才给切换开关；桌面客户端固定锁在正式库 */
     canSwitch: false
   };
 
@@ -112,8 +112,9 @@
     renderSopInfo();
   }
 
-  /** 待审核区开关：只有管理员（cookie 登录）能看到，桌面客户端固定锁在 public。 */
+  /** 待审核区开关：只有管理员（cookie 登录）能看到，桌面客户端固定锁在正式库。 */
   function renderScope() {
+    if (!state.canSwitch) state.scope = "library";
     $("scope-toggle").hidden = !state.canSwitch;
     $("scope-public").checked = state.scope === "public";
   }
@@ -415,16 +416,70 @@
     }
   }
 
+  /* ------------------------------------------------------------ 新建项目 */
+
+  // Electron 的渲染进程不支持 window.prompt()（调用直接抛错），所以改页面内 dialog。
+  let projectDialogResolve = null;
+
+  function setProjectError(message) {
+    const box = $("create-project-error");
+    box.hidden = !message;
+    box.textContent = message || "";
+  }
+
+  function openCreateProjectDialog() {
+    const dialog = $("create-project-dialog");
+    $("create-project-id").value = "";
+    $("create-project-name").value = "";
+    setProjectError("");
+    dialog.showModal();
+    $("create-project-id").focus();
+    return new Promise(resolve => { projectDialogResolve = resolve; });
+  }
+
+  function bindProjectDialog() {
+    const dialog = $("create-project-dialog");
+    // 取消、Esc、点关闭都会走到这里，统一 resolve(null)。
+    dialog.addEventListener("close", () => {
+      const resolve = projectDialogResolve;
+      projectDialogResolve = null;
+      if (resolve) resolve(null);
+    });
+    $("create-project-cancel").addEventListener("click", () => dialog.close());
+    $("create-project-id").addEventListener("input", () => setProjectError(""));
+    $("create-project-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const projectId = $("create-project-id").value.trim();
+      if (!projectId) { setProjectError("项目文件夹名不能为空。"); $("create-project-id").focus(); return; }
+      // 其余规则（非法字符、重名、保留名）由服务端 validateProjectId / createProject 统一拦截。
+      const displayName = $("create-project-name").value.trim();
+      const resolve = projectDialogResolve;
+      projectDialogResolve = null;
+      dialog.close();
+      if (resolve) resolve({ projectId, displayName });
+    });
+  }
+
   async function createProject() {
-    const projectId = (prompt("项目文件夹名（product_lib 下的目录名，建议用项目代号）") || "").trim();
-    if (!projectId) return;
-    const displayName = (prompt("Excel 上显示的项目名（可留空，默认与文件夹名相同）") || "").trim();
+    const input = await openCreateProjectDialog();
+    if (!input) return;
     try {
-      await api("/api/editor/projects", { method: "POST", body: { projectId, displayName } });
-      state.projectId = projectId;
+      await api("/api/editor/projects", { method: "POST", body: input });
+      // 项目统一建在正式库 product_lib，停在待审核区时切回来，否则新建完看不到。
+      if (state.scope === "public") {
+        state.scope = "library";
+        $("scope-public").checked = false;
+        renderScope();
+      }
+      state.projectId = input.projectId;
+      state.current = null;
+      state.processes = [];
+      state.dirty = false;
+      showForm(false);
       await loadProjects();
       await loadProcesses();
       notice("");
+      setState(`已新建项目 ${input.projectId}。`, "ok");
     } catch (error) {
       notice(error.message);
     }
@@ -608,6 +663,7 @@
     });
 
     $("new-project").addEventListener("click", createProject);
+    bindProjectDialog();
     $("add-process").addEventListener("click", openBlankProcess);
     $("delete-process").addEventListener("click", removeProcess);
     $("process-form").addEventListener("submit", save);

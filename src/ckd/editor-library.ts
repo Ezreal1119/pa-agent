@@ -254,6 +254,16 @@ export function createProject(library: string, input: { projectId: unknown; disp
   const target = path.join(root, "product_lib", projectId);
   if (!isInside(path.join(root, "product_lib"), target)) throw new EditorInputError("项目路径越界。");
   if (fs.existsSync(target)) throw new EditorInputError(`项目 ${projectId} 已存在。`);
+  // Linux 区分大小写，但 ABC 与 abc 在工作台里没法区分，按小写比对一遍，重名一律拒绝。
+  const productRoot = path.join(root, "product_lib");
+  if (fs.existsSync(productRoot)) {
+    const lowered = projectId.toLowerCase();
+    for (const entry of fs.readdirSync(productRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.toLowerCase() === lowered) {
+        throw new EditorInputError(`项目 ${projectId} 已存在（与 ${entry.name} 重名）。`);
+      }
+    }
+  }
   const release = acquireLibraryLock(root);
   try {
     fs.mkdirSync(target, { recursive: true });

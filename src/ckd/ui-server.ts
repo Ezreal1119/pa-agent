@@ -184,8 +184,9 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       if (url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/")) {
         // DELETE 不在上面的 POST 来源校验覆盖范围内，单独补一次，避免跨站删除工序。
         if (request.method === "DELETE" && !validPostOrigin) throw new HttpError(403, "请求来源无效，请从 CKD 页面操作。");
-        // 桌面客户端只认待审核区；管理员默认正式库，显式带 scope=public 时才看待审核区。
-        const wantsPublic = editorClient || url.searchParams.get("scope") === "public";
+        // 桌面客户端（Bearer）直接写正式库 product_lib；只有管理员显式带 scope=public 时才看待审核区。
+        // 之前让 Bearer 固定落 public，会导致「项目建在正式库、工序写 public」时校验不到 project.json，故统一回正式库。
+        const wantsPublic = !editorClient && url.searchParams.get("scope") === "public";
         const editorLibrary = wantsPublic ? publicEditorRoot() : service.libraryPath;
         try {
           if (url.pathname === "/api/editor" && request.method === "GET") {
@@ -194,7 +195,8 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           }
           if (url.pathname === "/api/editor/projects" && request.method === "POST") {
             const input = await editorBody(request);
-            json(200, { project: createProject(editorLibrary, { projectId: input.projectId, displayName: input.displayName }) });
+            // 项目是容器，统一建在正式库 product_lib；待审核区只放工序，不放项目。
+            json(200, { project: createProject(service.libraryPath, { projectId: input.projectId, displayName: input.displayName }) });
             return;
           }
           if (url.pathname === "/api/editor/process" && request.method === "GET") {

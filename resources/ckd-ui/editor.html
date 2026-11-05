@@ -136,5 +136,28 @@
       </form>
     </section>
   </main>
+
+  <!-- 新建项目弹窗：Electron 渲染进程不支持 window.prompt()，网页端与桌面端统一用页面内 dialog -->
+  <dialog class="editor-dialog" id="create-project-dialog" aria-labelledby="create-project-title">
+    <form id="create-project-form">
+      <div class="eyebrow">NEW PROJECT</div>
+      <h2 id="create-project-title">新建项目</h2>
+      <p class="hint">会在 Library 的 <code>product_lib</code> 下建一个同名文件夹，之后录入的工序都放在这个项目里。</p>
+      <label class="field">
+        <span>项目文件夹名 <em>必填</em></span>
+        <input id="create-project-id" name="projectId" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如 SQ69BXP">
+        <small>product_lib 下的目录名，建议用项目代号</small>
+      </label>
+      <label class="field">
+        <span>Excel 上显示的项目名 <em>可留空</em></span>
+        <input id="create-project-name" name="displayName" maxlength="200" autocomplete="off" placeholder="留空则与文件夹名相同">
+      </label>
+      <p class="dialog-error" id="create-project-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button secondary" id="create-project-cancel" type="button">取消</button>
+        <button class="button primary" id="create-project-submit" type="submit">创建</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
