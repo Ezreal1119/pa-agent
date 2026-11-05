@@ -6,6 +6,9 @@
   "use strict";
 
   const $ = id => document.getElementById(id);
+  // 生产环境页面挂在 /admin/ 下（nginx 反代到本服务），而接口是根路径 /api/…。
+  // 不加这个前缀，fetch("/api/…") 会打到站点根，被 nginx 转到另一个上游（502）。
+  const adminBase = location.pathname.startsWith("/admin") ? "/admin" : "";
   const MAX_EDGE = 1600;
   const JPEG_QUALITY = 0.82;
 
@@ -30,7 +33,7 @@
     const { method = "GET", body } = options;
     const headers = { "X-CKD-UI": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await fetch(adminBase + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await response.text();
     let value = null;
     try {
@@ -145,7 +148,7 @@
   /* ---------------------------------------------------------------- 表单填充 */
 
   function photoUrl(name) {
-    return `/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}`;
+    return `${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}`;
   }
 
   function renderPhotos() {
