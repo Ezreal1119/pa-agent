@@ -1,4 +1,4 @@
-import { validateQuery, matchesQuery, type FirmwareQuery } from "./query.js";
+import { validateQuery, matchesQuery, isPreferredFirmware, type FirmwareQuery } from "./query.js";
 export const FIRMWARE_MAINTENANCE = "固件功能维护中，请稍后再试。";
 export interface FirmwareConfig { baseUrl: string; token: string; publicBase: string; }
 export interface Candidate { id: string; filename: string; path: string; size: number; modified: string | null; score: number; exact: boolean; differences: string[]; }
@@ -11,11 +11,11 @@ export interface FirmwareClient {
   job(id: string, signal?: AbortSignal): Promise<LocalJob>;
   cancel(id: string, signal?: AbortSignal): Promise<LocalJob>;
 }
-export interface FirmwareSearch { candidates: Candidate[]; total: number; truncated: boolean; complete: boolean; }
+export interface FirmwareSearch { candidates: Candidate[]; total: number; truncated: boolean; complete: boolean; selection: "vendoren" | "fallback"; }
 export function validateSearch(value: FirmwareSearch, query: FirmwareQuery): FirmwareSearch {
-  if (!value || !Array.isArray(value.candidates) || value.candidates.length > 12 || !Number.isSafeInteger(value.total) || value.total < value.candidates.length || typeof value.truncated !== "boolean" || typeof value.complete !== "boolean") throw new Error("固件查询结果格式不正确。");
+  if (!value || !Array.isArray(value.candidates) || value.candidates.length > 12 || !Number.isSafeInteger(value.total) || value.total < value.candidates.length || typeof value.truncated !== "boolean" || typeof value.complete !== "boolean" || !["vendoren", "fallback"].includes(value.selection)) throw new Error("固件查询结果格式不正确。");
   const candidates = value.candidates.map(validateCandidate);
-  if (new Set(candidates.map(c => c.path)).size !== candidates.length || candidates.some(c => !matchesQuery(c.filename, query)) || value.truncated !== (value.total > 12) || value.complete && candidates.length !== Math.min(12, value.total)) throw new Error("固件查询条件或完整性校验失败。");
+  if (new Set(candidates.map(c => c.path)).size !== candidates.length || candidates.some(c => !matchesQuery(c.filename, query) || isPreferredFirmware(c.filename) !== (value.selection === "vendoren")) || value.truncated !== (value.total > 12) || value.complete && candidates.length !== Math.min(12, value.total)) throw new Error("固件查询条件或完整性校验失败。");
   return { ...value, candidates };
 }
 export function firmwareConfig(env: NodeJS.ProcessEnv): FirmwareConfig {
@@ -55,7 +55,7 @@ export class LocalFirmwareClient implements FirmwareClient {
   async search(query: FirmwareQuery, signal?: AbortSignal): Promise<FirmwareSearch> {
     const criteria = validateQuery(query);
     const value = await this.json("/search", { criteria, limit: 12 }, signal, 60000);
-    if (value.matching !== "model_date_index_vendoren_and") throw new Error("本机固件服务需要更新为 VendorEN 筛选版本。");
+    if (value.matching !== "model_date_index_vendoren_preferred_and") throw new Error("本机固件服务需要更新为 VendorEN 优先、其他后缀回退版本。");
     return validateSearch(value, criteria);
   }
   async submit(candidateId: string, requestId: string, signal?: AbortSignal) { return this.validateJob(await this.json("/jobs", { candidate_id: candidateId, confirmed: true, upload: true, request_id: requestId }, signal)); }

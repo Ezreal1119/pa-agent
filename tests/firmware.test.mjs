@@ -12,7 +12,7 @@ import { validateAgentSettings } from '../dist/web/agent-settings.js';
 
 const name = 'SQ27M_EN_XX_WE__DS_FI_S02_U_251205_02_rel_uFWsign_VendorEN.zip';
 const criteria = { model: 'SQ27M', date: '251205', index: '02' };
-const searchResult = (candidates, extra = {}) => ({ candidates: candidates.slice(0, 12), total: candidates.length, truncated: candidates.length > 12, complete: true, matching: 'model_date_index_vendoren_and', ...extra });
+const searchResult = (candidates, extra = {}) => ({ candidates: candidates.slice(0, 12), total: candidates.length, truncated: candidates.length > 12, complete: true, matching: 'model_date_index_vendoren_preferred_and', selection: candidates.some(c => /_uFWsign_VendorEN\.zip$/i.test(c.filename)) ? 'vendoren' : 'fallback', ...extra });
 const base = 'https://temp.patrick-shenzhen.org/firmware/';
 const candidate = (extra = {}) => ({ id: randomUUID().replaceAll('-', ''), filename: name, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name, size: 1234567, modified: '20261028090000', score: 1, exact: true, differences: [], ...extra });
 const owner = (userId = 'alice', botId = 'bot') => ({ userId, botId, target: userId, chatType: 'single' });
@@ -270,7 +270,8 @@ test('query validation requires calendar dates and exact model/date-index bounda
   assert.deepEqual(validateQuery({ ...criteria, model: 'sq27m' }), criteria);
   for (const q of [{ ...criteria, date: '250230' }, { ...criteria, index: '2' }, { ...criteria, model: 'SQ27M/' }]) assert.throws(() => validateQuery(q));
   assert.equal(matchesQuery(name, criteria), true);
-  for (const filename of [name.replace('_uFWsign_VendorEN', ''), name.replace('VendorEN', 'VendorXX'), name.replace('.zip', '_extra.zip'), name.replace('VendorEN', 'VendorEN2')]) assert.equal(matchesQuery(filename, criteria), false);
+  for (const filename of [name.replace('_uFWsign_VendorEN', ''), name.replace('VendorEN', 'VendorXX'), name.replace('.zip', '_extra.zip'), name.replace('VendorEN', 'VendorEN2')]) assert.equal(matchesQuery(filename, criteria), true);
+  for (const filename of [name.replace('_rel_', '_UFS_rel_'), name.replace('_rel_', '_SE_OTA_rel_'), name.replace('_rel_', '_定制_rel_'), name.replace('.zip', '.exe'), name.replace('_251205_02_', '_251205_020_')]) assert.equal(matchesQuery(filename, criteria), false);
   assert.equal(matchesQuery(name.toLowerCase(), criteria), true);
   assert.equal(matchesQuery(name.replace('SQ27M_', 'SQ27MB_'), criteria), false);
   assert.equal(matchesQuery(name.replace('_251205_02_', '_251205_01_'), criteria), false);
@@ -281,7 +282,7 @@ test('query validation requires calendar dates and exact model/date-index bounda
 test('old unconfirmed flows end on upgrade; accepted running jobs keep their identity', async t => {
   const f = await fixture(t); await f.query();
   const file = path.join(f.service.directory, 'state.json');
-  const old = await f.state(); old.active.matchVersion = 2; await fs.writeFile(file, JSON.stringify(old));
+  const old = await f.state(); old.active.matchVersion = 3; await fs.writeFile(file, JSON.stringify(old));
   await f.restart(); assert.equal((await f.state()).active, undefined); assert.match((await f.state()).notices.at(-1).text, /规则已更新/);
   await f.confirm(await f.query()); const running = await f.state(), id = running.active.jobId;
   delete running.active.matchVersion; await fs.writeFile(file, JSON.stringify(running));
@@ -290,10 +291,30 @@ test('old unconfirmed flows end on upgrade; accepted running jobs keep their ide
 
 test('local client rejects legacy, hidden ambiguity and wrong-condition results', async () => {
   const config = firmwareConfig({ FIRMWARE_SERVICE_URL: 'https://service.example/firmware-api', FIRMWARE_SERVICE_TOKEN: 'secret'.repeat(8) });
-  for (const value of [searchResult([candidate()], { matching: 'model_date_index_and' }), searchResult([candidate({ filename: name.replace('_uFWsign_VendorEN', ''), path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + name.replace('_uFWsign_VendorEN', '') })]), { candidates: [candidate()] }, searchResult([candidate()], { total: 2 }), searchResult([candidate({ filename: name.replace('SQ27M_', 'SQ27MB_'), path: '/FTP7/OS/13.0/SQ27MB/EN/XX/' + name.replace('SQ27M_', 'SQ27MB_') })])]) {
+  const relName = name.replace('_uFWsign_VendorEN', '');
+  const rel = candidate({ filename: relName, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + relName });
+  for (const value of [searchResult([candidate()], { matching: 'model_date_index_and' }), searchResult([candidate()], { matching: 'model_date_index_vendoren_and' }), searchResult([rel], { selection: 'vendoren' }), searchResult([candidate()], { selection: 'fallback' }), searchResult([candidate(), rel]), searchResult([candidate()], { selection: undefined }), { candidates: [candidate()] }, searchResult([candidate()], { total: 2 }), searchResult([candidate({ filename: name.replace('SQ27M_', 'SQ27MB_'), path: '/FTP7/OS/13.0/SQ27MB/EN/XX/' + name.replace('SQ27M_', 'SQ27MB_') })])]) {
     const client = new LocalFirmwareClient(config, async () => Response.json(value));
     await assert.rejects(client.search(criteria));
   }
+});
+
+test('REL and other fallback suffixes require selection and owner confirmation before download', async t => {
+  const relName = name.replace('_rel_uFWsign_VendorEN', '_REL');
+  const rel = candidate({ filename: relName, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + relName });
+  const config = firmwareConfig({ FIRMWARE_SERVICE_URL: 'https://service.example/firmware-api', FIRMWARE_SERVICE_TOKEN: 'secret'.repeat(8) });
+  const client = new LocalFirmwareClient(config, async () => Response.json(searchResult([rel])));
+  assert.equal((await client.search(criteria)).candidates[0].filename, relName);
+  const f = await fixture(t, { candidates: [rel] });
+  const flow = await f.query(); assert.equal(flow.phase, 'confirm'); assert.equal(f.submits, 0);
+  assert.ok((await f.state()).notices.at(-1).text.includes(relName));
+  await f.confirm(flow); assert.equal(f.submits, 1);
+  const otherName = name.replace('_rel_uFWsign_VendorEN', '_OTHER');
+  const multiple = await fixture(t, { candidates: [rel, candidate({ filename: otherName, path: '/FTP7/OS/13.0/SQ27M/EN/XX/' + otherName })] });
+  assert.equal((await multiple.query()).phase, 'choose'); assert.equal(multiple.submits, 0);
+  await multiple.service.command(input('2', false));
+  assert.equal((await multiple.state()).active.selected.filename, otherName); assert.equal(multiple.submits, 0);
+  await multiple.confirm((await multiple.state()).active); assert.equal(multiple.submits, 1);
 });
 
 test('confirmation needs no code and accepts the owner message containing 确认 exactly once', async t => {
