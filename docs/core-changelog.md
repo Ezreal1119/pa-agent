@@ -626,3 +626,4 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 接口：`GET /api/editor/bom?project=`、`POST /api/editor/bom`（`{projectId, fileName, data: base64}`）、`DELETE /api/editor/bom?project=`，走现有录入权限与库解析。
 - 前端：侧栏「新建项目」下新增「导入 BOM」和状态行（显示文件名与行数）；物料表「规格」列改为「名称」（数据字段仍是 `spec`）；料号输入失焦时查表，名称只在为空时填入，用量为 1 时数量只在为空时填 1，其余留空。
 - 验证：新增 `tests/ckd-editor-bom.test.ts` 2/2（表头识别、前导零保留、原始文件保存、删除、拒绝 .xls / 无料号列 / 不存在的项目）；`npm run typecheck`、`node --check editor.js` 通过。真实 BOM 文件需用客户样例再验。
+- 按客户样例（`GPOS710 BOM-SMT+assembly_0319.xlsx`，单 sheet、505 行、28 列）修正：料号列优先 `UROVO PN`，排在 `Part Number` 之前（否则会取到厂商料号）；名称取 `物料名称`；用量取 `Usage for <项目> (EE)`，排除 `Total Usage for ...`（整单总量）。样例实测 496 条有效物料、料号唯一、名称无空值（用量 1 的 193 条、>1 的 251 条、空用量 52 条）。

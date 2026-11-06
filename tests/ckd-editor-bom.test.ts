@@ -26,22 +26,24 @@ async function workbookBytes(rows: unknown[][]): Promise<Buffer> {
 test('BOM import finds headers, keeps text part numbers and stores the original file', async t => {
   const { library } = fixture(t);
   const data = await workbookBytes([
-    ['某某项目 BOM', '', ''],
-    ['料号', '名称', '用量'],
-    ['A-001', '外壳', 1],
-    ['0002', '螺丝 M2', 5],
-    ['', '', ''],
-    ['B-003', '排线', ''],
+    ['BOM Hierarchy', 'UROVO PN', 'GERTECPN', '物料名称', 'Material Name', 'Material Specification', 'Material Property', 'Type', 'Total Usage for GPOS710 (EE)', 'Usage for GPOS710 (EE)', 'Position Sign for GPOS710', 'Part Number'],
+    ['0', '', '', '', 'Virtual Components', 'GPOS710', 'Virtual', 'Order QTY.--->', '', '5000', '', ''],
+    ['2', '3.01.01.10209', 'URV05250', 'PCB', 'PCB', 'T3366F 8-Layer', 'Outsourcing', 'Standard Part', '5000', '1', '', 'VENDOR-001'],
+    ['2', '3.01.15.10583', 'URV05260', '贴片电容', 'Capacitor', 'Cap/0201', 'Outsourcing', 'Standard Part', '5000', '1', 'R5005', 'VENDOR-002'],
+    ['2', '3.01.15.10585', 'URV05270', '贴片电容', 'Capacitor', 'Cap/0201', 'Outsourcing', 'Standard Part', '15000', '3', 'M5018,C3320', 'VENDOR-003'],
+    ['2', '', '', '', '', '', '', '', '', '5000', '', ''],
+    ['2', '3.01.15.10746', 'URV05270', '贴片电容', 'Capacitor', 'Cap/C0603', 'Outsourcing', 'Alternative Part', '15000', '3', 'M5018', 'VENDOR-004'],
   ]);
   const info = await saveBom(library, { projectId: 'P1', fileName: '测试BOM.xlsx', data });
-  assert.equal(info.rows.length, 3);
-  assert.deepEqual(info.rows[0], { partno: 'A-001', name: '外壳', qty: 1 });
-  assert.deepEqual(info.rows[1], { partno: '0002', name: '螺丝 M2', qty: 5 }, '前导零按文本保留');
-  assert.equal(info.rows[2]!.qty, null);
+  assert.equal(info.rows.length, 4, '虚拟行和空料号行应跳过');
+  assert.deepEqual(info.rows[0], { partno: '3.01.01.10209', name: 'PCB', qty: 1 }, '取 UROVO PN，不能取 Part Number');
+  assert.deepEqual(info.rows[1], { partno: '3.01.15.10583', name: '贴片电容', qty: 1 });
+  assert.equal(info.rows[2]!.qty, 3, '取单机用量列，不能取 Total Usage');
+  assert.equal(info.rows[3]!.partno, '3.01.15.10746');
 
   const stored = readBom(library, 'P1');
   assert.equal(stored?.fileName, '测试BOM.xlsx');
-  assert.equal(stored?.rows.length, 3);
+  assert.equal(stored?.rows.length, 4);
   assert.ok(fs.existsSync(path.join(library, 'product_lib', 'P1', 'assemble', 'bom.json')));
   assert.ok(fs.existsSync(path.join(library, 'product_lib', 'P1', 'assemble', 'bom.import.xlsx')));
 

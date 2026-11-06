@@ -19,8 +19,10 @@ function normalizeHeader(value: string): string {
   return value.replace(/[\s_()（）:：/\\-]/gu, '').toLowerCase();
 }
 
-const PARTNO_HEADERS = ['料号', '物料编码', '物料编号', '物料号', '编码', '料号编码', 'partno', 'partnumber', 'item', 'itemno'];
-const NAME_HEADERS = ['名称', '物料名称', '品名', '物料描述', '描述', 'description', 'name'];
+// 客户 BOM 里同时有 UROVO PN（我方料号）、GERTECPN、Part Number（厂商料号），
+// 录入页用的是 UROVO PN，必须排在 Part Number 前面。
+const PARTNO_HEADERS = ['urovopn', '料号', '物料编码', '物料编号', '物料号', '编码', '料号编码', 'partno', 'partnumber', 'pn', 'item', 'itemno'];
+const NAME_HEADERS = ['名称', '物料名称', '品名', '物料描述', '描述', 'materialname', 'description', 'name'];
 const QTY_HEADERS = ['用量', '数量', '单机用量', '使用数量', 'qty', 'quantity'];
 
 function findColumns(cells: string[]): { partno: number; name: number; qty: number } | null {
@@ -34,7 +36,15 @@ function findColumns(cells: string[]): { partno: number; name: number; qty: numb
   };
   const partno = pick(PARTNO_HEADERS);
   if (partno < 0) return null;
-  return { partno, name: pick(NAME_HEADERS), qty: pick(QTY_HEADERS) };
+  // 客户的 BOM 用 "Usage for <项目> (EE)" 表示单机用量，旁边还有 "Total Usage for ..." 是整单总量，
+  // 必须排除掉 Total，否则会把 5000 当单机用量。
+  const exactQty = pick(QTY_HEADERS);
+  const usageQty = normalized.findIndex(cell => cell.includes('usagefor') && !cell.includes('total'));
+  return {
+    partno,
+    name: pick(NAME_HEADERS),
+    qty: exactQty >= 0 ? exactQty : usageQty
+  };
 }
 
 function cellText(value: unknown): string {
