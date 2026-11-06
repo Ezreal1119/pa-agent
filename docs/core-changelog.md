@@ -617,3 +617,12 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 打包清单仍保留 `ui/**/*` 作为离线兜底；`preload.cjs`、`backend.cjs`、令牌与文件保存逻辑不变。
 - 效果：`resources/ckd-ui/*` 和 `desktop/ui/*` 的改动都只需要服务器 `git pull`（静态文件每请求现读），不用重启或发包；仍需发新包的是 Electron 升级、`main.cjs`/`preload.cjs`/`backend.cjs` 改动、内置域名变更。首次切到远程页面需要一次新包。
 - 验证：`tests/ckd-ui.test.ts` 增加 `/client/` 页面、CSP 与静态资源断言（3/4，唯一失败仍是 Windows 符号链接环境限制）；桌面 `editor-session.test.cjs` 增加主窗口 URL 断言 2/2；`npm run typecheck` 通过。真实客户端加载 `/client/` 需实机验证。
+
+## 2026-11-06：逐工序录入支持导入 BOM
+
+- 需求：录入页导入 BOM，输入料号后自动带出名称；BOM 用量为 1 时自动填数量，大于 1 留空人工填。
+- 新增 `src/ckd/editor-bom.ts`：解析 xlsx（ExcelJS）与 csv，在前 15 行内识别表头，列名支持「料号/物料编码/物料编号/物料号/编码/料号编码/Part No」「名称/物料名称/品名/描述/Description/Name」「用量/数量/单机用量/Qty」等别名；料号按单元格文本保留（前导零不丢），空行跳过，上限 2 万行、20 MB。
+- 存储：`product_lib/<项目>/assemble/bom.json` 保存解析结果，`bom.import.xlsx|csv` 保留原始文件；按项目共享、中英文共用，catalog 不读取，不参与出表。
+- 接口：`GET /api/editor/bom?project=`、`POST /api/editor/bom`（`{projectId, fileName, data: base64}`）、`DELETE /api/editor/bom?project=`，走现有录入权限与库解析。
+- 前端：侧栏「新建项目」下新增「导入 BOM」和状态行（显示文件名与行数）；物料表「规格」列改为「名称」（数据字段仍是 `spec`）；料号输入失焦时查表，名称只在为空时填入，用量为 1 时数量只在为空时填 1，其余留空。
+- 验证：新增 `tests/ckd-editor-bom.test.ts` 2/2（表头识别、前导零保留、原始文件保存、删除、拒绝 .xls / 无料号列 / 不存在的项目）；`npm run typecheck`、`node --check editor.js` 通过。真实 BOM 文件需用客户样例再验。

@@ -475,6 +475,16 @@ Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不
 
 资料库里只要还有草稿，创建生成任务会被拒绝，提示先在录入页「保存到 Library」。接口上：保存草稿用 `POST /api/editor/process` 并带 `draft: true`，发布用 `POST /api/editor/publish`（`{projectId, language}`）。
 
+### BOM 导入
+
+录入页侧栏「导入 BOM」支持 `.xlsx` / `.csv`（`.xls` 请先另存为 `.xlsx`，上限 20 MB、2 万行）。解析时在前 15 行里找表头并自动识别这些列名：
+
+- 料号：料号 / 物料编码 / 物料编号 / 物料号 / 编码 / 料号编码 / Part No 等；
+- 名称：名称 / 物料名称 / 品名 / 物料描述 / 描述 / Description / Name；
+- 用量：用量 / 数量 / 单机用量 / 使用数量 / Qty / Quantity。
+
+导入后侧栏显示「已导入：文件名（N 行）」。BOM 按项目保存在 `product_lib/<项目>/assemble/bom.json`，原始文件保存为同目录的 `bom.import.xlsx|csv`；中英文共用，不参与出表。在物料清单里输入料号（失焦触发）后，会从 BOM 带出名称；BOM 用量为 1 时自动填数量 1，大于 1 或为空时留空，等人工填写。接口为 `GET/POST/DELETE /api/editor/bom`（POST 用 base64 传文件内容）。
+
 ### 逐工序录入：图片与步骤坑位
 
 操作图片与步骤改为**固定坑位**：默认 4 个图片位 + 4 个文本位，同一序号的图片和文字绑定，但可以各自独立填写。

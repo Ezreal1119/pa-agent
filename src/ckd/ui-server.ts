@@ -17,6 +17,7 @@ import { readImagePolicy, saveImagePolicy, DEFAULT_POLICY } from "./image-assess
 import { PixelImageChecker, PIXEL_POLICY, PIXEL_CONFIG_HASH } from './image-pixel.js';
 import { scoringContext, scoreWithContext, checkOperationFocus } from './image-scorer.js';
 import { createProject, deleteProcess, listProcesses, listProjects, readPhoto, readProcess, reorderProcesses, saveProcess, publishDrafts, EDITOR_SOP_TYPE } from "./editor-library.js";
+import { deleteBom, readBom, saveBom } from './editor-bom.js';
 import { EditorInputError, EDITOR_LANGUAGES, type EditorProcessInput } from "./editor-types.js";
 import { ClientAccess, ClientAccessError } from "./client-access.js";
 import { AdminAccess, AdminAccessError } from "./admin-access.js";
@@ -308,6 +309,21 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           if (url.pathname === "/api/editor/publish" && request.method === "POST") {
             const input = await editorBody(request);
             json(200, publishDrafts(editorLibrary, { projectId: input.projectId, language: input.language }));
+            return;
+          }
+          if (url.pathname === "/api/editor/bom" && request.method === "GET") {
+            json(200, { bom: readBom(editorLibrary, url.searchParams.get("project") ?? "") });
+            return;
+          }
+          if (url.pathname === "/api/editor/bom" && request.method === "POST") {
+            const input = await editorBody(request);
+            const data = typeof input.data === "string" ? Buffer.from(input.data, "base64") : Buffer.alloc(0);
+            json(200, { bom: await saveBom(editorLibrary, { projectId: String(input.projectId ?? ""), fileName: String(input.fileName ?? "BOM"), data }) });
+            return;
+          }
+          if (url.pathname === "/api/editor/bom" && request.method === "DELETE") {
+            deleteBom(editorLibrary, url.searchParams.get("project") ?? "");
+            json(200, { ok: true });
             return;
           }
           if (url.pathname === "/api/editor/process" && request.method === "POST") {

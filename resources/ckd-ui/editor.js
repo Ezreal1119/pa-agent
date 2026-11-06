@@ -32,7 +32,11 @@
     canSwitch: false,
     /** 当前资料库 {id, name, master, path} 与可选列表（仅管理员） */
     library: null,
-    libraries: null
+    libraries: null,
+    /** 当前项目的 BOM：料号（小写）→ {partno,name,qty} */
+    bomIndex: new Map(),
+    bomInfo: null,
+    bom: []
   };
 
   /* ---------------------------------------------------------------- 基础 */
@@ -174,6 +178,53 @@
     }
     renderProjects();
     renderSopInfo();
+    void loadBom();
+  }
+
+  /* ---------------------------------------------------------------- BOM */
+  function normalizePartno(value) {
+    return String(value ?? "").trim().toLowerCase();
+  }
+
+  function renderBomStatus(info) {
+    const el = $("bom-status");
+    if (!el) return;
+    el.textContent = info ? `已导入：${info.fileName}（${info.rows.length} 行）` : "未导入 BOM";
+  }
+
+  async function loadBom() {
+    if (!state.projectId) {
+      state.bomIndex = new Map();
+      state.bomInfo = null;
+      renderBomStatus(null);
+      return;
+    }
+    try {
+      const value = await api(`/api/editor/bom?project=${encodeURIComponent(state.projectId)}`);
+      const info = value.bom || null;
+      state.bomInfo = info;
+      state.bomIndex = new Map((info?.rows || []).map(row => [normalizePartno(row.partno), row]));
+      renderBomStatus(info);
+    } catch {
+      state.bomIndex = new Map();
+      state.bomInfo = null;
+      renderBomStatus(null);
+    }
+  }
+
+  async function importBomFile(file) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("读取 BOM 文件失败。"));
+      reader.readAsDataURL(file);
+    });
+    const data = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : dataUrl;
+    const value = await api("/api/editor/bom", { method: "POST", body: { projectId: state.projectId, fileName: file.name, data } });
+    state.bomInfo = value.bom;
+    state.bomIndex = new Map((value.bom?.rows || []).map(row => [normalizePartno(row.partno), row]));
+    renderBomStatus(value.bom);
+    notice(`已导入 BOM：${value.bom.fileName}（${value.bom.rows.length} 行）。输入料号会自动带出名称，用量 1 会自动填数量。`);
   }
 
   /** 待审核区开关：只有管理员（cookie 登录）能看到，桌面客户端固定锁在正式库。 */
@@ -270,7 +321,7 @@
         <tr data-index="${index}">
           <td>${index + 1}</td>
           <td><input data-field="partno" value="${escapeHtml(row.partno)}" placeholder="料号" autocomplete="off"></td>
-          <td><input data-field="spec" value="${escapeHtml(row.spec)}" placeholder="规格" autocomplete="off"></td>
+          <td><input data-field="spec" value="${escapeHtml(row.spec)}" placeholder="名称" autocomplete="off"></td>
           <td><input data-field="qty" value="${escapeHtml(row.qty)}" placeholder="必填" inputmode="decimal"></td>
           <td><button type="button" class="row-remove" data-action="remove-bom" aria-label="删除这一行">×</button></td>
         </tr>`)
@@ -935,6 +986,35 @@
       state.bom.splice(index, 1);
       renderBom();
       markDirty();
+    });
+    // 输入料号后查 BOM：名称自动带出；用量 1 时数量自动填 1，其余留空。
+    $("bom-body").addEventListener("change", event => {
+      const input = event.target;
+      if (input.dataset.field !== "partno") return;
+      const row = input.closest("tr");
+      if (!row) return;
+      const hit = state.bomIndex.get(normalizePartno(input.value));
+      if (!hit) return;
+      let changed = false;
+      const nameInput = row.querySelector('[data-field="spec"]');
+      if (nameInput && !nameInput.value.trim() && hit.name) { nameInput.value = hit.name; changed = true; }
+      const qtyInput = row.querySelector('[data-field="qty"]');
+      if (qtyInput && !qtyInput.value.trim() && hit.qty === 1) { qtyInput.value = "1"; changed = true; }
+      if (changed) markDirty();
+    });
+    $("import-bom").addEventListener("click", () => {
+      if (!state.projectId) { notice("先选择项目。"); return; }
+      $("bom-input").click();
+    });
+    $("bom-input").addEventListener("change", async event => {
+      const file = event.target.files && event.target.files[0];
+      event.target.value = "";
+      if (!file) return;
+      try {
+        await importBomFile(file);
+      } catch (error) {
+        notice(`导入 BOM 失败：${error.message}`);
+      }
     });
 
     $("add-tool").addEventListener("click", () => {
