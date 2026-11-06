@@ -134,7 +134,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   }
   const maintenance = new LibraryMaintenance({ dataDir: service.dataDir, libraryPath: service.libraryPath, model: options.maintenanceModel, modelTimeoutMs: options.maintenanceModelTimeoutMs, imageChecker:service.imageQuality, onEvent: message => options.onEvent?.({runId:"library",type:"status",message}) });
   const maintenanceJobs = new Map<string, Promise<unknown>>();
-  // 发布后自动同步「翻译 + 摘要」：每个库一个实例（员工的库也要各自跑），防抖排队，后台执行。
+  // 保存后由用户在页面上选择是否同步：每个库一个实例，防抖排队，后台执行。
   const projectMaintenance = new Map<string, LibraryMaintenance>();
   function maintenanceFor(libraryPath: string): LibraryMaintenance {
     const key = path.resolve(libraryPath);
@@ -145,23 +145,27 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
     }
     return instance;
   }
-  const syncTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  function queueProjectSync(libraryPath: string, projectId: string): void {
+  type SyncKind = "translate" | "summaries";
+  const syncTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; kinds: Set<SyncKind> }>();
+  function queueProjectSync(libraryPath: string, projectId: string, kinds: SyncKind[]): void {
+    if (!kinds.length) return;
     const key = `${path.resolve(libraryPath)}|${projectId}`;
     const previous = syncTimers.get(key);
-    if (previous) clearTimeout(previous);
+    if (previous) clearTimeout(previous.timer);
+    const pending = new Set<SyncKind>([...(previous?.kinds ?? []), ...kinds]);
     const timer = setTimeout(() => {
       syncTimers.delete(key);
       void (async () => {
         const instance = maintenanceFor(libraryPath);
         for (const kind of ["translate", "summaries"] as const) {
-          // 同步失败不能影响保存结果；下一次保存会再次排队。
+          if (!pending.has(kind)) continue;
+          // 同步失败不能影响保存结果；用户可以再次点同步。
           try { await instance.start(kind, { projectId }); } catch { /* ignore */ }
         }
       })().catch(() => { /* 后台同步失败不影响页面 */ });
     }, 2000);
     timer.unref?.();
-    syncTimers.set(key, timer);
+    syncTimers.set(key, { timer, kinds: pending });
   }
   async function launchMaintenance(id: string) {
     if (maintenanceJobs.has(id)) throw new HttpError(409,"Library job is busy.");
@@ -337,9 +341,16 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           }
           if (url.pathname === "/api/editor/publish" && request.method === "POST") {
             const input = await editorBody(request);
-            const result = publishDrafts(editorLibrary, { projectId: input.projectId as string, language: input.language });
-            if (result.published.length) queueProjectSync(editorLibrary, String(input.projectId ?? ""));
-            json(200, result);
+            json(200, publishDrafts(editorLibrary, { projectId: input.projectId as string, language: input.language }));
+            return;
+          }
+          if (url.pathname === "/api/editor/sync" && request.method === "POST") {
+            const input = await editorBody(request);
+            const kinds: SyncKind[] = [];
+            if (input.translate === true) kinds.push("translate");
+            if (input.summaries === true) kinds.push("summaries");
+            if (kinds.length) queueProjectSync(editorLibrary, String(input.projectId ?? ""), kinds);
+            json(200, { queued: kinds });
             return;
           }
           if (url.pathname === "/api/editor/bom" && request.method === "GET") {

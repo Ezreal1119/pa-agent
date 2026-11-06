@@ -607,8 +607,21 @@
         return;
       }
       renderPublishIssues([]);
-      markClean(`已保存到 Library：${(value.published || []).length} 道工序，后台正在同步翻译和摘要`);
+      markClean(`已保存到 Library：${(value.published || []).length} 道工序`);
       notice("");
+      // 保存成功后再问要不要同步英文，避免不必要地调用模型。
+      const choice = await askSync();
+      if (choice !== "none") {
+        try {
+          await api("/api/editor/sync", {
+            method: "POST",
+            body: { projectId: state.projectId, translate: choice === "translate", summaries: true }
+          });
+          notice(choice === "translate" ? "后台开始同步翻译和摘要，完成后可直接导出。" : "后台开始更新摘要。");
+        } catch (error) {
+          notice(`同步请求失败：${error.message}`);
+        }
+      }
     } catch (error) {
       setState(`保存失败：${error.message}`, "bad");
       notice(error.message);
@@ -648,6 +661,15 @@
     const box = $("create-project-error");
     box.hidden = !message;
     box.textContent = message || "";
+  }
+
+  function askSync() {
+    const dialog = $("sync-dialog");
+    dialog.returnValue = "none";
+    dialog.showModal();
+    return new Promise(resolve => {
+      dialog.addEventListener("close", () => resolve(dialog.returnValue || "none"), { once: true });
+    });
   }
 
   function openCreateProjectDialog() {

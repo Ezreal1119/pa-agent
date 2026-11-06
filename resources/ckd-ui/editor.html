@@ -168,5 +168,19 @@
       </div>
     </form>
   </dialog>
+
+  <!-- 保存到 Library 成功后再问：要不要同步英文/摘要，避免每次都跑模型 -->
+  <dialog class="editor-dialog" id="sync-dialog" aria-labelledby="sync-title">
+    <form method="dialog">
+      <div class="eyebrow">SYNC</div>
+      <h2 id="sync-title">要同步英文版本吗？</h2>
+      <p class="hint">保存成功。翻译会调用模型并写入英文资料；如果这份 SOP 只需要中文，可以只更新摘要或暂不同步。</p>
+      <div class="dialog-actions">
+        <button class="button quiet" value="none" type="submit">暂不同步</button>
+        <button class="button secondary" value="summaries" type="submit">只更新摘要</button>
+        <button class="button primary" value="translate" type="submit">翻译 + 摘要</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
