@@ -993,13 +993,24 @@
       if (input.dataset.field !== "partno") return;
       const row = input.closest("tr");
       if (!row) return;
+      const index = Number(row.dataset.index);
+      const record = state.bom[index];
+      if (record) record.partno = input.value;
       const hit = state.bomIndex.get(normalizePartno(input.value));
       if (!hit) return;
       let changed = false;
       const nameInput = row.querySelector('[data-field="spec"]');
-      if (nameInput && !nameInput.value.trim() && hit.name) { nameInput.value = hit.name; changed = true; }
+      if (nameInput && !nameInput.value.trim() && hit.name) {
+        nameInput.value = hit.name;
+        if (record) record.spec = hit.name;
+        changed = true;
+      }
       const qtyInput = row.querySelector('[data-field="qty"]');
-      if (qtyInput && !qtyInput.value.trim() && hit.qty === 1) { qtyInput.value = "1"; changed = true; }
+      if (qtyInput && !qtyInput.value.trim() && hit.qty === 1) {
+        qtyInput.value = "1";
+        if (record) record.qty = "1";
+        changed = true;
+      }
       if (changed) markDirty();
     });
     $("import-bom").addEventListener("click", () => {
