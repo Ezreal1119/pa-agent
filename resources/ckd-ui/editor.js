@@ -807,8 +807,7 @@
       const value = stored[key];
       $(id).value = typeof value === "string" ? value : "";
     }
-    const project = state.projects.find(item => item.projectId === projectId);
-    if (!$("sop-name").value) $("sop-name").value = `${project ? project.displayName : projectId} Assemble`;
+    // SOP 名称不再自动填，避免和客户实际叫法不一致；留空由用户自己写。
     if (!$("sop-date").value) $("sop-date").value = new Date().toISOString().slice(0, 10);
     $("sop-info-state").textContent = stored.updatedAt ? "已存在本机" : "只存在本机";
   }
