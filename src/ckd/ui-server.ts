@@ -134,6 +134,35 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   }
   const maintenance = new LibraryMaintenance({ dataDir: service.dataDir, libraryPath: service.libraryPath, model: options.maintenanceModel, modelTimeoutMs: options.maintenanceModelTimeoutMs, imageChecker:service.imageQuality, onEvent: message => options.onEvent?.({runId:"library",type:"status",message}) });
   const maintenanceJobs = new Map<string, Promise<unknown>>();
+  // 发布后自动同步「翻译 + 摘要」：每个库一个实例（员工的库也要各自跑），防抖排队，后台执行。
+  const projectMaintenance = new Map<string, LibraryMaintenance>();
+  function maintenanceFor(libraryPath: string): LibraryMaintenance {
+    const key = path.resolve(libraryPath);
+    let instance = projectMaintenance.get(key);
+    if (!instance) {
+      instance = new LibraryMaintenance({ dataDir: service.dataDir, libraryPath: key, model: options.maintenanceModel, modelTimeoutMs: options.maintenanceModelTimeoutMs });
+      projectMaintenance.set(key, instance);
+    }
+    return instance;
+  }
+  const syncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function queueProjectSync(libraryPath: string, projectId: string): void {
+    const key = `${path.resolve(libraryPath)}|${projectId}`;
+    const previous = syncTimers.get(key);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      syncTimers.delete(key);
+      void (async () => {
+        const instance = maintenanceFor(libraryPath);
+        for (const kind of ["translate", "summaries"] as const) {
+          // 同步失败不能影响保存结果；下一次保存会再次排队。
+          try { await instance.start(kind, { projectId }); } catch { /* ignore */ }
+        }
+      })().catch(() => { /* 后台同步失败不影响页面 */ });
+    }, 2000);
+    timer.unref?.();
+    syncTimers.set(key, timer);
+  }
   async function launchMaintenance(id: string) {
     if (maintenanceJobs.has(id)) throw new HttpError(409,"Library job is busy.");
     const promise = maintenance.resume(id); maintenanceJobs.set(id,promise);
@@ -308,7 +337,9 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           }
           if (url.pathname === "/api/editor/publish" && request.method === "POST") {
             const input = await editorBody(request);
-            json(200, publishDrafts(editorLibrary, { projectId: input.projectId, language: input.language }));
+            const result = publishDrafts(editorLibrary, { projectId: input.projectId as string, language: input.language });
+            if (result.published.length) queueProjectSync(editorLibrary, String(input.projectId ?? ""));
+            json(200, result);
             return;
           }
           if (url.pathname === "/api/editor/bom" && request.method === "GET") {

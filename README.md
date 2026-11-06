@@ -473,7 +473,7 @@ Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不
 - **保存当前工序**：把当前表单原样落成草稿（允许空工序名、图片与步骤数量不一致），左侧列表标「草稿」；草稿带 `draft.json` 标记，**不进入 catalog、不参与出表**；
 - **保存到 Library**：先保存当前工序，再逐条校验该项目+语言下的全部草稿（工序名非空、图片与步骤数一致、图片 1/2/4 张），只把通过的工序转正并写入 `sops.json`；没通过的保留草稿，并在页面上列出是哪一道、缺什么。
 
-资料库里只要还有草稿，创建生成任务会被拒绝，提示先在录入页「保存到 Library」。接口上：保存草稿用 `POST /api/editor/process` 并带 `draft: true`，发布用 `POST /api/editor/publish`（`{projectId, language}`）。
+资料库里只要还有草稿，创建生成任务会被拒绝，提示先在录入页「保存到 Library」。接口上：保存草稿用 `POST /api/editor/process` 并带 `draft: true`，发布用 `POST /api/editor/publish`（`{projectId, language}`）。发布成功后，服务端会在后台自动排队一次该项目的「翻译 + 摘要」同步（防抖 2 秒、增量、失败不影响保存），避免导出时再集中同步。
 
 ### BOM 导入
 

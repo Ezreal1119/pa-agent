@@ -607,7 +607,7 @@
         return;
       }
       renderPublishIssues([]);
-      markClean(`已保存到 Library：${(value.published || []).length} 道工序`);
+      markClean(`已保存到 Library：${(value.published || []).length} 道工序，后台正在同步翻译和摘要`);
       notice("");
     } catch (error) {
       setState(`保存失败：${error.message}`, "bad");
