@@ -50,6 +50,7 @@
 - `editor` 路径捕获 `editorUserId`（上游 `authenticate()` 返回 userId），用 `clientAccess.users.get(id).account` 解析到库；管理员走 Cookie，按 `?library=<账号>` 选库，默认主库。
 - 创建任务：普通用户落自己的库，管理员可用 JSON `library` 字段；未配置管理员的本机模式仍落主库。
 - `GET /api/libraries`（管理员）返回主库 + 各用户库 + 项目数；`POST /api/users` 创建用户后立即建库。
+- `tools/ensure-user-libraries.ts`（`npm run ckd:libraries:ensure`）：部署后为现有账号一次性建库，支持 `--dry-run`，只建目录和联接，不移动项目。
 - `GET /api/editor` 返回 `library` 与仅管理员可见的 `libraries`；项目创建/工序保存/排序/删除/图片都使用解析后的库。
 
 ### 前端
