@@ -30,7 +30,7 @@
   └─ processes_lib/                      ← 唯一真源，维护只在这里跑
               ▲
               │ junction / symlink
-<dataDir>/ckd/libraries/<账号>/ckd-library-v2
+<dataDir>/ckd/library/product_lib_<账号>/ckd-library-v2
   ├─ product_lib/                        ← 该账号私有
   └─ processes_lib → 主库/processes_lib
 ```
@@ -39,7 +39,7 @@
 
 ### 新增 `src/ckd/library-registry.ts`
 
-- `accountLibraryPath(dataDir, account)`：`<dataDir>/ckd/libraries/<小写账号>/ckd-library-v2`。
+- `accountLibraryPath(dataDir, account)`：`<dataDir>/ckd/library/product_lib_<小写账号>/ckd-library-v2`。
 - `accountDirectory()`：账号 3–64 位、字母/数字开头（与 `users.ts` 一致），统一小写，拒绝 `/` 等路径字符。
 - `ensureAccountLibrary(master, dataDir, account)`：幂等建 `product_lib`，把 `processes_lib` 联接到主库；主库没有 `processes_lib` 时先建空目录；已存在但为空的可重建联接，非空独立副本保持原样。
 - `listLibraries()`：主库 + 各账号库，带 `exists`。
@@ -89,5 +89,5 @@ npx tsx --test tests/ckd-ui.test.ts            → 3/4
 ## 回滚
 
 - 代码：还原 `ui-server.ts`、`library-registry.ts`、`editor.*`、`users.*`、`index.html`、`app.js` 的本轮改动；上游用户管理可单独保留。
-- 数据：`<dataDir>/ckd/libraries/` 可整体移走；`processes_lib` 是联接，移动/删除库目录不会动到主库资料。
+- 数据：只移走 `<dataDir>/ckd/library/product_lib_*`（不要动同目录下的 `ckd-library-v2` 主库）；`processes_lib` 是联接，移动/删除库目录不会动到主库资料。
 - 本地 WIP 快照在 `wip/per-user-libraries`（`12285b8`），可用于对比或取回旧实现。

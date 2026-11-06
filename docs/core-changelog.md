@@ -562,7 +562,7 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 
 在上游 2026-11-05 普通用户管理的基础上，把共用 `product_lib` 扩展为一人一库；账号表、登录、首次改密、任务按 userId 隔离均沿用上游，未改动 `users.ts`。
 
-- 目录：每个普通账号一个 `<dataDir>/ckd/libraries/<账号小写>/ckd-library-v2`（新增 `src/ckd/library-registry.ts`）。`product_lib` 私有；`processes_lib` 用目录联接指向主库 `CKD_LIBRARY` 的 `processes_lib`（Windows junction，其他平台符号链接），翻译、摘要、图片描述只维护一份。主库就是系统管理员自己的库，存量项目全部留在主库，不做迁移。
+- 目录：每个普通账号一个 `<dataDir>/ckd/library/product_lib_<账号小写>/ckd-library-v2`（新增 `src/ckd/library-registry.ts`），和主库 `<dataDir>/ckd/library/ckd-library-v2` 并排。`product_lib` 私有；`processes_lib` 用目录联接指向主库 `CKD_LIBRARY` 的 `processes_lib`（Windows junction，其他平台符号链接），翻译、摘要、图片描述只维护一份。主库就是系统管理员自己的库，存量项目全部留在主库，不做迁移。
 - 账号目录按用户账号生成（账号 3–64 位、不可改名，因此目录稳定）；新增用户时立即建库，历史用户首次访问时惰性建库。禁用、重置密码不影响库和项目，需要清理时由运维归档。
 - 路由：`ui-server.ts` 从单 `CkdWorkflow` 改为按库缓存实例（共用同一 `dataDir`，任务列表/恢复/下载不受影响）。普通用户固定解析到自己的库，传入的 `library` 参数被忽略；管理员（系统管理员 Cookie）用 `?library=<账号>` 或创建任务 JSON 的顶层 `library` 字段选库，默认主库。
 - 接口：新增 `GET /api/libraries`（管理员）；`GET /api/editor` 返回当前库信息和（仅管理员的）库列表。未认证的本机开发模式仍落主库。

@@ -2,7 +2,7 @@
  * 为现有普通账号预建各自的资料库。
  *
  * 服务本身会在账号首次登录/录入/建任务时自动建库；这个脚本用于部署后一次性建好，
- * 方便管理员核对。只创建 <data-dir>/ckd/libraries/<账号>/ckd-library-v2 和
+ * 方便管理员核对。只创建 <data-dir>/ckd/library/product_lib_<账号>/ckd-library-v2 和
  * processes_lib 联接，不移动、不改写任何项目。
  *
  * 用法：

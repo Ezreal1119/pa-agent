@@ -2,11 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * 账号资料库：每人一个独立的 ckd-library-v2。
+ * 账号资料库：每人一个独立的 ckd-library-v2，和主库并排放在 <dataDir>/ckd/library/。
+ *
+ *   <dataDir>/ckd/library/ckd-library-v2/                 主库（管理员）
+ *   <dataDir>/ckd/library/product_lib_<账号>/ckd-library-v2/   该账号的库
  *
  * - product_lib 是私有的，只有本人（或管理员）能改；
  * - processes_lib 用目录联接指回主库，翻译/摘要/图片描述只维护一份；
- * - 主本身就是管理员自己的库，存量项目都放在这里。
+ * - 主库本身就是管理员自己的库，存量项目都放在这里。
  */
 
 /** 与 users.ts 的账号规则一致：3–64 位，字母或数字开头；目录统一转小写。 */
@@ -24,14 +27,15 @@ export interface AccountLibraryInfo {
 }
 
 export function librariesRoot(dataDir: string): string {
-  return path.join(path.resolve(dataDir), 'ckd', 'libraries');
+  // 与主库同一个父目录：CKD_LIBRARY 默认就是 <dataDir>/ckd/library/ckd-library-v2。
+  return path.join(path.resolve(dataDir), 'ckd', 'library');
 }
 
-/** 账号 → 目录名。统一小写：Windows 文件系统大小写不敏感，避免同一人出现两个库。 */
+/** 账号 → 目录名：product_lib_<小写账号>，和主库并排。 */
 export function accountDirectory(account: string): string {
   const lowered = account.trim().toLowerCase();
   if (!ACCOUNT_PATTERN.test(lowered)) throw new Error(`账号 ${account} 不能作为资料库目录名。`);
-  return lowered;
+  return `product_lib_${lowered}`;
 }
 
 export function accountLibraryPath(dataDir: string, account: string): string {
