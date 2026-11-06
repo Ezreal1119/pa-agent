@@ -573,3 +573,10 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 新增 `npm run ckd:projects:migrate`（`tools/migrate-projects.ts`）：把主库项目复制到指定账号的库（默认 copy，`--move` 可选）；支持 `--list`、`--map <json>`、`--project/--to`、`--dry-run`、`--overwrite`。目标已存在默认拒绝，`--overwrite` 会先备份到 `<dataDir>/ckd/project-backups/<账号>/`；复制不动主库，旧任务仍按冻结的主库路径恢复。
 - 验证：`npm run typecheck` 通过；`ckd-libraries` 3/3、`ckd-users` 5/5、`ckd-client` 4/5、`ckd-ui` 3/4。失败项均为 Windows 无符号链接权限的环境限制（`EPERM`，与本次改动无关）。
 - 边界与未做：同一库出表仍互斥、不同账号可并行；主库维护与员工出表可能并发，靠源文件 Hash 校验失败而不是写出混合产物；并发保存的 409 版本冲突检测、跨库移动项目、员工库备份/归档策略仍未实现。
+
+## 2026-11-06：导出表单临时只显示「装配」类型
+
+- 用户要求当前只开放装配，其余 SOP 类型先隐藏，后续按需恢复。
+- Web 工作台与桌面端表单都改为由 `app.js` 里的 `SOP_TYPE_OPTIONS` + `ENABLED_SOP_TYPES` 动态生成下拉，目前 `ENABLED_SOP_TYPES = ['assemble']`；服务端、API 和旧任务仍支持全部五种类型，直接调接口不受影响。
+- 恢复某个类型：把它的 value 加回两个 `app.js` 的 `ENABLED_SOP_TYPES` 数组即可，不需要改后端。
+- 「按此信息新建」遇到被隐藏类型的旧任务时，保持当前默认类型，不会把下拉置空。
