@@ -6,6 +6,8 @@ const { SavedFiles } = require('./saved-files.cjs');
 const metadata = require('./package.json');
 // A build profile embeds its endpoint; the development/local build keeps config.json.
 const backendUrl = metadata.ckdBackendUrl ?? require('./config.json').backendUrl;
+// 主界面也从服务器加载：改 desktop/ui 只需要更新服务器，不用重新发包。
+const remoteUiUrl = new URL('/client/', backendUrl).href;
 const productName = metadata.productName ?? 'CKD SOP';
 const backend = new BackendClient(backendUrl), saved = new SavedFiles();
 let window;
@@ -17,7 +19,9 @@ function register(name, action) {
   ipcMain.handle('ckd:' + name, async (event, ...args) => {
     const generation = sessionGeneration, changesSession = ['login', 'logout', 'changePassword'].includes(name);
     try {
-      if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !event.senderFrame.url.startsWith('ckd://ui/')) throw new ClientError(403, '请求来源无效。');
+      if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new ClientError(403, '请求来源无效。');
+      const frameUrl = event.senderFrame.url;
+      if (!(frameUrl.startsWith('ckd://ui/') || frameUrl.startsWith(remoteUiUrl))) throw new ClientError(403, '请求来源无效。');
       const value = await action(...args);
       if (!changesSession && generation !== sessionGeneration) throw new ClientError('session_changed', '登录已改变，请重试当前操作。');
       return { ok: true, value };
@@ -109,7 +113,8 @@ function createWindow() {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.on('will-prevent-unload', event => event.preventDefault());
   window.on('closed', () => { sessionGeneration++; window = undefined; saved.clear(); closeEditor(); void backend.logout().catch(() => {}); });
-  window.loadURL('ckd://ui/index.html');
+  // 优先用服务器下发的页面，断网/服务未启动时回退到本地打包版本。
+  window.loadURL(remoteUiUrl).catch(() => { void window.loadURL('ckd://ui/index.html'); });
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

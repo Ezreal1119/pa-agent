@@ -608,3 +608,12 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 发布校验：`publishDrafts` 先去掉尾部全空坑位，要求用到的每个坑位「图片 + 文字」成对，图片数不能是 3，其余按 1/2/4 版式；不满足时逐条报错。
 - 正式保存（非草稿）仍拒绝任何空坑位，避免生成端拿到错位数据。
 - 验证：`tests/ckd-editor-drafts.test.ts` 增加「有文字没配图」被拦、补齐两个坑位后发布成功；`tools/editor-check.ts`、`npm run typecheck` 通过。桌面端/浏览器实际拖拽与粘贴需实机再验。
+
+## 2026-11-06：桌面主界面远程化（热补丁）
+
+- 目标：以后改桌面端页面不再重新发包。桌面主界面原先加载打包内的 `ckd://ui/index.html`，现在优先加载后端下发的 `/client/`，断网或后端未启动时回退到本地打包版本。
+- `ui-server.ts`：新增 `/client/`、`/client/index.html`、`/client/app.js`、`/client/style.css`、`/client/image-crop.js` 静态路由，从仓库 `desktop/ui/` 读取；对这几个文件单独下发 `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'` 的 CSP，不受管理端 CSP 影响。路由在管理员 Cookie 校验之前，页面公开但只含界面代码。
+- `main.cjs`：主窗口 `loadURL(https://域名/client/)`，失败回退 `ckd://ui/index.html`；IPC 来源校验同时接受 `ckd://ui/` 和 `/client/` 前缀，防止其他来源调用 preload。
+- 打包清单仍保留 `ui/**/*` 作为离线兜底；`preload.cjs`、`backend.cjs`、令牌与文件保存逻辑不变。
+- 效果：`resources/ckd-ui/*` 和 `desktop/ui/*` 的改动都只需要服务器 `git pull`（静态文件每请求现读），不用重启或发包；仍需发新包的是 Electron 升级、`main.cjs`/`preload.cjs`/`backend.cjs` 改动、内置域名变更。首次切到远程页面需要一次新包。
+- 验证：`tests/ckd-ui.test.ts` 增加 `/client/` 页面、CSP 与静态资源断言（3/4，唯一失败仍是 Windows 符号链接环境限制）；桌面 `editor-session.test.cjs` 增加主窗口 URL 断言 2/2；`npm run typecheck` 通过。真实客户端加载 `/client/` 需实机验证。

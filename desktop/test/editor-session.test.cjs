@@ -52,6 +52,7 @@ async function fixture() {
 
 test('editor opens only after business authentication and closes on login, password change and revocation', async () => {
   const f = await fixture(); f.backend.statusCode = 403;
+  assert.equal(f.windows[0].url, 'https://backend.example/client/', '主界面改为从服务器加载');
   assert.equal((await f.call('openEditor')).code, 403); assert.equal(f.windows.length, 1);
   f.backend.statusCode = 0;
   assert.equal((await f.call('openEditor')).ok, true); const old = f.windows[1];

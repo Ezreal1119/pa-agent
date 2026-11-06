@@ -24,6 +24,16 @@ import { UserError, type User } from './users.js';
 import { ensureAccountLibrary, listLibraries } from './library-registry.js';
 
 const uiRoot = fileURLToPath(new URL("../../resources/ckd-ui/", import.meta.url));
+// 桌面主界面也由服务端下发：改 desktop/ui 只需要更新服务器，不用重新发包。
+const desktopUiRoot = fileURLToPath(new URL("../../desktop/ui/", import.meta.url));
+const clientAssets = new Map([
+  ["/client/", ["index.html", "text/html; charset=utf-8"]],
+  ["/client/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/client/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/client/style.css", ["style.css", "text/css; charset=utf-8"]],
+  ["/client/image-crop.js", ["image-crop.js", "text/javascript; charset=utf-8"]],
+]);
+const CLIENT_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const assets = new Map([["/", ["index.html", "text/html; charset=utf-8"]], ["/app.js", ["app.js", "text/javascript; charset=utf-8"]], ["/style.css", ["style.css", "text/css; charset=utf-8"]], ["/login", ["login.html", "text/html; charset=utf-8"]], ["/login.js", ["login.js", "text/javascript; charset=utf-8"]], ['/users', ['users.html', 'text/html; charset=utf-8']], ['/users.js', ['users.js', 'text/javascript; charset=utf-8']], ["/editor", ["editor.html", "text/html; charset=utf-8"]], ["/editor.js", ["editor.js", "text/javascript; charset=utf-8"]], ["/editor.css", ["editor.css", "text/css; charset=utf-8"]]]);
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -173,6 +183,14 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       const adminPrefix = prefixedAdmin ? "/admin" : "";
       const expectedOrigin = prefixedAdmin ? publicOrigin : `http://${host}`;
       const validPostOrigin = !request.headers.origin || (request.headers.origin === expectedOrigin && request.headers["x-ckd-ui"] === "1");
+      // 桌面主界面的静态文件：公开下发（页面本身不含令牌，登录走主进程 IPC），不改管理端 CSP。
+      const clientAsset = clientAssets.get(url.pathname);
+      if (request.method === "GET" && clientAsset) {
+        response.setHeader("Content-Security-Policy", CLIENT_CSP);
+        response.writeHead(200, { "Content-Type": clientAsset[1] });
+        response.end(fs.readFileSync(path.join(desktopUiRoot, clientAsset[0]!)));
+        return;
+      }
       // Desktop editor is a scoped Bearer surface; user management and the rest
       // of the Web workbench still require the administrator cookie.
       const editorSurface = url.pathname === "/editor" || url.pathname === "/editor.js" || url.pathname === "/editor.css"
