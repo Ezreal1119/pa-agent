@@ -580,3 +580,9 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - Web 工作台与桌面端表单都改为由 `app.js` 里的 `SOP_TYPE_OPTIONS` + `ENABLED_SOP_TYPES` 动态生成下拉，目前 `ENABLED_SOP_TYPES = ['assemble']`；服务端、API 和旧任务仍支持全部五种类型，直接调接口不受影响。
 - 恢复某个类型：把它的 value 加回两个 `app.js` 的 `ENABLED_SOP_TYPES` 数组即可，不需要改后端。
 - 「按此信息新建」遇到被隐藏类型的旧任务时，保持当前默认类型，不会把下拉置空。
+
+## 2026-11-06：桌面端录入页「返回工作台」可用
+
+- 问题：录入页的「返回工作台」是普通链接，桌面端录入窗口用 `will-navigate` 拦截了所有跳转，点击无响应。
+- 修复：新增 `desktop/editor-preload.cjs`，只暴露 `close` / `focusMain` 两个动作；录入窗口挂上该 preload，主进程校验发送者后关闭录入窗并把主窗切回前台。浏览器端仍走原链接。
+- 打包清单补上 `editor-preload.cjs`；桌面测试 16/17（唯一失败项是 Windows 符号链接环境限制）。

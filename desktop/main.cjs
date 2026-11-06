@@ -76,7 +76,7 @@ register('openEditor', async () => {
   if (editorWindow && !editorWindow.isDestroyed()) { editorWindow.focus(); return { ok: true }; }
   ensureEditorSession();
   editorWindow = new BrowserWindow({ width: 1320, height: 900, minWidth: 1040, minHeight: 660, title: productName + ' · 逐工序录入', backgroundColor: '#101b17', autoHideMenuBar: true,
-    webPreferences: { partition: 'editor', contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+    webPreferences: { partition: 'editor', preload: path.join(__dirname, 'editor-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   editorWindow.setMenu(null);
   editorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   editorWindow.webContents.on('will-navigate', event => event.preventDefault());
@@ -84,6 +84,19 @@ register('openEditor', async () => {
   editorWindow.on('closed', () => { if (editorWindow === openedEditor) editorWindow = undefined; });
   void editorWindow.loadURL(new URL('/admin/editor', backendUrl).href);
   return { ok: true };
+});
+
+// 录入窗口的「返回工作台」：主页面是独立窗口，关闭录入窗并把主窗切回前台。
+ipcMain.on('ckd-editor:close', event => {
+  if (!editorWindow || editorWindow.isDestroyed() || event.sender !== editorWindow.webContents) return;
+  closeEditor();
+});
+ipcMain.on('ckd-editor:focus-main', event => {
+  if (!editorWindow || editorWindow.isDestroyed() || event.sender !== editorWindow.webContents) return;
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 });
 
 function createWindow() {

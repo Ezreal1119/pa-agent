@@ -29,6 +29,7 @@
     "files": [
       "main.cjs",
       "preload.cjs",
+      "editor-preload.cjs",
       "backend.cjs",
       "saved-files.cjs",
       "config.json",

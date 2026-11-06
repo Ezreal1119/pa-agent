@@ -32,7 +32,7 @@ async function fixture() {
   const electron = {
     app: { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), on() {}, quit() {} },
     BrowserWindow: FakeWindow,
-    ipcMain: { handle: (name, action) => handlers.set(name, action) },
+    ipcMain: { handle: (name, action) => handlers.set(name, action), on: (name, action) => handlers.set(name, action) },
     session: { defaultSession: permissions, fromPartition: () => ({ ...permissions, webRequest: { onBeforeSendHeaders: (_filter, handler) => { beforeHeaders = handler; } } }) },
     protocol: { registerSchemesAsPrivileged() {}, handle() {} }, dialog: {}, shell: {}, net: {},
   };

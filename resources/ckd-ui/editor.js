@@ -662,6 +662,14 @@
 
   function bind() {
     bindSopInfo();
+    // 桌面端的「返回工作台」：录入页是独立窗口，主窗口还开着，关闭自己并切回主窗口。
+    $("back-to-workbench").addEventListener("click", event => {
+      if (!window.ckdEditor) return; // 浏览器里保持普通链接
+      event.preventDefault();
+      if (state.dirty && !confirm("当前工序有未保存的改动，确定返回工作台吗？")) return;
+      window.ckdEditor.focusMain();
+      window.ckdEditor.close();
+    });
     $("library").addEventListener("change", event => {
       const value = event.target.value;
       if (state.dirty && !confirm("当前工序有未保存的改动，确定切换资料库吗？")) {
