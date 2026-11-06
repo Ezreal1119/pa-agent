@@ -338,9 +338,9 @@
     }
   }
 
-  async function openProcess(order) {
+  async function openProcess(order, options = {}) {
     if (!state.projectId) return;
-    if (state.dirty && !confirm("当前工序有未保存的改动，确定切换吗？")) return;
+    if (!options.force && state.dirty && !confirm("当前工序还有未保存的改动，切换后会丢失，确定切换吗？")) return;
     const value = await api(`/api/editor/process?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${order}&photos=0`);
     state.current = order;
     fillForm(value.process);
@@ -490,8 +490,8 @@
         : photo));
       await loadProjects();
       await loadProcesses();
-      // 组件顺序可能被服务端按 p1..pN 重排，重新读一次最稳。
-      await openProcess(state.current);
+      // 刚从服务端保存成功，重新读取当前工序时不要再弹「未保存」确认。
+      await openProcess(state.current, { force: true });
       markClean(draft ? "已保存草稿（还没保存到 Library）" : `已保存：${result.relativePath || ""}`);
       if (result.warnings && result.warnings.length) notice(result.warnings.join("\n"));
       else notice("");
@@ -517,7 +517,7 @@
       });
       await loadProjects();
       await loadProcesses();
-      await openProcess(state.current);
+      await openProcess(state.current, { force: true });
       const issues = value.issues || [];
       if (issues.length) {
         setState(`还有 ${issues.length} 道工序没保存成功`, "bad");
