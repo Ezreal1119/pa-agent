@@ -65,7 +65,18 @@ function cellText(value: unknown): string {
   return String(value).trim();
 }
 
-function rowsFromGrid(grid: unknown[][]): { rows: BomRow[]; headers: { partno: number; name: number; qty: number } } {
+function gridCellText(cell: ExcelJS.Cell): string {
+  // 合并单元格的 master 值为 null 时，ExcelJS 的 cell.text 会抛错，退回按 value 解析。
+  try {
+    const text = cell.text;
+    if (typeof text === 'string') return text;
+  } catch {
+    // fall through
+  }
+  return cellText(cell.value);
+}
+
+function rowsFromGrid(grid: unknown[][]): { rows: BomRow[]; headers: { partno: number; name: number; qty: number } } | null {
   for (let index = 0; index < Math.min(grid.length, 15); index++) {
     const cells = (grid[index] ?? []).map(cellText);
     const columns = findColumns(cells);
@@ -83,10 +94,13 @@ function rowsFromGrid(grid: unknown[][]): { rows: BomRow[]; headers: { partno: n
         qty: qty !== null && Number.isFinite(qty) ? qty : null
       });
     }
-    if (!rows.length) throw new EditorInputError('BOM 表头识别到了，但没有数据行。');
     return { rows, headers: columns };
   }
-  throw new EditorInputError('没找到料号列，请确认表头里有「料号 / 物料编码 / Part No」之类的列名。');
+  return null;
+}
+
+function isVirtual(row: BomRow): boolean {
+  return row.name.includes('虚拟组件');
 }
 
 function parseCsv(text: string): string[][] {
@@ -146,9 +160,9 @@ export async function saveBom(library: string, input: { projectId: string; fileN
   const extension = path.extname(input.fileName).toLowerCase();
   if (!['.xlsx', '.csv'].includes(extension)) throw new EditorInputError('只支持 .xlsx 或 .csv 的 BOM，.xls 请先另存为 .xlsx。');
 
-  let grid: unknown[][];
+  let grids: unknown[][][];
   if (extension === '.csv') {
-    grid = parseCsv(input.data.toString('utf8').replace(/^\uFEFF/u, ''));
+    grids = [parseCsv(input.data.toString('utf8').replace(/^\uFEFF/u, ''))];
   } else {
     const workbook = new ExcelJS.Workbook();
     try {
@@ -156,18 +170,38 @@ export async function saveBom(library: string, input: { projectId: string; fileN
     } catch {
       throw new EditorInputError('这个文件不是有效的 xlsx，请确认没有加密或损坏。');
     }
-    const sheet = workbook.worksheets[0];
-    if (!sheet) throw new EditorInputError('Excel 里没有工作表。');
-    grid = [];
-    sheet.eachRow({ includeEmpty: false }, row => {
-      const values: unknown[] = [];
-      // 用单元格的显示文本，避免数字料号被转成科学计数法、丢掉显示格式。
-      for (let column = 1; column <= sheet.columnCount; column++) values.push(row.getCell(column).text);
-      grid.push(values);
-    });
+    if (!workbook.worksheets.length) throw new EditorInputError('Excel 里没有工作表。');
+    grids = workbook.worksheets
+      // 封面和「删除记录」不是物料清单，跳过。
+      .filter(sheet => !/删除|封面/u.test(sheet.name))
+      .map(sheet => {
+        const grid: unknown[][] = [];
+        sheet.eachRow({ includeEmpty: false }, row => {
+          const values: unknown[] = [];
+          // 用单元格的显示文本，避免数字料号被转成科学计数法、丢掉显示格式。
+          for (let column = 1; column <= sheet.columnCount; column++) values.push(gridCellText(row.getCell(column)));
+          grid.push(values);
+        });
+        return grid;
+      });
   }
 
-  const { rows } = rowsFromGrid(grid);
+  // 一个工作簿里可能有「组装 BOM」「包装 BOM」多个清单：合并，跳过虚拟组件和重复料号。
+  const rows: BomRow[] = [];
+  const seen = new Set<string>();
+  for (const grid of grids) {
+    const parsed = rowsFromGrid(grid);
+    if (!parsed) continue;
+    for (const row of parsed.rows) {
+      if (rows.length >= MAX_ROWS) break;
+      if (isVirtual(row)) continue;
+      const key = row.partno.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row);
+    }
+  }
+  if (!rows.length) throw new EditorInputError('没找到可用的 BOM 数据：请确认工作表里有「料号 / 物料编码 / 物料名称 / 用量」这类表头。');
   const info: BomInfo = { fileName: path.basename(input.fileName), importedAt: new Date().toISOString(), rows };
   fs.mkdirSync(directory, { recursive: true });
   // 保留原始文件，方便以后核对；固定名便于覆盖。

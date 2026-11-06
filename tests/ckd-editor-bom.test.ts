@@ -65,13 +65,35 @@ test('BOM import accepts Chinese headers and numeric part numbers', async t => {
 
   // 「厂商料号」不能被当成我方料号。
   const vendorOnly = await workbookBytes([['厂商料号', '名称', '用量'], ['V-001', 'PCB', 1]]);
-  await assert.rejects(saveBom(library, { projectId: 'P1', fileName: '厂商.xlsx', data: vendorOnly }), /没找到料号列/u);
+  await assert.rejects(saveBom(library, { projectId: 'P1', fileName: '厂商.xlsx', data: vendorOnly }), /没找到可用的 BOM 数据/u);
+});
+
+test('BOM import merges multiple BOM sheets and skips virtual components', async t => {
+  const { library } = fixture(t);
+  const book = new ExcelJS.Workbook();
+  book.addWorksheet('封面').addRow(['物料清单（BOM）']);
+  const assembly = book.addWorksheet('组装BOM清单');
+  assembly.addRow(['SQ69系列组装物料清单']);
+  assembly.addRow(['分类', '序号', '物料编码', '物料名称', '物料描述', '用量']);
+  assembly.addRow(['必选1', '1', '3.01.57.01624', 'FPC软板', 'SQ69DX侧键FPC', 1]);
+  assembly.addRow(['必选1', '2', '', '虚拟组件', 'SQ69BXP-组装标准件', 1]);
+  const packing = book.addWorksheet('包装BOM清单');
+  packing.addRow(['SQ69系列包装分组清单']);
+  packing.addRow(['分类', '序号', '物料编码', '物料名称', '物料描述', '用量']);
+  packing.addRow(['必选1', '1', '3.01.85.00165', '包装盒', 'i9600K包装外盒', 2]);
+  book.addWorksheet('删除记录').addRow(['物料编码', '物料名称']);
+
+  const data = Buffer.from(await book.xlsx.writeBuffer());
+  const info = await saveBom(library, { projectId: 'P1', fileName: '多清单.xlsx', data });
+  assert.equal(info.rows.length, 2);
+  assert.deepEqual(info.rows[0], { partno: '3.01.57.01624', name: 'FPC软板', qty: 1 });
+  assert.deepEqual(info.rows[1], { partno: '3.01.85.00165', name: '包装盒', qty: 2 });
 });
 
 test('BOM import rejects unknown formats and missing part-number columns', async t => {
   const { library } = fixture(t);
   await assert.rejects(saveBom(library, { projectId: 'P1', fileName: 'bom.xls', data: Buffer.from('x') }), /只支持/u);
   const noHeader = await workbookBytes([['名称', '用量'], ['外壳', 1]]);
-  await assert.rejects(saveBom(library, { projectId: 'P1', fileName: 'bom.xlsx', data: noHeader }), /没找到料号列/u);
+  await assert.rejects(saveBom(library, { projectId: 'P1', fileName: 'bom.xlsx', data: noHeader }), /没找到可用的 BOM 数据/u);
   await assert.rejects(saveBom(library, { projectId: 'NOPE', fileName: 'bom.xlsx', data: noHeader }), /不存在/u);
 });
