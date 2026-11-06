@@ -599,3 +599,12 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 接口：`POST /api/editor/process` 接受 `draft: true`；新增 `POST /api/editor/publish`。
 - 验证：新增 `tests/ckd-editor-drafts.test.ts`（草稿不进 catalog、缺工序名发布失败、补齐后发布成功、有草稿时 `CkdWorkflow.create` 被拒）；`tools/editor-check.ts` 通过；`npm run typecheck` 通过。
 - 未做：图片/步骤 UI 分开、删图保留文字、剪贴板粘贴（下一项）。
+
+## 2026-11-06：录入页改为图片 / 文本固定坑位
+
+- 用户要求图片栏和文本栏各有 4 个可移动坑位，按序号绑定但可各自输入，删图不能带走文字。
+- 前端：`editor.js` 渲染固定坑位（默认 4 个，已有工序超过 4 张时按实际数量）；左侧图片位可点击选图或接收 `Ctrl+V` 粘贴截图；「清空图片」只把该坑位置空、保留步骤文字；拖动坑位交换整对内容；步骤输入与图片彼此独立。
+- 数据：`EditorProcessInput.photos` 与 `EditorProcessRecord.photos` 允许 `null`（该坑位只有文字）。草稿写入 `draft.json` 的 `steps` + `photos`（含 null 槽位），图片文件按坑位号 `pN` 保存；读回时按 `draft.json` 还原空槽位。
+- 发布校验：`publishDrafts` 先去掉尾部全空坑位，要求用到的每个坑位「图片 + 文字」成对，图片数不能是 3，其余按 1/2/4 版式；不满足时逐条报错。
+- 正式保存（非草稿）仍拒绝任何空坑位，避免生成端拿到错位数据。
+- 验证：`tests/ckd-editor-drafts.test.ts` 增加「有文字没配图」被拦、补齐两个坑位后发布成功；`tools/editor-check.ts`、`npm run typecheck` 通过。桌面端/浏览器实际拖拽与粘贴需实机再验。

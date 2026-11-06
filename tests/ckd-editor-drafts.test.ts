@@ -54,7 +54,14 @@ test('drafts are excluded from the catalog and must pass validation before publi
   assert.equal(listProcesses(library, { projectId: 'P1', language: '中文' })[0]!.draft, true);
 
   // 补齐后发布成功，草稿标记消失，catalog 能看到。
-  saveProcess(library, { projectId: 'P1', language: '中文', order: 1, metadata: '上料', paragraphs: ['取料'], photos: [{ dataUrl: PNG }] }, { draft: true });
+  // 先验证「坑位只有文字、没有图」会被拦。
+  saveProcess(library, { projectId: 'P1', language: '中文', order: 1, metadata: '上料', paragraphs: ['第一段', '第二段'], photos: [null, { dataUrl: PNG }] }, { draft: true });
+  result = publishDrafts(library, { projectId: 'P1', language: '中文' });
+  assert.equal(result.published.length, 0);
+  assert.match(result.issues[0]!.message, /还没有配图/u);
+
+  // 两个坑位都配图后发布成功。
+  saveProcess(library, { projectId: 'P1', language: '中文', order: 1, metadata: '上料', paragraphs: ['取料', '放入治具'], photos: [{ dataUrl: PNG }, { dataUrl: PNG }] }, { draft: true });
   result = publishDrafts(library, { projectId: 'P1', language: '中文' });
   assert.deepEqual(result.issues, []);
   assert.equal(result.published.length, 1);

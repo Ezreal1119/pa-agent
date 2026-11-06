@@ -173,13 +173,16 @@ function normalizeParagraphs(value: unknown): string[] {
 
 type ResolvedPhoto =
   | { kind: "new"; bytes: Buffer; extension: "png" | "jpg" }
-  | { kind: "keep"; fileName: string; extension: "png" | "jpg" };
+  | { kind: "keep"; fileName: string; extension: "png" | "jpg" }
+  | { kind: "empty" };
 
 /**
  * 一张图要么是新上传的 dataUrl，要么是「沿用上次保存的那张」（只给文件名）。
  * 沿用很重要：改一段文字不应该让用户重新上传几十 MB 的图。
+ * null 表示坑位暂时空着（草稿允许，正式保存会被拦）。
  */
-function resolvePhoto(photo: EditorPhotoInput | undefined, index: number): ResolvedPhoto {
+function resolvePhoto(photo: EditorPhotoInput | null | undefined, index: number): ResolvedPhoto {
+  if (photo === null || photo === undefined) return { kind: "empty" };
   const label = photo?.label ? `第 ${index + 1} 张图（${photo.label}）` : `第 ${index + 1} 张图`;
   const dataUrl = typeof photo?.dataUrl === "string" ? photo.dataUrl.trim() : "";
   if (dataUrl) {
@@ -441,18 +444,23 @@ export function saveProcess(library: string, input: EditorProcessInput, options:
   if (!Array.isArray(input.photos ?? [])) throw new EditorInputError("图片列表格式不正确。");
   const rawPhotos = input.photos ?? [];
   if (rawPhotos.length > MAX_PHOTO_COUNT) throw new EditorInputError(`单道工序最多 ${MAX_PHOTO_COUNT} 张图片。`);
-  const photos = rawPhotos.map(resolvePhoto);
+  const photos = rawPhotos.map((photo, index) => resolvePhoto(photo, index));
+  if (!options.draft) {
+    // 正式保存要求坑位连续：中间空着图片会打乱「第 N 段配第 N 张图」。
+    photos.forEach((photo, index) => {
+      if (photo.kind === "empty") throw new EditorInputError(`第 ${index + 1} 个图片位还没有配图。`);
+    });
+    if (photos.length !== paragraphs.length) {
+      throw new EditorInputError(`图片 ${photos.length} 张、操作步骤 ${paragraphs.length} 段，数量不一致会配错文字。请每张图各写一段。`);
+    }
+  }
 
   const warnings: string[] = [];
   if (bom.length === 0) warnings.push("物料清单为空，Excel 的物料表会是空的。");
   if (tools.length === 0) warnings.push("工具清单为空，Excel 的工具表会是空的。");
   if (bom.length > MAX_BOM_ROWS) warnings.push(`物料 ${bom.length} 行，超过模板标准 ${MAX_BOM_ROWS} 行，超出的部分会排到续页。`);
   if (tools.length > MAX_TOOL_ROWS) warnings.push(`工具 ${tools.length} 行，超过模板标准 ${MAX_TOOL_ROWS} 行，超出的部分会排到续页。`);
-  if (!options.draft && photos.length && paragraphs.length !== photos.length) {
-    // 对方按「第 N 段配第 N 张图」对齐，数量不一致会串位，必须在这里拦住。
-    throw new EditorInputError(`图片 ${photos.length} 张、操作步骤 ${paragraphs.length} 段，数量不一致会配错文字。请每张图各写一段。`);
-  }
-  if (!photos.length && !paragraphs.length) warnings.push("这道工序既没有图片也没有步骤，Excel 会生成一页空白。");
+  if (!photos.some(photo => photo.kind !== "empty") && !paragraphs.some(Boolean)) warnings.push("这道工序既没有图片也没有步骤，Excel 会生成一页空白。");
 
   const hours = finiteNumber(input.hours);
   const manpower = finiteNumber(input.manpower);
@@ -487,13 +495,16 @@ export function saveProcess(library: string, input: EditorProcessInput, options:
       if (hours !== null) fs.writeFileSync(path.join(temporary, "standard_time.txt"), `${hours}\n`, "utf8");
       if (manpower !== null) fs.writeFileSync(path.join(temporary, "manpower.txt"), `${manpower}\n`, "utf8");
       if (options.draft) {
-        // 草稿标记：catalog 会跳过它，出表前也会被拦截。steps 单独保存，便于以后支持无图步骤。
-        fs.writeFileSync(path.join(temporary, DRAFT_FILE), `${JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), steps: paragraphs }, null, 2)}\n`, "utf8");
+        // 草稿标记：catalog 会跳过它，出表前也会被拦截。坑位与文字都原样保存，
+        // 允许「有文字没配图」的坑位，发布时再要求补齐。
+        const slots = photos.map((photo, index) => photo.kind === "empty" ? null : `p${index + 1}.${photo.extension}`);
+        fs.writeFileSync(path.join(temporary, DRAFT_FILE), `${JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), steps: paragraphs, photos: slots }, null, 2)}\n`, "utf8");
       }
-      if (photos.length) {
+      if (photos.some(photo => photo.kind !== "empty")) {
         const photoDirectory = path.join(temporary, "Operation_Photos");
         fs.mkdirSync(photoDirectory, { recursive: true });
         photos.forEach((photo, index) => {
+          if (photo.kind === "empty") return;
           const fileName = `p${index + 1}.${photo.extension}`;
           if (photo.kind === "new") {
             fs.writeFileSync(path.join(photoDirectory, fileName), photo.bytes);
@@ -570,10 +581,10 @@ function countPhotos(directory: string): number {
   return fs.readdirSync(photoDirectory).filter(name => /^p\d+\.(?:png|jpe?g)$/iu.test(name)).length;
 }
 
-function readDraftFile(directory: string): { steps?: unknown } | null {
+function readDraftFile(directory: string): { steps?: unknown; photos?: unknown } | null {
   try {
     const value: unknown = JSON.parse(fs.readFileSync(path.join(directory, DRAFT_FILE), "utf8"));
-    return value && typeof value === "object" ? (value as { steps?: unknown }) : null;
+    return value && typeof value === "object" ? (value as { steps?: unknown; photos?: unknown }) : null;
   } catch {
     return null;
   }
@@ -638,23 +649,27 @@ export function readProcess(
     ? (draftRecord!.steps as unknown[]).map(item => typeof item === "string" ? item : "")
     : operation ? operation.split(/\n[\t ]*\n+/u).map(part => part.trim()).filter(Boolean) : [];
 
-  const photos: EditorPhotoRecord[] = [];
+  const photos: (EditorPhotoRecord | null)[] = [];
   const photoDirectory = path.join(directory, "Operation_Photos");
-  if (fs.existsSync(photoDirectory)) {
+  const slotNames = Array.isArray(draftRecord?.photos) ? (draftRecord!.photos as unknown[]) : null;
+  const readSlot = (name: string): EditorPhotoRecord | null => {
+    const file = path.join(photoDirectory, name);
+    if (!fs.existsSync(file)) return null;
+    // 列表场景只要文件名，避免把几十 MB 的 base64 塞进 JSON；预览走 readPhoto。
+    if (options.includePhotos === false) return { name, dataUrl: "" };
+    const mime = name.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+    return { name, dataUrl: `data:${mime};base64,${fs.readFileSync(file).toString("base64")}` };
+  };
+  if (slotNames) {
+    // 草稿按坑位还原：null 表示这个坑位只有文字、没有图。
+    for (const name of slotNames) photos.push(typeof name === "string" && /^p\d+\.(?:png|jpe?g)$/iu.test(name) ? readSlot(name) : null);
+  } else if (fs.existsSync(photoDirectory)) {
     const entries = fs
       .readdirSync(photoDirectory)
       .map(name => ({ name, match: /^p(\d+)\.(png|jpe?g)$/iu.exec(name) }))
       .filter((entry): entry is { name: string; match: RegExpExecArray } => Boolean(entry.match))
       .sort((left, right) => Number(left.match[1]) - Number(right.match[1]));
-    for (const entry of entries) {
-      // 列表场景只要文件名，避免把几十 MB 的 base64 塞进 JSON；预览走 readPhoto。
-      if (options.includePhotos === false) {
-        photos.push({ name: entry.name, dataUrl: "" });
-        continue;
-      }
-      const mime = entry.match[2]?.toLowerCase() === "png" ? "image/png" : "image/jpeg";
-      photos.push({ name: entry.name, dataUrl: `data:${mime};base64,${fs.readFileSync(path.join(photoDirectory, entry.name)).toString("base64")}` });
-    }
+    for (const entry of entries) photos.push(readSlot(entry.name));
   }
 
   return {
@@ -772,18 +787,25 @@ export function publishDrafts(library: string, input: { projectId: unknown; lang
       const record = readProcess(library, { projectId, language, order }, { includePhotos: true });
       metadata = record.metadata;
       if (!record.metadata.trim()) throw new EditorInputError("工序名为空。");
-      if (record.photos.length && record.photos.length !== record.paragraphs.length) {
-        throw new EditorInputError(`图片 ${record.photos.length} 张、操作步骤 ${record.paragraphs.length} 段，数量不一致，请每张图各写一段。`);
+      // 去掉尾部全空坑位；剩下的必须是连续「图 + 文字」配对。
+      let last = record.photos.length - 1;
+      while (last >= 0 && record.photos[last] === null && !String(record.paragraphs[last] ?? "").trim()) last--;
+      const slots = record.photos.slice(0, last + 1);
+      const photos: { name: string; dataUrl: string }[] = [];
+      for (let index = 0; index < slots.length; index++) {
+        const photo = slots[index] ?? null, text = record.paragraphs[index] ?? "";
+        if (!photo && !text.trim()) throw new EditorInputError(`第 ${index + 1} 个坑位是空的，前面的坑位请保持连续。`);
+        if (!photo) throw new EditorInputError(`第 ${index + 1} 段只有文字、还没有配图。`);
+        if (!text.trim()) throw new EditorInputError(`第 ${index + 1} 张图还没有写操作步骤。`);
+        photos.push(photo);
       }
-      if (record.photos.length && ![1, 2, 4].includes(record.photos.length)) {
-        throw new EditorInputError(`图片 ${record.photos.length} 张，模板只支持 1 / 2 / 4 张。`);
-      }
+      if (photos.length === 3) throw new EditorInputError("图片 3 张，模板只支持 1 / 2 / 4 张。");
       saveProcess(library, {
         projectId, language, order, metadata: record.metadata,
         bom: record.bom,
         tools: record.tools.map(tool => ({ name: tool.name, specs: tool.specs, qty: tool.qty ?? undefined })),
-        paragraphs: record.paragraphs,
-        photos: record.photos.map(photo => ({ dataUrl: photo.dataUrl })),
+        paragraphs: record.paragraphs.slice(0, slots.length),
+        photos: photos.map(photo => ({ dataUrl: photo.dataUrl })),
         selfCheck: record.selfCheck, previousStationCheck: record.previousStationCheck,
         hours: record.hours ?? undefined, manpower: record.manpower ?? undefined
       });

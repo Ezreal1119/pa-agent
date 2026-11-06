@@ -215,17 +215,30 @@
     return scoped(`${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}${libraryParam ? `&library=${encodeURIComponent(libraryParam)}` : ""}`);
   }
 
+  function emptySlot(steps = "") {
+    return { kind: "empty", name: "", url: "", steps };
+  }
+
+  function ensureSlots() {
+    while (state.photos.length < 4) state.photos.push(emptySlot());
+  }
+
   function renderPhotos() {
+    ensureSlots();
     const container = $("photos");
     container.innerHTML = state.photos
       .map((photo, index) => `
-        <div class="photo-card" data-index="${index}">
-          <div class="photo-head"><span>第 ${index + 1} 张</span><button type="button" data-action="remove-photo">移除</button></div>
-          <img src="${photo.url}" alt="第 ${index + 1} 张操作图">
-          <textarea rows="3" placeholder="这张图对应的操作步骤" data-action="steps">${escapeHtml(photo.steps || "")}</textarea>
+        <div class="photo-card slot-card" data-index="${index}" draggable="true">
+          <div class="photo-head"><span>第 ${index + 1} 位</span><button type="button" data-action="remove-photo"${photo.url ? "" : " disabled"}>清空图片</button></div>
+          <div class="slot-body">
+            <div class="slot-image" data-action="pick-photo" title="点击选择图片，或直接粘贴截图">
+              ${photo.url ? `<img src="${photo.url}" alt="第 ${index + 1} 张操作图">` : '<span class="slot-empty">未配图<br>点击选择 / 粘贴</span>'}
+            </div>
+            <textarea rows="3" placeholder="第 ${index + 1} 段操作步骤（可只写文字）" data-action="steps">${escapeHtml(photo.steps || "")}</textarea>
+          </div>
         </div>`)
       .join("");
-    $("photo-count").textContent = `${state.photos.length} 张`;
+    $("photo-count").textContent = `${state.photos.filter(photo => photo.url).length} / ${state.photos.length} 张`;
   }
 
   function renderBom() {
@@ -267,12 +280,18 @@
     $("folder-label").textContent = (record.folder || "").toUpperCase();
     $("form-title").textContent = record.metadata || "新工序";
 
-    state.photos = (record.photos || []).map((photo, index) => ({
-      kind: "keep",
-      name: photo.name,
-      url: photoUrl(photo.name),
-      steps: (record.paragraphs || [])[index] || ""
-    }));
+    const photos = record.photos || [];
+    const paragraphs = record.paragraphs || [];
+    const count = Math.max(4, photos.length, paragraphs.length);
+    state.photos = Array.from({ length: count }, (_, index) => {
+      const photo = photos[index] || null;
+      return {
+        kind: photo ? "keep" : "empty",
+        name: photo ? photo.name : "",
+        url: photo ? photoUrl(photo.name) : "",
+        steps: paragraphs[index] || ""
+      };
+    });
     state.bom = (record.bom || []).map(row => ({ partno: row.partno, spec: row.spec, qty: String(row.qty) }));
     state.tools = (record.tools || []).map(row => ({ name: row.name, specs: row.specs, qty: row.qty === null ? "" : String(row.qty) }));
     renderPhotos();
@@ -365,13 +384,24 @@
     return { blob, dataUrl: canvas.toDataURL("image/jpeg", JPEG_QUALITY) };
   }
 
-  async function addFiles(files) {
+  async function addFiles(files, targetIndex = null) {
     const images = Array.from(files).filter(file => /^image\/(?:png|jpeg)$/u.test(file.type));
     if (!images.length) return;
+    let preferred = targetIndex;
     for (const file of images) {
+      let index = preferred !== null ? preferred : state.photos.findIndex(photo => !photo.url);
+      preferred = null;
+      if (index < 0) {
+        notice("坑位都已配图，请先清空一个再上传。");
+        break;
+      }
       try {
         const compressed = await compress(file);
-        state.photos.push({ kind: "new", dataUrl: compressed.dataUrl, url: URL.createObjectURL(compressed.blob), steps: "" });
+        const previous = state.photos[index];
+        state.photos[index] = {
+          kind: "new", dataUrl: compressed.dataUrl, url: URL.createObjectURL(compressed.blob),
+          steps: previous ? previous.steps || "" : ""
+        };
       } catch (error) {
         notice(`处理 ${file.name} 时出错：${error.message}`);
       }
@@ -383,7 +413,9 @@
   /* ---------------------------------------------------------------- 保存 */
 
   function currentPhotosPayload() {
-    return state.photos.map(photo => (photo.kind === "new" ? { dataUrl: photo.dataUrl } : { name: photo.name }));
+    return state.photos.map(photo => (photo.kind === "new"
+      ? { dataUrl: photo.dataUrl }
+      : photo.kind === "keep" ? { name: photo.name } : null));
   }
 
   async function persist(draft) {
@@ -784,8 +816,11 @@
       openProcess(Number(item.dataset.order));
     });
 
+    let pickIndex = null, dragIndex = null;
     $("photo-input").addEventListener("change", async event => {
-      await addFiles(event.target.files);
+      const index = pickIndex;
+      pickIndex = null;
+      await addFiles(event.target.files, index);
       event.target.value = "";
     });
 
@@ -802,19 +837,58 @@
 
     $("photos").addEventListener("input", event => {
       if (event.target.dataset.action !== "steps") return;
-      const card = event.target.closest(".photo-card");
+      const card = event.target.closest(".slot-card");
       const index = Number(card.dataset.index);
       if (state.photos[index]) state.photos[index].steps = event.target.value;
     });
     $("photos").addEventListener("click", event => {
-      if (event.target.dataset.action !== "remove-photo") return;
-      const card = event.target.closest(".photo-card");
+      const card = event.target.closest(".slot-card");
+      if (!card) return;
       const index = Number(card.dataset.index);
-      const photo = state.photos[index];
-      if (photo && photo.kind === "new" && photo.url) URL.revokeObjectURL(photo.url);
-      state.photos.splice(index, 1);
+      if (event.target.dataset.action === "remove-photo") {
+        // 只清空图片，保留这个坑位的步骤文字，避免用户重新录入。
+        const photo = state.photos[index];
+        if (photo && photo.kind === "new" && photo.url) URL.revokeObjectURL(photo.url);
+        state.photos[index] = { kind: "empty", name: "", url: "", steps: photo?.steps || "" };
+        renderPhotos();
+        markDirty();
+        return;
+      }
+      if (event.target.closest('[data-action="pick-photo"]')) {
+        pickIndex = index;
+        $("photo-input").click();
+      }
+    });
+    $("photos").addEventListener("dragstart", event => {
+      const card = event.target.closest(".slot-card");
+      if (!card) return;
+      dragIndex = Number(card.dataset.index);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    $("photos").addEventListener("dragover", event => {
+      if (event.target.closest(".slot-card")) event.preventDefault();
+    });
+    $("photos").addEventListener("drop", event => {
+      const card = event.target.closest(".slot-card");
+      if (!card || dragIndex === null) return;
+      event.preventDefault();
+      const to = Number(card.dataset.index);
+      const from = dragIndex;
+      dragIndex = null;
+      if (to === from) return;
+      const copy = [...state.photos];
+      [copy[from], copy[to]] = [copy[to], copy[from]];
+      state.photos = copy;
       renderPhotos();
       markDirty();
+    });
+    // 直接粘贴截图到录入页：填第一个空坑位。
+    document.addEventListener("paste", event => {
+      if ($("process-form").hidden) return;
+      const files = Array.from(event.clipboardData?.files || []).filter(file => /^image\//u.test(file.type));
+      if (!files.length) return;
+      event.preventDefault();
+      void addFiles(files);
     });
 
     $("add-bom").addEventListener("click", () => {
