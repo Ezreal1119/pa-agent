@@ -39,8 +39,8 @@
 
 ### 新增 `src/ckd/library-registry.ts`
 
-- `accountLibraryPath(dataDir, account)`：`<dataDir>/ckd/library/product_lib_<小写账号>/ckd-library-v2`。
-- `accountDirectory()`：账号 3–64 位、字母/数字开头（与 `users.ts` 一致），统一小写，拒绝 `/` 等路径字符。
+- `accountLibraryPath(dataDir, account)`：`<dataDir>/ckd/library/product_lib_<账号>/ckd-library-v2`。
+- `accountDirectory()`：账号 3–64 位、字母/数字开头（与 `users.ts` 一致），保留账号原样大小写，拒绝 `/` 等路径字符。
 - `ensureAccountLibrary(master, dataDir, account)`：幂等建 `product_lib`，把 `processes_lib` 联接到主库；主库没有 `processes_lib` 时先建空目录；已存在但为空的可重建联接，非空独立副本保持原样。
 - `listLibraries()`：主库 + 各账号库，带 `exists`。
 

@@ -452,7 +452,7 @@ Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不
 
 ### 账号与资料库（一人一库）
 
-每个普通账号对应一个独立的 `ckd-library-v2`，和主库并排放在 `<data-dir>/ckd/library/product_lib_<账号小写>/ckd-library-v2`：
+每个普通账号对应一个独立的 `ckd-library-v2`，和主库并排放在 `<data-dir>/ckd/library/product_lib_<账号>/ckd-library-v2`（目录后缀沿用账号原样大小写）：
 
 - `product_lib` 是该账号私有的项目目录；普通用户登录后只能看到、修改自己库里的项目；
 - `processes_lib` 是指向主库 `CKD_LIBRARY` 的目录联接（Windows 用 junction，其他平台用符号链接），公共工序资料、翻译、摘要和图片描述只维护一份；

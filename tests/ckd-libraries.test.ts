@@ -33,7 +33,7 @@ test('registry: one library per account with a shared processes_lib junction', (
   try {
     const master = masterLibrary(root), dataDir = path.join(root, 'data');
     const alice = ensureAccountLibrary(master, dataDir, 'Alice');
-    assert.equal(alice, accountLibraryPath(dataDir, 'alice'), '账号目录统一小写');
+    assert.equal(alice, accountLibraryPath(dataDir, 'Alice'), '目录名保留账号原样');
     assert.ok(fs.existsSync(path.join(alice, 'product_lib')));
     assert.equal(fs.realpathSync(path.join(alice, 'processes_lib')), fs.realpathSync(path.join(master, 'processes_lib')));
     assert.equal(fs.readFileSync(path.join(alice, 'processes_lib', 'assemble', 'camera', 'metadata.txt'), 'utf8'), 'Camera');

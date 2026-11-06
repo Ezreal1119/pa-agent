@@ -12,7 +12,7 @@ import path from 'node:path';
  * - 主库本身就是管理员自己的库，存量项目都放在这里。
  */
 
-/** 与 users.ts 的账号规则一致：3–64 位，字母或数字开头；目录统一转小写。 */
+/** 与 users.ts 的账号规则一致：3–64 位，字母或数字开头；目录保留账号原样大小写。 */
 const ACCOUNT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/u;
 
 export interface AccountLibraryInfo {
@@ -31,11 +31,11 @@ export function librariesRoot(dataDir: string): string {
   return path.join(path.resolve(dataDir), 'ckd', 'library');
 }
 
-/** 账号 → 目录名：product_lib_<小写账号>，和主库并排。 */
+/** 账号 → 目录名：product_lib_<账号原样>，和主库并排。 */
 export function accountDirectory(account: string): string {
-  const lowered = account.trim().toLowerCase();
-  if (!ACCOUNT_PATTERN.test(lowered)) throw new Error(`账号 ${account} 不能作为资料库目录名。`);
-  return `product_lib_${lowered}`;
+  const value = account.trim();
+  if (!ACCOUNT_PATTERN.test(value)) throw new Error(`账号 ${account} 不能作为资料库目录名。`);
+  return `product_lib_${value}`;
 }
 
 export function accountLibraryPath(dataDir: string, account: string): string {
