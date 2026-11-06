@@ -570,5 +570,6 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 兼容：任务 `libraryPath` 在创建时冻结，恢复、作答、取消、产物下载按任务记录的库执行。catalog 与出表脚本未改：每个库仍是完整 `ckd-library-v2`，`libraryRoots` 仍取 `dirname(run.libraryPath)`；junction 对扫描透明（测试里真实 catalog 正常读到共享工序）。
 - 测试调整：`tests/ckd-client.test.ts` 把 TARGET 项目种到 `client-test` 用户的库；`tests/ckd-users.test.ts` 的录入落盘断言改到该用户自己的库，并在 Windows 跳过 POSIX 0600 权限位断言（Windows 不保留该模式）；新增 `tests/ckd-libraries.test.ts` 覆盖建库/联接、用户隔离、管理员切库、任务落库。
 - 新增 `npm run ckd:libraries:ensure`（`tools/ensure-user-libraries.ts`）：读取 `<dataDir>/ckd/users/users.json`，为现有账号一次性建库，支持 `--dry-run`、`--data-dir`、`--library`；只建目录和 `processes_lib` 联接，不移动、不改写项目。
+- 新增 `npm run ckd:projects:migrate`（`tools/migrate-projects.ts`）：把主库项目复制到指定账号的库（默认 copy，`--move` 可选）；支持 `--list`、`--map <json>`、`--project/--to`、`--dry-run`、`--overwrite`。目标已存在默认拒绝，`--overwrite` 会先备份到 `<dataDir>/ckd/project-backups/<账号>/`；复制不动主库，旧任务仍按冻结的主库路径恢复。
 - 验证：`npm run typecheck` 通过；`ckd-libraries` 3/3、`ckd-users` 5/5、`ckd-client` 4/5、`ckd-ui` 3/4。失败项均为 Windows 无符号链接权限的环境限制（`EPERM`，与本次改动无关）。
 - 边界与未做：同一库出表仍互斥、不同账号可并行；主库维护与员工出表可能并发，靠源文件 Hash 校验失败而不是写出混合产物；并发保存的 409 版本冲突检测、跨库移动项目、员工库备份/归档策略仍未实现。
