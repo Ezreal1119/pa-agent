@@ -43,6 +43,8 @@
     bomIndex: new Map(),
     bomInfo: null,
     bom: [],
+    /** 项目类型：目前只开放 assemble；其他类型后续再接入 */
+    projectType: "assemble",
     defaultTools: DEFAULT_TOOLS.map(tool => ({ ...tool, checked: false }))
   };
 
@@ -189,6 +191,12 @@
   }
 
   /* ---------------------------------------------------------------- BOM */
+  function applyProjectType() {
+    const assemble = state.projectType === "assemble";
+    $("import-bom").hidden = !assemble;
+    $("bom-status").hidden = !assemble;
+  }
+
   function normalizePartno(value) {
     return String(value ?? "").trim().toLowerCase();
   }
@@ -858,6 +866,12 @@
 
   function bind() {
     bindSopInfo();
+    // 项目类型：目前只有 assemble 支持 BOM 导入，后续接入其他类型时在这里扩展。
+    $("project-type").addEventListener("change", event => {
+      state.projectType = event.target.value;
+      applyProjectType();
+    });
+    applyProjectType();
     // 桌面端的「返回工作台」：录入页是独立窗口，主窗口还开着，关闭自己并切回主窗口。
     $("back-to-workbench").addEventListener("click", event => {
       if (!window.ckdEditor) return; // 浏览器里保持普通链接
@@ -1063,6 +1077,7 @@
       if (changed) markDirty();
     });
     $("import-bom").addEventListener("click", () => {
+      if (state.projectType !== "assemble") { notice("只有装配项目支持导入 BOM。"); return; }
       if (!state.projectId) { notice("先选择项目。"); return; }
       $("bom-input").click();
     });

@@ -27,6 +27,13 @@
     <div id="readonly-banner" class="notice" hidden role="status"></div>
     <aside class="sidebar">
       <label class="field"><span>项目</span><select id="project"></select></label>
+      <label class="field"><span>项目类型</span><select id="project-type">
+        <option value="assemble" selected>装配（assemble）</option>
+        <option value="assembly_test" disabled>组装测试（暂未开放）</option>
+        <option value="pcba_test" disabled>PCBA 测试（暂未开放）</option>
+        <option value="aging_test" disabled>老化测试（暂未开放）</option>
+        <option value="factory_test" disabled>出厂测试（暂未开放）</option>
+      </select></label>
       <label class="field"><span>语言</span><select id="language"><option value="中文">中文</option><option value="English">English</option></select></label>
       <button class="button secondary full" id="new-project" type="button">＋ 新建项目</button>
       <button class="button secondary full" id="import-bom" type="button">⇪ 导入 BOM</button>
