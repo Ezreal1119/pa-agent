@@ -16,7 +16,7 @@ import { AssessmentCalibrationJobs } from "./image-assessment-calibration.js";
 import { readImagePolicy, saveImagePolicy, DEFAULT_POLICY } from "./image-assessment.js";
 import { PixelImageChecker, PIXEL_POLICY, PIXEL_CONFIG_HASH } from './image-pixel.js';
 import { scoringContext, scoreWithContext, checkOperationFocus } from './image-scorer.js';
-import { createProject, deleteProcess, listProcesses, listProjects, readPhoto, readProcess, reorderProcesses, saveProcess, EDITOR_SOP_TYPE } from "./editor-library.js";
+import { createProject, deleteProcess, listProcesses, listProjects, readPhoto, readProcess, reorderProcesses, saveProcess, publishDrafts, EDITOR_SOP_TYPE } from "./editor-library.js";
 import { EditorInputError, EDITOR_LANGUAGES, type EditorProcessInput } from "./editor-types.js";
 import { ClientAccess, ClientAccessError } from "./client-access.js";
 import { AdminAccess, AdminAccessError } from "./admin-access.js";
@@ -287,9 +287,16 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
             json(200, { process: readProcess(editorLibrary, { projectId, language, order }, { includePhotos: url.searchParams.get("photos") !== "0" }) });
             return;
           }
+          if (url.pathname === "/api/editor/publish" && request.method === "POST") {
+            const input = await editorBody(request);
+            json(200, publishDrafts(editorLibrary, { projectId: input.projectId, language: input.language }));
+            return;
+          }
           if (url.pathname === "/api/editor/process" && request.method === "POST") {
             const input = await editorBody(request);
-            json(200, { result: saveProcess(editorLibrary, input as unknown as EditorProcessInput) });
+            const draft = input.draft === true;
+            delete input.draft;
+            json(200, { result: saveProcess(editorLibrary, input as unknown as EditorProcessInput, { draft }) });
             return;
           }
           if (url.pathname === "/api/editor/reorder" && request.method === "POST") {

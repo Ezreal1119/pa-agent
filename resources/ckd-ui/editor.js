@@ -175,6 +175,7 @@
         <div class="process-item${process.order === state.current ? " selected" : ""}" draggable="true" data-folder="${escapeHtml(process.folder)}" data-order="${process.order}">
           <span class="process-index">${String(process.order).padStart(2, "0")}</span>
           <span class="process-name">${escapeHtml(process.metadata || "（未命名）")}</span>
+          ${process.draft ? '<span class="process-draft">草稿</span>' : ""}
           <span class="process-count">${process.photoCount} 图</span>
         </div>`)
       .join("");
@@ -385,28 +386,29 @@
     return state.photos.map(photo => (photo.kind === "new" ? { dataUrl: photo.dataUrl } : { name: photo.name }));
   }
 
-  async function save(event) {
-    event.preventDefault();
-    if (state.readOnly) { notice("这个项目不是你负责的，只能查看。需要修改请联系管理员调整负责人。"); return; }
-    if (state.current === null) return;
+  async function persist(draft) {
+    if (state.readOnly) { notice("这个项目不是你负责的，只能查看。需要修改请联系管理员调整负责人。"); return false; }
+    if (state.current === null) return false;
     const metadata = $("metadata").value.trim();
-    if (!metadata) {
-      notice("工序名不能为空，它会写进 metadata.txt 并在 Excel 里显示。");
-      $("metadata").focus();
-      return;
+    if (!draft) {
+      if (!metadata) {
+        notice("工序名不能为空，它会写进 metadata.txt 并在 Excel 里显示。");
+        $("metadata").focus();
+        return false;
+      }
+      const count = state.photos.length;
+      if (count === 3) {
+        notice("模板只支持 1 / 2 / 4 张图。3 张会没有对应版式，请改成 2 张或补一张到 4 张。");
+        return false;
+      }
+      if (count > 0 && state.photos.some(photo => !String(photo.steps || "").trim())) {
+        notice("每张图都要写一段操作步骤；图和步骤数量不一致，打印出来会串位。");
+        return false;
+      }
     }
-    const count = state.photos.length;
-    if (count === 3) {
-      notice("模板只支持 1 / 2 / 4 张图。3 张会没有对应版式，请改成 2 张或补一张到 4 张。");
-      return;
-    }
-    if (count > 0 && state.photos.some(photo => !String(photo.steps || "").trim())) {
-      notice("每张图都要写一段操作步骤；图和步骤数量不一致，打印出来会串位。");
-      return;
-    }
-    const button = $("save");
+    const button = draft ? $("save-draft") : $("save");
     button.disabled = true;
-    setState("正在保存…");
+    setState(draft ? "正在保存草稿…" : "正在保存…");
     try {
       const value = await api("/api/editor/process", {
         method: "POST",
@@ -422,7 +424,8 @@
           selfCheck: $("self-check").value,
           previousStationCheck: $("prev-check").value,
           hours: $("hours").value,
-          manpower: $("manpower").value
+          manpower: $("manpower").value,
+          draft
         }
       });
       const result = value.result || {};
@@ -433,15 +436,50 @@
       await loadProcesses();
       // 组件顺序可能被服务端按 p1..pN 重排，重新读一次最稳。
       await openProcess(state.current);
-      markClean(`已保存：${result.relativePath || ""}`);
+      markClean(draft ? "已保存草稿（还没保存到 Library）" : `已保存：${result.relativePath || ""}`);
       if (result.warnings && result.warnings.length) notice(result.warnings.join("\n"));
       else notice("");
+      return true;
     } catch (error) {
       setState(`保存失败：${error.message}`, "bad");
       notice(error.message);
+      return false;
     } finally {
       button.disabled = false;
     }
+  }
+
+  /** 「保存到 Library」：先把当前工序落成草稿，再统一校验并发布全部草稿。 */
+  async function save(event) {
+    event.preventDefault();
+    if (!(await persist(true))) return;
+    setState("正在保存到 Library…");
+    try {
+      const value = await api("/api/editor/publish", {
+        method: "POST",
+        body: { projectId: state.projectId, language: state.language }
+      });
+      await loadProjects();
+      await loadProcesses();
+      await openProcess(state.current);
+      const issues = value.issues || [];
+      if (issues.length) {
+        setState(`还有 ${issues.length} 道工序没保存成功`, "bad");
+        notice(`以下工序还不能保存到 Library：\n${issues.map(item => `${item.folder}：${item.message}`).join("\n")}`);
+        return;
+      }
+      markClean(`已保存到 Library：${(value.published || []).length} 道工序`);
+      notice("");
+    } catch (error) {
+      setState(`保存失败：${error.message}`, "bad");
+      notice(error.message);
+    }
+  }
+
+  async function saveDraft(event) {
+    if (event) event.preventDefault();
+    if (!(await persist(true))) return;
+    notice("已保存当前工序为草稿；点「保存到 Library」后才会参与出表。");
   }
 
   async function removeProcess() {
@@ -731,6 +769,7 @@
     bindProjectDialog();
     $("add-process").addEventListener("click", openBlankProcess);
     $("delete-process").addEventListener("click", removeProcess);
+    $("save-draft").addEventListener("click", saveDraft);
     $("process-form").addEventListener("submit", save);
 
     $("process-form").addEventListener("input", markDirty);

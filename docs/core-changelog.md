@@ -586,3 +586,16 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 问题：录入页的「返回工作台」是普通链接，桌面端录入窗口用 `will-navigate` 拦截了所有跳转，点击无响应。
 - 修复：新增 `desktop/editor-preload.cjs`，只暴露 `close` / `focusMain` 两个动作；录入窗口挂上该 preload，主进程校验发送者后关闭录入窗并把主窗切回前台。浏览器端仍走原链接。
 - 打包清单补上 `editor-preload.cjs`；桌面测试 16/17（唯一失败项是 Windows 符号链接环境限制）。
+
+## 2026-11-06：录入页两级保存（草稿 / 保存到 Library）
+
+- 用户要求把保存拆成两步：先随手保存当前工序，最后再统一校验并保存到 Library。
+- `saveProcess(library, input, { draft: true })`：不校验工序名非空、不校验图片与步骤数量一致，允许空工序；写入正式目录的同时落一个 `draft.json` 标记（含 `steps` 原文）。草稿仍在 `process_NN` 下，但带标记。
+- `listProcesses` / `readProcess` 返回 `draft` 标记，录入页左侧列表显示「草稿」。
+- catalog（`build-ckd-catalog-v3`）扫描项目工序时跳过带 `draft.json` 的目录，草稿不会被出表读到。
+- `publishDrafts(projectId, language)`：逐条按正式规则校验（工序名为空、图片/步骤数不一致、图片不是 1/2/4 张），通过的重新保存为正式工序并移除标记；不通过的保留草稿并返回 `{folder, metadata, message}`。
+- 出表拦截：`CkdWorkflow.create` 在创建任务前调用 `pendingDrafts(library)`，只要资料库里还有草稿就报错并列出前几道，阻止生成。
+- 录入页新增「保存当前工序」按钮；「保存到 Library」改为先保存当前工序为草稿，再调用 `/api/editor/publish`，页面逐条显示未通过的工序与原因。
+- 接口：`POST /api/editor/process` 接受 `draft: true`；新增 `POST /api/editor/publish`。
+- 验证：新增 `tests/ckd-editor-drafts.test.ts`（草稿不进 catalog、缺工序名发布失败、补齐后发布成功、有草稿时 `CkdWorkflow.create` 被拒）；`tools/editor-check.ts` 通过；`npm run typecheck` 通过。
+- 未做：图片/步骤 UI 分开、删图保留文字、剪贴板粘贴（下一项）。

@@ -81,6 +81,8 @@ export interface EditorProcessRecord {
   order: number;
   /** 文件夹名，如 process_01 */
   folder: string;
+  /** 是否还是草稿（未点「保存到 Library」）。 */
+  draft: boolean;
   metadata: string;
   bom: EditorBomRowRecord[];
   tools: EditorToolRowRecord[];

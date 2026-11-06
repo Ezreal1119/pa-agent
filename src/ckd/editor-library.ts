@@ -60,6 +60,8 @@ const MAX_ORDER = 999;
 /** 与 build-ckd-catalog-v3 的 processSequence 上限一致。 */
 const MAX_SEQUENCE_LENGTH = 30;
 const SOPS_FILE = "sops.json";
+/** 草稿标记：存在这个文件时，该工序不参与出表，直到在录入页点「保存到 Library」。 */
+const DRAFT_FILE = "draft.json";
 const RESERVED_DIRECTORIES = new Set(["CN_process", "derived", "CN_derived"]);
 
 /* -------------------------------------------------------------- 命名与校验 */
@@ -417,12 +419,15 @@ function planSopsDelete(root: string, projectId: string, folder: string): () => 
 
 /* ------------------------------------------------------------------ 写入 */
 
-export function saveProcess(library: string, input: EditorProcessInput): EditorSaveResult {
+export function saveProcess(library: string, input: EditorProcessInput, options: { draft?: boolean } = {}): EditorSaveResult {
   const root = libraryRoot(library);
   const projectId = validateProjectId(input?.projectId);
   const language = validateLanguage(input?.language);
   const order = validateOrder(input?.order);
-  const metadata = validateMetadata(input?.metadata);
+  // 草稿允许空工序名：写入前把换行压成空格，正式保存仍走严格校验。
+  const metadata = options.draft
+    ? text(input?.metadata, MAX_METADATA_LENGTH, "工序名").replace(/\r?\n/gu, " ")
+    : validateMetadata(input?.metadata);
 
   const projectRoot = path.join(root, "product_lib", projectId);
   if (!fs.existsSync(path.join(projectRoot, "project.json"))) {
@@ -443,7 +448,7 @@ export function saveProcess(library: string, input: EditorProcessInput): EditorS
   if (tools.length === 0) warnings.push("工具清单为空，Excel 的工具表会是空的。");
   if (bom.length > MAX_BOM_ROWS) warnings.push(`物料 ${bom.length} 行，超过模板标准 ${MAX_BOM_ROWS} 行，超出的部分会排到续页。`);
   if (tools.length > MAX_TOOL_ROWS) warnings.push(`工具 ${tools.length} 行，超过模板标准 ${MAX_TOOL_ROWS} 行，超出的部分会排到续页。`);
-  if (photos.length && paragraphs.length !== photos.length) {
+  if (!options.draft && photos.length && paragraphs.length !== photos.length) {
     // 对方按「第 N 段配第 N 张图」对齐，数量不一致会串位，必须在这里拦住。
     throw new EditorInputError(`图片 ${photos.length} 张、操作步骤 ${paragraphs.length} 段，数量不一致会配错文字。请每张图各写一段。`);
   }
@@ -481,6 +486,10 @@ export function saveProcess(library: string, input: EditorProcessInput): EditorS
       if (previousStationCheck) fs.writeFileSync(path.join(temporary, "Previous_Station_Check.txt"), `${previousStationCheck}\n`, "utf8");
       if (hours !== null) fs.writeFileSync(path.join(temporary, "standard_time.txt"), `${hours}\n`, "utf8");
       if (manpower !== null) fs.writeFileSync(path.join(temporary, "manpower.txt"), `${manpower}\n`, "utf8");
+      if (options.draft) {
+        // 草稿标记：catalog 会跳过它，出表前也会被拦截。steps 单独保存，便于以后支持无图步骤。
+        fs.writeFileSync(path.join(temporary, DRAFT_FILE), `${JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), steps: paragraphs }, null, 2)}\n`, "utf8");
+      }
       if (photos.length) {
         const photoDirectory = path.join(temporary, "Operation_Photos");
         fs.mkdirSync(photoDirectory, { recursive: true });
@@ -539,7 +548,7 @@ function listProcessFolders(root: string, projectId: string, language: EditorLan
     .sort((left, right) => left.localeCompare(right));
 }
 
-export function listProcesses(library: string, input: { projectId: unknown; language: unknown }): { folder: string; order: number; metadata: string; photoCount: number }[] {
+export function listProcesses(library: string, input: { projectId: unknown; language: unknown }): { folder: string; order: number; metadata: string; photoCount: number; draft: boolean }[] {
   const root = libraryRoot(library);
   const projectId = validateProjectId(input.projectId);
   const language = validateLanguage(input.language);
@@ -551,7 +560,7 @@ export function listProcesses(library: string, input: { projectId: unknown; lang
     } catch {
       metadata = "";
     }
-    return { folder, order: Number(FOLDER_PATTERN.exec(folder)?.[1] ?? 0), metadata, photoCount: countPhotos(directory) };
+    return { folder, order: Number(FOLDER_PATTERN.exec(folder)?.[1] ?? 0), metadata, photoCount: countPhotos(directory), draft: fs.existsSync(path.join(directory, DRAFT_FILE)) };
   });
 }
 
@@ -559,6 +568,15 @@ function countPhotos(directory: string): number {
   const photoDirectory = path.join(directory, "Operation_Photos");
   if (!fs.existsSync(photoDirectory)) return 0;
   return fs.readdirSync(photoDirectory).filter(name => /^p\d+\.(?:png|jpe?g)$/iu.test(name)).length;
+}
+
+function readDraftFile(directory: string): { steps?: unknown } | null {
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(path.join(directory, DRAFT_FILE), "utf8"));
+    return value && typeof value === "object" ? (value as { steps?: unknown }) : null;
+  } catch {
+    return null;
+  }
 }
 
 function readJsonl(file: string): Record<string, unknown>[] {
@@ -613,9 +631,12 @@ export function readProcess(
     qty: finiteNumber(row.qty)
   }));
 
-  // 与对方 instructionParagraphs() 的第一条规则保持一致：先按空行分段。
+  // 草稿把每一步的原文存在 draft.json 里（包括暂时没有配图的步骤），优先用它。
+  const draftRecord = readDraftFile(directory);
   const operation = readText(path.join(directory, "Operation_Instruction.txt"));
-  const paragraphs = operation ? operation.split(/\n[\t ]*\n+/u).map(part => part.trim()).filter(Boolean) : [];
+  const paragraphs = Array.isArray(draftRecord?.steps)
+    ? (draftRecord!.steps as unknown[]).map(item => typeof item === "string" ? item : "")
+    : operation ? operation.split(/\n[\t ]*\n+/u).map(part => part.trim()).filter(Boolean) : [];
 
   const photos: EditorPhotoRecord[] = [];
   const photoDirectory = path.join(directory, "Operation_Photos");
@@ -641,6 +662,7 @@ export function readProcess(
     language,
     order,
     folder,
+    draft: Boolean(draftRecord),
     metadata: readText(path.join(directory, "metadata.txt")).split("\n")[0] ?? "",
     bom,
     tools,
@@ -726,4 +748,71 @@ export function deleteProcess(library: string, input: { projectId: unknown; lang
     release();
   }
   return { folder, relativePath: path.posix.join(`product_lib/${projectId}/${ASSEMBLY_DIRECTORY}/${LANGUAGE_DIRECTORY[language]}`, folder) };
+}
+
+/* ------------------------------------------------------------------ 草稿发布 */
+
+export interface DraftIssue { folder: string; metadata: string; message: string }
+
+/**
+ * 把当前项目+语言下的所有草稿逐条按正式规则校验：
+ * 通过的去掉草稿标记、成为正式工序；不通过的保留草稿并回报原因。
+ */
+export function publishDrafts(library: string, input: { projectId: unknown; language: unknown }): { published: { folder: string; metadata: string }[]; issues: DraftIssue[] } {
+  const root = libraryRoot(library);
+  const projectId = validateProjectId(input.projectId);
+  const language = validateLanguage(input.language);
+  const parent = assemblyRoot(root, projectId, language);
+  const drafts = listProcessFolders(root, projectId, language).filter(folder => fs.existsSync(path.join(parent, folder, DRAFT_FILE)));
+  const published: { folder: string; metadata: string }[] = [], issues: DraftIssue[] = [];
+  for (const folder of drafts) {
+    const order = Number(FOLDER_PATTERN.exec(folder)?.[1] ?? 0);
+    let metadata = "";
+    try {
+      const record = readProcess(library, { projectId, language, order }, { includePhotos: true });
+      metadata = record.metadata;
+      if (!record.metadata.trim()) throw new EditorInputError("工序名为空。");
+      if (record.photos.length && record.photos.length !== record.paragraphs.length) {
+        throw new EditorInputError(`图片 ${record.photos.length} 张、操作步骤 ${record.paragraphs.length} 段，数量不一致，请每张图各写一段。`);
+      }
+      if (record.photos.length && ![1, 2, 4].includes(record.photos.length)) {
+        throw new EditorInputError(`图片 ${record.photos.length} 张，模板只支持 1 / 2 / 4 张。`);
+      }
+      saveProcess(library, {
+        projectId, language, order, metadata: record.metadata,
+        bom: record.bom,
+        tools: record.tools.map(tool => ({ name: tool.name, specs: tool.specs, qty: tool.qty ?? undefined })),
+        paragraphs: record.paragraphs,
+        photos: record.photos.map(photo => ({ dataUrl: photo.dataUrl })),
+        selfCheck: record.selfCheck, previousStationCheck: record.previousStationCheck,
+        hours: record.hours ?? undefined, manpower: record.manpower ?? undefined
+      });
+      published.push({ folder, metadata: record.metadata });
+    } catch (error) {
+      issues.push({ folder, metadata, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { published, issues };
+}
+
+/** 出表前检查：资料库里是否还有草稿（任何项目/语言）。 */
+export function pendingDrafts(library: string): { projectId: string; language: EditorLanguage; folder: string }[] {
+  let root: string;
+  try { root = libraryRoot(library); } catch { return []; }
+  const base = path.join(root, "product_lib");
+  if (!fs.existsSync(base)) return [];
+  const result: { projectId: string; language: EditorLanguage; folder: string }[] = [];
+  for (const project of fs.readdirSync(base, { withFileTypes: true })) {
+    if (!project.isDirectory() || project.name.startsWith(".")) continue;
+    for (const language of ["English", "中文"] as const) {
+      const parent = path.join(base, project.name, ASSEMBLY_DIRECTORY, LANGUAGE_DIRECTORY[language]);
+      if (!fs.existsSync(parent)) continue;
+      for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+        if (entry.isDirectory() && FOLDER_PATTERN.test(entry.name) && fs.existsSync(path.join(parent, entry.name, DRAFT_FILE))) {
+          result.push({ projectId: project.name, language, folder: entry.name });
+        }
+      }
+    }
+  }
+  return result;
 }

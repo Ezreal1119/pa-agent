@@ -16,6 +16,7 @@ import { ImageAssessmentChecker } from "./image-assessment.js";
 import { createImageScorer, scoringContext, type ImageScorer, type ImageScorerMode } from './image-scorer.js';
 import { cleanupReview, createImageReview, cropOverrides, cropReviewImage, effectiveHashes, reviewImageBytes, verifyReviewSources,repairFailedPreviews } from "./image-review-stage.js";
 import type { LibraryModel } from "./library-model.js";
+import { pendingDrafts } from "./editor-library.js";
 
 export interface CkdOptions { dataDir?: string; libraryPath?: string; resourcesDir?: string; legacyResourcesDir?: string; agent?: CkdAgent; onEvent?: (event: CkdEvent) => void; agentTimeoutMs?: number; scriptTimeoutMs?: number; imageQualityModel?: LibraryModel; imageQualityTimeoutMs?: number; imageScorer?:ImageScorerMode; imageScorerPython?:string }
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -55,6 +56,12 @@ export class CkdWorkflow {
     const libraryPath = fs.realpathSync(this.libraryPath);
     if (path.basename(libraryPath) !== "ckd-library-v2") throw new Error("Library must be a ckd-library-v2 directory.");
     if (isInside(libraryPath, this.store.root) || isInside(this.store.root, libraryPath)) throw new Error("Library and task directories must be separate.");
+    // 草稿不参与出表：只要资料库里还有草稿，就要求先在录入页保存到 Library。
+    const drafts = pendingDrafts(libraryPath);
+    if (drafts.length) {
+      const list = drafts.slice(0, 5).map(item => `${item.projectId}/${item.folder}`).join("、");
+      throw new Error(`资料库里还有未保存到 Library 的草稿工序：${list}${drafts.length > 5 ? ` 等 ${drafts.length} 道` : ""}。请先在录入页点「保存到 Library」后再出表。`);
+    }
     const id = randomUUID(); const now = new Date().toISOString();
     const run: CkdRun = { schemaVersion: 1, id, workflowName: workflow.name, status: "running", currentNodeId: workflow.nodes[0]!.id, inputs, sharedState: {}, nodeOutputs: {}, nodes: [], workspaceRoot: this.store.root, workspaceRelative: id, libraryPath, scriptHashes: assetHashes(this.resourcesDir), createdAt: now, updatedAt: now };
     if (reviewImages) run.imageReviewMode = 1;
