@@ -34,20 +34,28 @@ function findColumns(cells: string[]): { partno: number; name: number; qty: numb
     }
     return -1;
   };
-  // 先按完整表头匹配；表头写成「UROVO料号」「物料料号」「料号（我司）」这类时再按中文关键词兜底。
-  const contains = (words: string[], excludes: string[] = []) => normalized.findIndex(cell =>
+  // 客户定的映射规则：
+  //   物料号 ← 表头含「物料编码」
+  //   名称   ← 表头含「物料名称」或「名称」
+  //   数量   ← 表头含「标准用量」或「用量」
+  // 找不到时再退回通用别名（UROVO PN / 料号 / Usage for … 等），兼容另两份样例。
+  const exact = (candidates: string[]) => pick(candidates);
+  const hasWord = (words: string[], excludes: string[] = []) => normalized.findIndex(cell =>
     words.some(word => cell.includes(word)) && !excludes.some(word => cell.includes(word))
   );
-  const partno = pick(PARTNO_HEADERS) >= 0
-    ? pick(PARTNO_HEADERS)
-    : contains(['料号', '编码'], ['厂商', '供应商', '客户', '替代', 'gertec']);
+  const partnoColumn = hasWord(['物料编码'], ['厂商', '供应商', '客户', '替代', 'gertec']);
+  const partno = partnoColumn >= 0 ? partnoColumn : pick(PARTNO_HEADERS) >= 0 ? pick(PARTNO_HEADERS) : hasWord(['料号', '编码'], ['厂商', '供应商', '客户', '替代', 'gertec']);
   if (partno < 0) return null;
-  const name = pick(NAME_HEADERS) >= 0 ? pick(NAME_HEADERS) : contains(['名称', '品名', '描述']);
+  const nameColumn = hasWord(['物料名称'], ['厂商', '供应商', '客户', '替代']);
+  const name = nameColumn >= 0 ? nameColumn : hasWord(['名称']) >= 0 ? hasWord(['名称']) : pick(NAME_HEADERS) >= 0 ? pick(NAME_HEADERS) : hasWord(['品名', '描述']);
   // 客户的 BOM 用 "Usage for <项目> (EE)" 表示单机用量，旁边还有 "Total Usage for ..." 是整单总量，
   // 必须排除掉 Total，否则会把 5000 当单机用量。
-  const exactQty = pick(QTY_HEADERS);
+  const standardQty = hasWord(['标准用量']);
   const usageQty = normalized.findIndex(cell => cell.includes('usagefor') && !cell.includes('total'));
-  const qty = exactQty >= 0 ? exactQty : usageQty >= 0 ? usageQty : contains(['用量', '数量']);
+  const qty = standardQty >= 0 ? standardQty
+    : hasWord(['用量']) >= 0 ? hasWord(['用量'])
+      : usageQty >= 0 ? usageQty
+        : exact(QTY_HEADERS) >= 0 ? exact(QTY_HEADERS) : hasWord(['数量']);
   return { partno, name, qty };
 }
 

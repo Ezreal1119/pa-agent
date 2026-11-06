@@ -90,6 +90,25 @@ test('BOM import merges multiple BOM sheets and skips virtual components', async
   assert.deepEqual(info.rows[1], { partno: '3.01.85.00165', name: '包装盒', qty: 2 });
 });
 
+test('BOM import follows the agreed header mapping rules', async t => {
+  const { library } = fixture(t);
+  const data = await workbookBytes([
+    ['物料编码', '名称', '标准用量'],
+    ['1.01.001', '螺丝', 2],
+    ['1.01.002', '外壳', 1],
+  ]);
+  const info = await saveBom(library, { projectId: 'P1', fileName: '规则.xlsx', data });
+  assert.deepEqual(info.rows[0], { partno: '1.01.001', name: '螺丝', qty: 2 });
+
+  // 同时存在「物料名称」和「标准用量」时优先用它们，而不是「名称」「用量」。
+  const priority = await workbookBytes([
+    ['物料编码', '物料名称', '名称', '标准用量', '用量'],
+    ['2.02.001', '贴片电容', '别名', 3, 99],
+  ]);
+  const second = await saveBom(library, { projectId: 'P1', fileName: '优先级.xlsx', data: priority });
+  assert.deepEqual(second.rows[0], { partno: '2.02.001', name: '贴片电容', qty: 3 });
+});
+
 test('BOM import rejects unknown formats and missing part-number columns', async t => {
   const { library } = fixture(t);
   await assert.rejects(saveBom(library, { projectId: 'P1', fileName: 'bom.xls', data: Buffer.from('x') }), /只支持/u);
