@@ -653,7 +653,6 @@
   function openCreateProjectDialog() {
     const dialog = $("create-project-dialog");
     $("create-project-id").value = "";
-    $("create-project-name").value = "";
     setProjectError("");
     dialog.showModal();
     $("create-project-id").focus();
@@ -675,11 +674,10 @@
       const projectId = $("create-project-id").value.trim();
       if (!projectId) { setProjectError("项目文件夹名不能为空。"); $("create-project-id").focus(); return; }
       // 其余规则（非法字符、重名、保留名）由服务端 validateProjectId / createProject 统一拦截。
-      const displayName = $("create-project-name").value.trim();
       const resolve = projectDialogResolve;
       projectDialogResolve = null;
       dialog.close();
-      if (resolve) resolve({ projectId, displayName });
+      if (resolve) resolve({ projectId });
     });
   }
 

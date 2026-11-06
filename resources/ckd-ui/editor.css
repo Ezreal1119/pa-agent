@@ -45,7 +45,7 @@
 .save-state.bad{color:var(--danger)}
 
 /* 保存到 Library 的逐条错误：放在表单底部，不挡上面的内容 */
-.publish-issues{margin:8px 0 0;padding:12px 14px;border:1px solid #8d5d4b;background:#35251f;border-radius:10px;color:#f0c9b8;font-size:13px}
+.publish-issues{margin:8px 0 0 auto;max-width:560px;padding:12px 14px;border:1px solid #8d5d4b;background:#35251f;border-radius:10px;color:#f0c9b8;font-size:13px}
 .publish-issues strong{display:block;margin-bottom:6px;color:#ffd9c8}
 .publish-issues ul{margin:0;padding-left:18px}
 .publish-issues li{margin:2px 0;line-height:1.5}
@@ -108,3 +108,6 @@
 .default-tool td:first-child{text-align:center}
 .default-tool input[type="checkbox"]{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
 .default-tool input:disabled{opacity:.45;cursor:not-allowed}
+
+/* ????:????????? */
+.dialog-warning{display:block;margin-top:4px;color:#e06666;font-size:12px;line-height:1.5}
