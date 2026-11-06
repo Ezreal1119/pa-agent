@@ -34,17 +34,21 @@ function findColumns(cells: string[]): { partno: number; name: number; qty: numb
     }
     return -1;
   };
-  const partno = pick(PARTNO_HEADERS);
+  // 先按完整表头匹配；表头写成「UROVO料号」「物料料号」「料号（我司）」这类时再按中文关键词兜底。
+  const contains = (words: string[], excludes: string[] = []) => normalized.findIndex(cell =>
+    words.some(word => cell.includes(word)) && !excludes.some(word => cell.includes(word))
+  );
+  const partno = pick(PARTNO_HEADERS) >= 0
+    ? pick(PARTNO_HEADERS)
+    : contains(['料号', '编码'], ['厂商', '供应商', '客户', '替代', 'gertec']);
   if (partno < 0) return null;
+  const name = pick(NAME_HEADERS) >= 0 ? pick(NAME_HEADERS) : contains(['名称', '品名', '描述']);
   // 客户的 BOM 用 "Usage for <项目> (EE)" 表示单机用量，旁边还有 "Total Usage for ..." 是整单总量，
   // 必须排除掉 Total，否则会把 5000 当单机用量。
   const exactQty = pick(QTY_HEADERS);
   const usageQty = normalized.findIndex(cell => cell.includes('usagefor') && !cell.includes('total'));
-  return {
-    partno,
-    name: pick(NAME_HEADERS),
-    qty: exactQty >= 0 ? exactQty : usageQty
-  };
+  const qty = exactQty >= 0 ? exactQty : usageQty >= 0 ? usageQty : contains(['用量', '数量']);
+  return { partno, name, qty };
 }
 
 function cellText(value: unknown): string {
@@ -157,7 +161,8 @@ export async function saveBom(library: string, input: { projectId: string; fileN
     grid = [];
     sheet.eachRow({ includeEmpty: false }, row => {
       const values: unknown[] = [];
-      for (let column = 1; column <= sheet.columnCount; column++) values.push(row.getCell(column).value);
+      // 用单元格的显示文本，避免数字料号被转成科学计数法、丢掉显示格式。
+      for (let column = 1; column <= sheet.columnCount; column++) values.push(row.getCell(column).text);
       grid.push(values);
     });
   }

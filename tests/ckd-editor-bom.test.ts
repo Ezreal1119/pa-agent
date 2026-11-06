@@ -51,6 +51,23 @@ test('BOM import finds headers, keeps text part numbers and stores the original 
   assert.equal(readBom(library, 'P1'), null);
 });
 
+test('BOM import accepts Chinese headers and numeric part numbers', async t => {
+  const { library } = fixture(t);
+  const data = await workbookBytes([
+    ['物料料号', '物料名称', '用量'],
+    [3010110209, 'PCB', 1],
+    [3010115105, '贴片电容', 2],
+  ]);
+  const info = await saveBom(library, { projectId: 'P1', fileName: '中文表头.xlsx', data });
+  assert.equal(info.rows.length, 2);
+  assert.deepEqual(info.rows[0], { partno: '3010110209', name: 'PCB', qty: 1 }, '数字料号按显示文本保留');
+  assert.deepEqual(info.rows[1], { partno: '3010115105', name: '贴片电容', qty: 2 });
+
+  // 「厂商料号」不能被当成我方料号。
+  const vendorOnly = await workbookBytes([['厂商料号', '名称', '用量'], ['V-001', 'PCB', 1]]);
+  await assert.rejects(saveBom(library, { projectId: 'P1', fileName: '厂商.xlsx', data: vendorOnly }), /没找到料号列/u);
+});
+
 test('BOM import rejects unknown formats and missing part-number columns', async t => {
   const { library } = fixture(t);
   await assert.rejects(saveBom(library, { projectId: 'P1', fileName: 'bom.xls', data: Buffer.from('x') }), /只支持/u);
