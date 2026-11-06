@@ -450,6 +450,20 @@ Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不
 
 用户 API 为 `/api/client/login`、`logout`、`me`、`me/password`（POST，仅接受 currentPassword/newPassword）、`status`、`runs`、`runs/:id`、`runs/:id/answer|resume|cancel`、`runs/:id/images/:imageId`（GET 预览、POST 裁剪）、`runs/:id/generate`（POST 确认生成）和 `runs/:id/artifacts/:index`。登录提交普通账号 account/password；新版带 `X-CKD-Password-Change: 1`，结果增加 userId/mustChangePassword。需要改密的账号在旧客户端登录时返回 426 升级提示；新客户端的受限会话仅能查询本人、改密、退出。其余请求带 `Authorization: Bearer <token>`。管理员用户 API 在 `/admin/api/users`（GET 列表、POST 创建）及 `/admin/api/users/:id/status|reset-password`（POST），沿用管理员 Cookie 和来源校验。桌面创建任务继续带 `X-CKD-Image-Review: 1`；客户端由主进程发送请求，无浏览器 Origin，管理员原有 Host/Origin 检查不变。服务只监听本机，不开放 CORS。
 
+### 账号与资料库（一人一库）
+
+每个普通账号对应一个独立的 `ckd-library-v2`，位于 `<data-dir>/ckd/libraries/<账号小写>/ckd-library-v2`：
+
+- `product_lib` 是该账号私有的项目目录；普通用户登录后只能看到、修改自己库里的项目；
+- `processes_lib` 是指向主库 `CKD_LIBRARY` 的目录联接（Windows 用 junction，其他平台用符号链接），公共工序资料、翻译、摘要和图片描述只维护一份；
+- 主库就是系统管理员自己的库，部署前的存量项目全部留在主库。
+
+管理员在「用户管理」里新增用户时同时建好该账号的库，用户列表的「资料库」列显示项目数并可「打开」进入该库的录入页，可以增删改任何人的项目。工作台「导出 SOP」也有「资料库」下拉，选中后新任务落在对应的库。普通用户始终只能落在自己的库，传入其他 `library` 参数会被忽略。
+
+任务会把实际使用的 `libraryPath` 记录在任务状态里，恢复、作答和下载都按任务自己记录的库执行，与当前登录是谁无关。禁用、重置或停用账号不会删除库和项目，需要清理时由运维手动归档。接口上：`GET /api/libraries`（管理员）列出所有库，录入接口用 `?library=<账号>` 选库，创建任务的 JSON 用顶层 `library` 字段选库（仅管理员生效）。
+
+同一账号的库同一时间只允许一个出表任务（Library 排他锁），不同账号可以并行。翻译、摘要和整库同步只对主库执行；如果维护期间有人正在出表，源文件 Hash 校验会让该任务失败并要求重跑，不会写出混合版本。
+
 新版桌面端在资料准备后先运行原有图片评分，进入“等待图片确认”。此时尚未生成 Excel；每张参与 SOP 的图片可预览并按矩形裁剪，保留区域的四角和边缘可拖动，灰色区域被舍弃。可以直接点击“生成 SOP”，也可先裁剪；裁剪只写当前任务的临时副本，不修改 Library 图片，不触发重新评分或模型调用。完成页只展示 Excel 和原工序资料评分，图片评分在生成前确认页查看。关闭应用/后端重启后重新登录可继续等待中的任务；生成成功或取消时清理临时裁剪图，生成失败时保留供恢复。原图片分析缓存继续按 Hash 复用，裁剪不会写入全库评分缓存。详见 [图片确认与裁剪记录](dev-history/2026-10-14-image-review-crop.md)。
 
 文件保存先通过同一受保护产物接口的 `HEAD` 读取文件名/大小，不再重复拉取整份任务评分；再通过原生对话框选择位置并以 `GET` 流式下载。新版客户端需先部署支持 HEAD 的后端，旧版 GET 下载保持兼容。界面显示已下载 MB/总量和百分比；普通请求最多60秒，下载连续60秒无数据或总计30分钟才中断，不再在持续传输满120秒时切断。超时、断流和本地保存错误分别提示；退出登录/关闭窗口会取消未完成的下载，后端生成任务不受影响。下载完成并校验后再替换目标；取消保存对话框不报错，失败清理临时文件。应用只允许打开本次应用会话中成功保存的文件。测试包含在 `npm test`，详细交付与验证见 [桌面端记录](dev-history/2026-10-09-ckd-desktop.md)。

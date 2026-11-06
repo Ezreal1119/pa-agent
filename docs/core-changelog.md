@@ -557,3 +557,17 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 后端 UserStore、新密码与确认输入框 minlength、桌面 JavaScript 校验及文案同步改为 8–128 字符，继续按 Unicode 字符数校验；保留空格、不裁剪、原密码校验、不允许新旧相同、首次改密和会话撤销。随机初始密码长度、scrypt 参数、用户记录格式及现有密码均不变，无需用户迁移或强制重置。
 - 桌面版本及锁文件升至 0.1.10，继续内置 HTTPS 域名，并包含此前合并的工序录入与用户管理功能。重新构建 Mac ARM64/Windows x64 ZIP，不覆盖旧包。
 - 验证：用户认证与桌面专项 22/22 通过，覆盖 7/8/128/129 字符、中英文边界和真实 8 字符密码的设置/登录；类型检查、构建、JS 语法和 diff 检查通过。包内元数据及 ZIP 校验见 [发布记录](desktop-releases.md)。未部署服务器、写生产账号或调用真实模型，Windows 未做实机验证。此前 15 字符规则保留为历史记录，本条说明新规则。
+
+## 2026-11-06：一人一库（每个账号一个 product_lib，管理员管所有库）
+
+在上游 2026-11-05 普通用户管理的基础上，把共用 `product_lib` 扩展为一人一库；账号表、登录、首次改密、任务按 userId 隔离均沿用上游，未改动 `users.ts`。
+
+- 目录：每个普通账号一个 `<dataDir>/ckd/libraries/<账号小写>/ckd-library-v2`（新增 `src/ckd/library-registry.ts`）。`product_lib` 私有；`processes_lib` 用目录联接指向主库 `CKD_LIBRARY` 的 `processes_lib`（Windows junction，其他平台符号链接），翻译、摘要、图片描述只维护一份。主库就是系统管理员自己的库，存量项目全部留在主库，不做迁移。
+- 账号目录按用户账号生成（账号 3–64 位、不可改名，因此目录稳定）；新增用户时立即建库，历史用户首次访问时惰性建库。禁用、重置密码不影响库和项目，需要清理时由运维归档。
+- 路由：`ui-server.ts` 从单 `CkdWorkflow` 改为按库缓存实例（共用同一 `dataDir`，任务列表/恢复/下载不受影响）。普通用户固定解析到自己的库，传入的 `library` 参数被忽略；管理员（系统管理员 Cookie）用 `?library=<账号>` 或创建任务 JSON 的顶层 `library` 字段选库，默认主库。
+- 接口：新增 `GET /api/libraries`（管理员）；`GET /api/editor` 返回当前库信息和（仅管理员的）库列表。未认证的本机开发模式仍落主库。
+- 页面：用户管理页新增「资料库」列（项目数 + 打开录入页）；工作台「导出 SOP」新增「资料库」下拉；录入页顶栏新增管理员库选择器与「资料库：…」提示。普通用户只看到自己的库。
+- 兼容：任务 `libraryPath` 在创建时冻结，恢复、作答、取消、产物下载按任务记录的库执行。catalog 与出表脚本未改：每个库仍是完整 `ckd-library-v2`，`libraryRoots` 仍取 `dirname(run.libraryPath)`；junction 对扫描透明（测试里真实 catalog 正常读到共享工序）。
+- 测试调整：`tests/ckd-client.test.ts` 把 TARGET 项目种到 `client-test` 用户的库；`tests/ckd-users.test.ts` 的录入落盘断言改到该用户自己的库，并在 Windows 跳过 POSIX 0600 权限位断言（Windows 不保留该模式）；新增 `tests/ckd-libraries.test.ts` 覆盖建库/联接、用户隔离、管理员切库、任务落库。
+- 验证：`npm run typecheck` 通过；`ckd-libraries` 3/3、`ckd-users` 5/5、`ckd-client` 4/5、`ckd-ui` 3/4。失败项均为 Windows 无符号链接权限的环境限制（`EPERM`，与本次改动无关）。
+- 边界与未做：同一库出表仍互斥、不同账号可并行；主库维护与员工出表可能并发，靠源文件 Hash 校验失败而不是写出混合产物；并发保存的 409 版本冲突检测、跨库移动项目、员工库备份/归档策略仍未实现。

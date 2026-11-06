@@ -22,11 +22,28 @@ async function perform(action) {
   try { await action(); } catch (error) { notice(error.message); }
   finally { busy = false; for (const button of document.querySelectorAll('.users-main button')) button.disabled = false; }
 }
+async function loadLibraries() {
+  try {
+    const response = await fetch(prefix + '/api/libraries', { headers: { 'X-CKD-UI': '1' } });
+    if (!response.ok) return [];
+    return (await response.json()).libraries || [];
+  } catch { return []; }
+}
 async function refresh() {
-  const { users } = await api(''); $('users-list').replaceChildren();
+  const [{ users }, libraries] = await Promise.all([api(''), loadLibraries()]);
+  const byAccount = new Map(libraries.map(library => [library.account.toLowerCase(), library]));
+  $('users-list').replaceChildren();
   for (const user of users) {
     const row = document.createElement('tr'), actions = cell('');
-    row.append(cell(user.account), cell(user.role === 'admin' ? '系统管理员' : '普通用户'), cell(user.enabled ? '正常' : '已禁用'), cell(user.role === 'admin' ? '由服务器配置维护' : user.mustChangePassword ? '首次登录需改密' : '已设置'), actions);
+    const library = user.role === 'admin' ? libraries.find(item => item.master) : byAccount.get(user.account.toLowerCase());
+    const libraryCell = document.createElement('td');
+    if (library) {
+      const open = document.createElement('a');
+      open.href = prefix + '/editor' + (library.master ? '' : '?library=' + encodeURIComponent(library.account));
+      open.textContent = '打开';
+      libraryCell.append(document.createTextNode(`${library.projects ?? 0} 个项目 `), open);
+    } else libraryCell.textContent = '—';
+    row.append(cell(user.account), cell(user.role === 'admin' ? '系统管理员' : '普通用户'), cell(user.enabled ? '正常' : '已禁用'), cell(user.role === 'admin' ? '由服务器配置维护' : user.mustChangePassword ? '首次登录需改密' : '已设置'), libraryCell, actions);
     if (user.immutable) actions.textContent = '系统账号，不可修改';
     else {
       const status = document.createElement('button'); status.type = 'button'; status.textContent = user.enabled ? '禁用' : '启用';

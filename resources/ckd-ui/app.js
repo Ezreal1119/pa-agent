@@ -301,3 +301,17 @@ $('plan-library-sync').addEventListener('click',()=>librarySyncAction('start',tr
 $('resume-library-sync').addEventListener('click',()=>librarySyncAction('resume'));
 $('cancel-library-sync').addEventListener('click',()=>librarySyncAction('cancel'));
 setInterval(async()=>{if(!librarySyncId||!librarySyncBusy||librarySyncPolling||$('library-sync-panel').hidden)return;librarySyncPolling=true;try{const {job}=await api(`/api/library/jobs/${librarySyncId}/progress`);showLibrarySync(job);}catch(error){$('library-sync-status').textContent=error.message;}finally{librarySyncPolling=false;}},1500);
+
+/** 工作台的「资料库」下拉：管理员 cookie 才能取到列表，取不到就隐藏。 */
+async function loadWorkbenchLibraries() {
+  const field = $('library-field'), select = $('create-library');
+  if (!field || !select) return;
+  try {
+    const response = await fetch(adminUrl('/api/libraries'), { headers: { 'X-CKD-UI': '1' } });
+    if (!response.ok) { field.hidden = true; return; }
+    const { libraries } = await response.json();
+    select.replaceChildren(...libraries.map(library => new Option(`${library.name}（${library.projects ?? 0} 个项目）`, library.master ? '' : library.account)));
+    field.hidden = false;
+  } catch { field.hidden = true; }
+}
+void loadWorkbenchLibraries();

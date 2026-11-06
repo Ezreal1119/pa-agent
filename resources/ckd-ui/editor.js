@@ -9,6 +9,8 @@
   // 生产环境页面挂在 /admin/ 下（nginx 反代到本服务），而接口是根路径 /api/…。
   // 不加这个前缀，fetch("/api/…") 会打到站点根，被 nginx 转到另一个上游（502）。
   const adminBase = location.pathname.startsWith("/admin") ? "/admin" : "";
+  // 管理员可以用 ?library=<账号> 打开某个人的库；员工没有这个参数，服务端固定用自己的库。
+  const libraryParam = new URLSearchParams(location.search).get("library") || "";
   const MAX_EDGE = 1600;
   const JPEG_QUALITY = 0.82;
 
@@ -21,11 +23,16 @@
     current: null,
     photos: [],
     dirty: false,
+    /** 当前项目不是自己负责的：只读，保存与增删都被拦住 */
+    readOnly: false,
     dragFolder: null,
     /** library = 正式库；public = 待审核区（只有管理员能切） */
     scope: "library",
-    /** 管理员（cookie）才给切换开关；桌面客户端固定锁在正式库 */
-    canSwitch: false
+    /** 管理员（cookie）才给切换开关；桌面客户端固定锁在自己的库 */
+    canSwitch: false,
+    /** 当前资料库 {id, name, master, path} 与可选列表（仅管理员） */
+    library: null,
+    libraries: null
   };
 
   /* ---------------------------------------------------------------- 基础 */
@@ -36,6 +43,12 @@
     return `${path}${path.includes("?") ? "&" : "?"}scope=public`;
   }
 
+  /** 管理员打开的库：所有读写在 URL 上带 library=<账号>，服务端据此选库。 */
+  function withLibrary(path) {
+    if (!libraryParam) return path;
+    return `${path}${path.includes("?") ? "&" : "?"}library=${encodeURIComponent(libraryParam)}`;
+  }
+
   const escapeHtml = value =>
     String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 
@@ -43,7 +56,7 @@
     const { method = "GET", body } = options;
     const headers = { "X-CKD-UI": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const response = await fetch(adminBase + scoped(path), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await fetch(adminBase + scoped(withLibrary(path)), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await response.text();
     let value = null;
     try {
@@ -96,6 +109,33 @@
       .map(project => `<option value="${escapeHtml(project.projectId)}">${escapeHtml(project.displayName)}（${project.processCount} 道工序）</option>`)
       .join("");
     select.value = state.projectId;
+    renderWriteGuard();
+  }
+
+  /** 现在按资料库隔离，员工只能看到自己的库，项目本身不再有「只读」概念。 */
+  function renderWriteGuard() {
+    state.readOnly = false;
+    const banner = $("readonly-banner");
+    if (banner) banner.hidden = true;
+    for (const id of ["save", "delete-process", "add-process"]) {
+      const button = $(id);
+      if (button) button.disabled = false;
+    }
+  }
+
+  /** 管理员：资料库下拉；员工：只显示「资料库：自己的库」。 */
+  function renderLibrary() {
+    const label = $("library-label");
+    if (label) label.textContent = state.library?.name ? `资料库：${state.library.name}` : "";
+    const field = $("library-field"), select = $("library");
+    if (!field || !select) return;
+    if (!state.libraries?.length) { field.hidden = true; return; }
+    field.hidden = false;
+    select.replaceChildren(...state.libraries.map(library => new Option(
+      `${library.name}（${library.projects ?? 0} 个项目）`,
+      library.master ? "master" : library.account
+    )));
+    select.value = state.library?.id || "master";
   }
 
   async function loadProjects() {
@@ -103,7 +143,10 @@
     state.projects = value.projects || [];
     if (value.scope === "public" || value.scope === "library") state.scope = value.scope;
     state.canSwitch = value.canSwitch === true;
+    state.library = value.library || null;
+    state.libraries = value.libraries || null;
     renderScope();
+    renderLibrary();
     if (!state.projectId && state.projects.length) state.projectId = state.projects[0].projectId;
     if (state.projectId && !state.projects.some(project => project.projectId === state.projectId)) {
       state.projectId = state.projects[0] ? state.projects[0].projectId : "";
@@ -168,7 +211,7 @@
   /* ---------------------------------------------------------------- 表单填充 */
 
   function photoUrl(name) {
-    return scoped(`${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}`);
+    return scoped(`${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}${libraryParam ? `&library=${encodeURIComponent(libraryParam)}` : ""}`);
   }
 
   function renderPhotos() {
@@ -270,6 +313,7 @@
   }
 
   async function openBlankProcess() {
+    if (state.readOnly) { notice("这个项目不是你负责的，只能查看。"); return; }
     if (!state.projectId) {
       notice("先新建或选择一个项目。");
       return;
@@ -343,6 +387,7 @@
 
   async function save(event) {
     event.preventDefault();
+    if (state.readOnly) { notice("这个项目不是你负责的，只能查看。需要修改请联系管理员调整负责人。"); return; }
     if (state.current === null) return;
     const metadata = $("metadata").value.trim();
     if (!metadata) {
@@ -400,6 +445,7 @@
   }
 
   async function removeProcess() {
+    if (state.readOnly) { notice("这个项目不是你负责的，只能查看。"); return; }
     if (state.current === null) return;
     if (!confirm(`确定删除 process_${String(state.current).padStart(2, "0")} 这道工序吗？文件夹会从 Library 里删除。`)) return;
     try {
@@ -616,6 +662,17 @@
 
   function bind() {
     bindSopInfo();
+    $("library").addEventListener("change", event => {
+      const value = event.target.value;
+      if (state.dirty && !confirm("当前工序有未保存的改动，确定切换资料库吗？")) {
+        event.target.value = state.library?.id || "master";
+        return;
+      }
+      const url = new URL(location.href);
+      if (value === "master") url.searchParams.delete("library");
+      else url.searchParams.set("library", value);
+      location.href = url.toString();
+    });
     $("scope-public").addEventListener("change", async event => {
       if (state.dirty && !confirm("当前工序有未保存的改动，确定切换区域吗？")) {
         event.target.checked = !event.target.checked;
