@@ -13,6 +13,12 @@
   const libraryParam = new URLSearchParams(location.search).get("library") || "";
   const MAX_EDGE = 1600;
   const JPEG_QUALITY = 0.82;
+  /** 每道工序默认工具：未勾选时灰显、不保存，勾选后才写入 Tools.jsonl。 */
+  const DEFAULT_TOOLS = [
+    { name: "镊子", specs: "", qty: "1" },
+    { name: "静电环", specs: "", qty: "1" },
+    { name: "电批", specs: "", qty: "1" }
+  ];
 
   const state = {
     projects: [],
@@ -36,7 +42,8 @@
     /** 当前项目的 BOM：料号（小写）→ {partno,name,qty} */
     bomIndex: new Map(),
     bomInfo: null,
-    bom: []
+    bom: [],
+    defaultTools: DEFAULT_TOOLS.map(tool => ({ ...tool, checked: false }))
   };
 
   /* ---------------------------------------------------------------- 基础 */
@@ -330,8 +337,16 @@
 
   function renderTools() {
     const body = $("tool-body");
+    const defaults = state.defaultTools.map((tool, index) => `
+      <tr class="default-tool${tool.checked ? "" : " muted-tool"}" data-default="${index}">
+        <td><input type="checkbox" data-action="default-tool" ${tool.checked ? "checked" : ""} aria-label="启用${escapeHtml(tool.name)}"></td>
+        <td><input data-default-field="name" value="${escapeHtml(tool.name)}" ${tool.checked ? "" : "disabled"} autocomplete="off"></td>
+        <td><input data-default-field="specs" value="${escapeHtml(tool.specs)}" placeholder="规格" ${tool.checked ? "" : "disabled"} autocomplete="off"></td>
+        <td><input data-default-field="qty" value="${escapeHtml(tool.qty)}" inputmode="decimal" ${tool.checked ? "" : "disabled"}></td>
+        <td></td>
+      </tr>`).join("");
     if (!state.tools.length) state.tools.push({ name: "", specs: "", qty: "" });
-    body.innerHTML = state.tools
+    const custom = state.tools
       .map((row, index) => `
         <tr data-index="${index}">
           <td>${index + 1}</td>
@@ -341,6 +356,7 @@
           <td><button type="button" class="row-remove" data-action="remove-tool" aria-label="删除这一行">×</button></td>
         </tr>`)
       .join("");
+    body.innerHTML = defaults + custom;
   }
 
   function fillForm(record) {
@@ -365,7 +381,17 @@
       };
     });
     state.bom = (record.bom || []).map(row => ({ partno: row.partno, spec: row.spec, qty: String(row.qty) }));
-    state.tools = (record.tools || []).map(row => ({ name: row.name, specs: row.specs, qty: row.qty === null ? "" : String(row.qty) }));
+    // 已保存的工具里，命中的默认工具回填成勾选状态；其余作为自定义行。
+    const defaults = DEFAULT_TOOLS.map(tool => ({ ...tool, checked: false }));
+    const customTools = [];
+    for (const row of record.tools || []) {
+      const target = defaults.find(tool => tool.name === row.name && !tool.checked);
+      const qty = row.qty === null || row.qty === undefined ? "" : String(row.qty);
+      if (target) { target.checked = true; target.specs = row.specs || ""; target.qty = qty; }
+      else customTools.push({ name: row.name, specs: row.specs, qty });
+    }
+    state.defaultTools = defaults;
+    state.tools = customTools.length ? customTools : [{ name: "", specs: "", qty: "" }];
     renderPhotos();
     renderBom();
     renderTools();
@@ -416,6 +442,7 @@
     state.current = next;
     state.photos = [];
     state.bom = [{ partno: "", spec: "", qty: "" }];
+    state.defaultTools = DEFAULT_TOOLS.map(tool => ({ ...tool, checked: false }));
     state.tools = [{ name: "", specs: "", qty: "" }];
     $("metadata").value = "";
     $("prev-check").value = "";
@@ -525,7 +552,10 @@
           order: state.current,
           metadata,
           bom: state.bom,
-          tools: state.tools,
+          tools: [
+            ...state.defaultTools.filter(tool => tool.checked).map(tool => ({ name: tool.name, specs: tool.specs, qty: tool.qty })),
+            ...state.tools
+          ],
           paragraphs: state.photos.map(photo => photo.steps || ""),
           photos: currentPhotosPayload(),
           selfCheck: $("self-check").value,
@@ -1034,11 +1064,29 @@
       markDirty();
     });
     $("tool-body").addEventListener("input", event => {
+      // 默认工具行（镊子/静电环/电批）：改了才参与保存。
+      const defaultRow = event.target.closest("[data-default]");
+      if (defaultRow) {
+        const tool = state.defaultTools[Number(defaultRow.dataset.default)];
+        const defaultField = event.target.dataset.defaultField;
+        if (tool && defaultField) { tool[defaultField] = event.target.value; markDirty(); }
+        return;
+      }
       const row = event.target.closest("tr");
       const field = event.target.dataset.field;
       if (!row || !field) return;
       const index = Number(row.dataset.index);
       if (state.tools[index]) state.tools[index][field] = event.target.value;
+    });
+    $("tool-body").addEventListener("change", event => {
+      if (event.target.dataset.action !== "default-tool") return;
+      const row = event.target.closest("[data-default]");
+      const tool = row ? state.defaultTools[Number(row.dataset.default)] : undefined;
+      if (!tool) return;
+      tool.checked = event.target.checked;
+      if (tool.checked && !tool.qty) tool.qty = "1";
+      renderTools();
+      markDirty();
     });
     $("tool-body").addEventListener("click", event => {
       if (event.target.dataset.action !== "remove-tool") return;
