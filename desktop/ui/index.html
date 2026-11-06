@@ -20,7 +20,7 @@
       <section id="create-view"><div class="eyebrow">EXPORT CKD SOP</div><h1>导出 SOP</h1><p class="muted">选择 SOP 类型与模板语言，确认工序流程后导出工作簿。</p>
         <form id="create-form" class="card form-grid">
           <label>SOP 类型<select name="sopType" id="sop-type"><option value="assembly_test">Assembly Test · 整机测试</option><option value="assemble">Assembly · 装配</option><option value="pcba_test">PCBA Test · 主板测试</option><option value="aging_test">Aging Test · 老化测试</option><option value="factory_test">Factory Test · 工厂测试</option></select></label>
-          <label>模板语言<select name="templateLanguage"><option value="English">English · 英文</option><option value="中文">中文</option></select><span class="hint">使用对应语言资料。</span></label>
+          <label>模板语言<select name="templateLanguage"><option value="中文">中文</option><option value="English">English · 英文</option></select><span class="hint">使用对应语言资料。</span></label>
           <label>项目名称<input name="projectName" required maxlength="200" placeholder="例如 GPOS730"></label><label>文档编号<input name="documentNumber" required maxlength="200"></label>
           <label>SOP 名称<input name="sopName" required maxlength="200"></label><label>作者<input name="author" required maxlength="200"></label>
           <label id="revision-reason-field" hidden>修订原因<textarea name="revisionReason" rows="3" maxlength="1000" disabled placeholder="例如：调整装配流程"></textarea><span class="hint">选填，写入封面首条修订记录。</span></label>
