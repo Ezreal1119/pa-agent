@@ -79,6 +79,27 @@
     box.textContent = message;
   }
 
+  /** 发布失败的逐条原因，显示在表单底部而不是顶部。 */
+  function renderPublishIssues(issues) {
+    const box = $("publish-issues");
+    if (!box) return;
+    if (!issues || !issues.length) {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    const title = document.createElement("strong");
+    title.textContent = "以下工序还不能保存到 Library：";
+    const list = document.createElement("ul");
+    for (const item of issues) {
+      const li = document.createElement("li");
+      li.textContent = `${item.folder}：${item.message}`;
+      list.append(li);
+    }
+    box.replaceChildren(title, list);
+    box.hidden = false;
+  }
+
   function setState(text, kind) {
     const node = $("save-state");
     node.textContent = text;
@@ -297,6 +318,7 @@
     renderPhotos();
     renderBom();
     renderTools();
+    renderPublishIssues([]);
   }
 
   /**
@@ -354,6 +376,7 @@
     renderPhotos();
     renderBom();
     renderTools();
+    renderPublishIssues([]);
     renderProcessList();
     showForm(true);
     notice("");
@@ -421,6 +444,7 @@
   async function persist(draft) {
     if (state.readOnly) { notice("这个项目不是你负责的，只能查看。需要修改请联系管理员调整负责人。"); return false; }
     if (state.current === null) return false;
+    renderPublishIssues([]);
     const metadata = $("metadata").value.trim();
     if (!draft) {
       if (!metadata) {
@@ -497,9 +521,11 @@
       const issues = value.issues || [];
       if (issues.length) {
         setState(`还有 ${issues.length} 道工序没保存成功`, "bad");
-        notice(`以下工序还不能保存到 Library：\n${issues.map(item => `${item.folder}：${item.message}`).join("\n")}`);
+        renderPublishIssues(issues);
+        notice("");
         return;
       }
+      renderPublishIssues([]);
       markClean(`已保存到 Library：${(value.published || []).length} 道工序`);
       notice("");
     } catch (error) {
