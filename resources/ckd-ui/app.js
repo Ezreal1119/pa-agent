@@ -5,6 +5,16 @@ if (!adminBase) { $('admin-logout').hidden = true; $('user-management').hidden =
 const labels = { running: '正在运行', awaiting_clarification: '等待确认', completed: '已完成', failed: '运行失败', terminated: '已终止', cancelled: '已取消' };
 const stages = [['prepare-catalog','准备资料'],['resolve-project','匹配项目'],['select-sop-source','确认流程'],['resolve-processes','匹配工序'],['generate-sop','生成 Excel']];
 const types = { assemble:'Assembly', assembly_test:'Assembly Test', pcba_test:'PCBA Test', aging_test:'Aging Test', factory_test:'Factory Test' };
+/** 临时只开放「装配」：把类型加回 ENABLED_SOP_TYPES 即恢复下拉选项；服务端仍支持全部类型。 */
+const SOP_TYPE_OPTIONS = [['assembly_test','Assembly Test · 整机测试'],['assemble','Assembly · 装配'],['pcba_test','PCBA Test · 主板测试'],['aging_test','Aging Test · 老化测试'],['factory_test','Factory Test · 工厂测试']];
+const ENABLED_SOP_TYPES = ['assemble'];
+function applySopTypeOptions() {
+  const select = $('sop-type');
+  if (!select) return;
+  select.replaceChildren(...SOP_TYPE_OPTIONS.filter(([value]) => ENABLED_SOP_TYPES.includes(value)).map(([value, text]) => new Option(text, value)));
+  select.value = ENABLED_SOP_TYPES[0];
+}
+applySopTypeOptions();
 let current = null, selectedId = null, pending = false, shownQuestion = null, generation = 0;
 let viewingTrash=false,listRequest=0;
 const trashToggle=document.createElement('button');trashToggle.type='button';trashToggle.className='text-button';trashToggle.textContent='回收站';$('refresh').parentElement.append(trashToggle);
@@ -48,7 +58,7 @@ function newTask(input) {
   generation++; selectedId=null; current=null; shownQuestion=null; remember(null); notice('');
   $('create-view').hidden=false; $('run-view').hidden=true;
   $('create-form').reset();
-  if(input) { const form=$('create-form'); for(const key of ['sopType','templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent']) if(input[key]!==undefined && input[key]!=='') form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
+  if(input) { const form=$('create-form'); const select=form.elements.sopType; if(input.sopType!==undefined && [...select.options].some(option=>option.value===input.sopType)) select.value=input.sopType; for(const key of ['templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent']) if(input[key]!==undefined && input[key]!=='') form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
   factoryVisibility(); refreshCoverHint(); void refreshList();
 }
 async function refreshList() {
@@ -301,3 +311,17 @@ $('plan-library-sync').addEventListener('click',()=>librarySyncAction('start',tr
 $('resume-library-sync').addEventListener('click',()=>librarySyncAction('resume'));
 $('cancel-library-sync').addEventListener('click',()=>librarySyncAction('cancel'));
 setInterval(async()=>{if(!librarySyncId||!librarySyncBusy||librarySyncPolling||$('library-sync-panel').hidden)return;librarySyncPolling=true;try{const {job}=await api(`/api/library/jobs/${librarySyncId}/progress`);showLibrarySync(job);}catch(error){$('library-sync-status').textContent=error.message;}finally{librarySyncPolling=false;}},1500);
+
+/** 工作台的「资料库」下拉：管理员 cookie 才能取到列表，取不到就隐藏。 */
+async function loadWorkbenchLibraries() {
+  const field = $('library-field'), select = $('create-library');
+  if (!field || !select) return;
+  try {
+    const response = await fetch(adminUrl('/api/libraries'), { headers: { 'X-CKD-UI': '1' } });
+    if (!response.ok) { field.hidden = true; return; }
+    const { libraries } = await response.json();
+    select.replaceChildren(...libraries.map(library => new Option(`${library.name}（${library.projects ?? 0} 个项目）`, library.master ? '' : library.account)));
+    field.hidden = false;
+  } catch { field.hidden = true; }
+}
+void loadWorkbenchLibraries();

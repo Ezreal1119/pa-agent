@@ -557,3 +557,97 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 后端 UserStore、新密码与确认输入框 minlength、桌面 JavaScript 校验及文案同步改为 8–128 字符，继续按 Unicode 字符数校验；保留空格、不裁剪、原密码校验、不允许新旧相同、首次改密和会话撤销。随机初始密码长度、scrypt 参数、用户记录格式及现有密码均不变，无需用户迁移或强制重置。
 - 桌面版本及锁文件升至 0.1.10，继续内置 HTTPS 域名，并包含此前合并的工序录入与用户管理功能。重新构建 Mac ARM64/Windows x64 ZIP，不覆盖旧包。
 - 验证：用户认证与桌面专项 22/22 通过，覆盖 7/8/128/129 字符、中英文边界和真实 8 字符密码的设置/登录；类型检查、构建、JS 语法和 diff 检查通过。包内元数据及 ZIP 校验见 [发布记录](desktop-releases.md)。未部署服务器、写生产账号或调用真实模型，Windows 未做实机验证。此前 15 字符规则保留为历史记录，本条说明新规则。
+
+## 2026-11-06：一人一库（每个账号一个 product_lib，管理员管所有库）
+
+在上游 2026-11-05 普通用户管理的基础上，把共用 `product_lib` 扩展为一人一库；账号表、登录、首次改密、任务按 userId 隔离均沿用上游，未改动 `users.ts`。
+
+- 目录：每个普通账号一个 `<dataDir>/ckd/library/product_lib_<账号>/ckd-library-v2`（新增 `src/ckd/library-registry.ts`），和主库 `<dataDir>/ckd/library/ckd-library-v2` 并排，目录后缀沿用账号原样大小写。`product_lib` 私有；`processes_lib` 用目录联接指向主库 `CKD_LIBRARY` 的 `processes_lib`（Windows junction，其他平台符号链接），翻译、摘要、图片描述只维护一份。主库就是系统管理员自己的库，存量项目全部留在主库，不做迁移。
+- 账号目录按用户账号生成（账号 3–64 位、不可改名，因此目录稳定）；新增用户时立即建库，历史用户首次访问时惰性建库。禁用、重置密码不影响库和项目，需要清理时由运维归档。
+- 路由：`ui-server.ts` 从单 `CkdWorkflow` 改为按库缓存实例（共用同一 `dataDir`，任务列表/恢复/下载不受影响）。普通用户固定解析到自己的库，传入的 `library` 参数被忽略；管理员（系统管理员 Cookie）用 `?library=<账号>` 或创建任务 JSON 的顶层 `library` 字段选库，默认主库。
+- 接口：新增 `GET /api/libraries`（管理员）；`GET /api/editor` 返回当前库信息和（仅管理员的）库列表。未认证的本机开发模式仍落主库。
+- 页面：用户管理页新增「资料库」列（项目数 + 打开录入页）；工作台「导出 SOP」新增「资料库」下拉；录入页顶栏新增管理员库选择器与「资料库：…」提示。普通用户只看到自己的库。
+- 兼容：任务 `libraryPath` 在创建时冻结，恢复、作答、取消、产物下载按任务记录的库执行。catalog 与出表脚本未改：每个库仍是完整 `ckd-library-v2`，`libraryRoots` 仍取 `dirname(run.libraryPath)`；junction 对扫描透明（测试里真实 catalog 正常读到共享工序）。
+- 测试调整：`tests/ckd-client.test.ts` 把 TARGET 项目种到 `client-test` 用户的库；`tests/ckd-users.test.ts` 的录入落盘断言改到该用户自己的库，并在 Windows 跳过 POSIX 0600 权限位断言（Windows 不保留该模式）；新增 `tests/ckd-libraries.test.ts` 覆盖建库/联接、用户隔离、管理员切库、任务落库。
+- 新增 `npm run ckd:libraries:ensure`（`tools/ensure-user-libraries.ts`）：读取 `<dataDir>/ckd/users/users.json`，为现有账号一次性建库，支持 `--dry-run`、`--data-dir`、`--library`；只建目录和 `processes_lib` 联接，不移动、不改写项目。
+- 新增 `npm run ckd:projects:migrate`（`tools/migrate-projects.ts`）：把主库项目复制到指定账号的库（默认 copy，`--move` 可选）；支持 `--list`、`--map <json>`、`--project/--to`、`--dry-run`、`--overwrite`。目标已存在默认拒绝，`--overwrite` 会先备份到 `<dataDir>/ckd/project-backups/<账号>/`；复制不动主库，旧任务仍按冻结的主库路径恢复。
+- 验证：`npm run typecheck` 通过；`ckd-libraries` 3/3、`ckd-users` 5/5、`ckd-client` 4/5、`ckd-ui` 3/4。失败项均为 Windows 无符号链接权限的环境限制（`EPERM`，与本次改动无关）。
+- 边界与未做：同一库出表仍互斥、不同账号可并行；主库维护与员工出表可能并发，靠源文件 Hash 校验失败而不是写出混合产物；并发保存的 409 版本冲突检测、跨库移动项目、员工库备份/归档策略仍未实现。
+
+## 2026-11-06：导出表单临时只显示「装配」类型
+
+- 用户要求当前只开放装配，其余 SOP 类型先隐藏，后续按需恢复。
+- Web 工作台与桌面端表单都改为由 `app.js` 里的 `SOP_TYPE_OPTIONS` + `ENABLED_SOP_TYPES` 动态生成下拉，目前 `ENABLED_SOP_TYPES = ['assemble']`；服务端、API 和旧任务仍支持全部五种类型，直接调接口不受影响。
+- 恢复某个类型：把它的 value 加回两个 `app.js` 的 `ENABLED_SOP_TYPES` 数组即可，不需要改后端。
+- 「按此信息新建」遇到被隐藏类型的旧任务时，保持当前默认类型，不会把下拉置空。
+
+## 2026-11-06：桌面端录入页「返回工作台」可用
+
+- 问题：录入页的「返回工作台」是普通链接，桌面端录入窗口用 `will-navigate` 拦截了所有跳转，点击无响应。
+- 修复：新增 `desktop/editor-preload.cjs`，只暴露 `close` / `focusMain` 两个动作；录入窗口挂上该 preload，主进程校验发送者后关闭录入窗并把主窗切回前台。浏览器端仍走原链接。
+- 打包清单补上 `editor-preload.cjs`；桌面测试 16/17（唯一失败项是 Windows 符号链接环境限制）。
+
+## 2026-11-06：录入页两级保存（草稿 / 保存到 Library）
+
+- 用户要求把保存拆成两步：先随手保存当前工序，最后再统一校验并保存到 Library。
+- `saveProcess(library, input, { draft: true })`：不校验工序名非空、不校验图片与步骤数量一致，允许空工序；写入正式目录的同时落一个 `draft.json` 标记（含 `steps` 原文）。草稿仍在 `process_NN` 下，但带标记。
+- `listProcesses` / `readProcess` 返回 `draft` 标记，录入页左侧列表显示「草稿」。
+- catalog（`build-ckd-catalog-v3`）扫描项目工序时跳过带 `draft.json` 的目录，草稿不会被出表读到。
+- `publishDrafts(projectId, language)`：逐条按正式规则校验（工序名为空、图片/步骤数不一致、图片不是 1/2/4 张），通过的重新保存为正式工序并移除标记；不通过的保留草稿并返回 `{folder, metadata, message}`。
+- 出表拦截：`CkdWorkflow.create` 在创建任务前调用 `pendingDrafts(library)`，只要资料库里还有草稿就报错并列出前几道，阻止生成。
+- 录入页新增「保存当前工序」按钮；「保存到 Library」改为先保存当前工序为草稿，再调用 `/api/editor/publish`，页面逐条显示未通过的工序与原因。
+- 接口：`POST /api/editor/process` 接受 `draft: true`；新增 `POST /api/editor/publish`。
+- 验证：新增 `tests/ckd-editor-drafts.test.ts`（草稿不进 catalog、缺工序名发布失败、补齐后发布成功、有草稿时 `CkdWorkflow.create` 被拒）；`tools/editor-check.ts` 通过；`npm run typecheck` 通过。
+- 未做：图片/步骤 UI 分开、删图保留文字、剪贴板粘贴（下一项）。
+
+## 2026-11-06：录入页改为图片 / 文本固定坑位
+
+- 用户要求图片栏和文本栏各有 4 个可移动坑位，按序号绑定但可各自输入，删图不能带走文字。
+- 前端：`editor.js` 渲染固定坑位（默认 4 个，已有工序超过 4 张时按实际数量）；左侧图片位可点击选图或接收 `Ctrl+V` 粘贴截图；「清空图片」只把该坑位置空、保留步骤文字；拖动坑位交换整对内容；步骤输入与图片彼此独立。
+- 数据：`EditorProcessInput.photos` 与 `EditorProcessRecord.photos` 允许 `null`（该坑位只有文字）。草稿写入 `draft.json` 的 `steps` + `photos`（含 null 槽位），图片文件按坑位号 `pN` 保存；读回时按 `draft.json` 还原空槽位。
+- 发布校验：`publishDrafts` 先去掉尾部全空坑位，要求用到的每个坑位「图片 + 文字」成对，图片数不能是 3，其余按 1/2/4 版式；不满足时逐条报错。
+- 正式保存（非草稿）仍拒绝任何空坑位，避免生成端拿到错位数据。
+- 验证：`tests/ckd-editor-drafts.test.ts` 增加「有文字没配图」被拦、补齐两个坑位后发布成功；`tools/editor-check.ts`、`npm run typecheck` 通过。桌面端/浏览器实际拖拽与粘贴需实机再验。
+
+## 2026-11-06：桌面主界面远程化（热补丁）
+
+- 目标：以后改桌面端页面不再重新发包。桌面主界面原先加载打包内的 `ckd://ui/index.html`，现在优先加载后端下发的 `/client/`，断网或后端未启动时回退到本地打包版本。
+- `ui-server.ts`：新增 `/client/`、`/client/index.html`、`/client/app.js`、`/client/style.css`、`/client/image-crop.js` 静态路由，从仓库 `desktop/ui/` 读取；对这几个文件单独下发 `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'` 的 CSP，不受管理端 CSP 影响。路由在管理员 Cookie 校验之前，页面公开但只含界面代码。
+- `main.cjs`：主窗口 `loadURL(https://域名/client/)`，失败回退 `ckd://ui/index.html`；IPC 来源校验同时接受 `ckd://ui/` 和 `/client/` 前缀，防止其他来源调用 preload。
+- 打包清单仍保留 `ui/**/*` 作为离线兜底；`preload.cjs`、`backend.cjs`、令牌与文件保存逻辑不变。
+- 效果：`resources/ckd-ui/*` 和 `desktop/ui/*` 的改动都只需要服务器 `git pull`（静态文件每请求现读），不用重启或发包；仍需发新包的是 Electron 升级、`main.cjs`/`preload.cjs`/`backend.cjs` 改动、内置域名变更。首次切到远程页面需要一次新包。
+- 验证：`tests/ckd-ui.test.ts` 增加 `/client/` 页面、CSP 与静态资源断言（3/4，唯一失败仍是 Windows 符号链接环境限制）；桌面 `editor-session.test.cjs` 增加主窗口 URL 断言 2/2；`npm run typecheck` 通过。真实客户端加载 `/client/` 需实机验证。
+
+## 2026-11-06：逐工序录入支持导入 BOM
+
+- 需求：录入页导入 BOM，输入料号后自动带出名称；BOM 用量为 1 时自动填数量，大于 1 留空人工填。
+- 新增 `src/ckd/editor-bom.ts`：解析 xlsx（ExcelJS）与 csv，在前 15 行内识别表头，列名支持「料号/物料编码/物料编号/物料号/编码/料号编码/Part No」「名称/物料名称/品名/描述/Description/Name」「用量/数量/单机用量/Qty」等别名；料号按单元格文本保留（前导零不丢），空行跳过，上限 2 万行、20 MB。
+- 存储：`product_lib/<项目>/assemble/bom.json` 保存解析结果，`bom.import.xlsx|csv` 保留原始文件；按项目共享、中英文共用，catalog 不读取，不参与出表。
+- 接口：`GET /api/editor/bom?project=`、`POST /api/editor/bom`（`{projectId, fileName, data: base64}`）、`DELETE /api/editor/bom?project=`，走现有录入权限与库解析。
+- 前端：侧栏「新建项目」下新增「导入 BOM」和状态行（显示文件名与行数）；物料表「规格」列改为「名称」（数据字段仍是 `spec`）；料号输入失焦时查表，名称只在为空时填入，用量为 1 时数量只在为空时填 1，其余留空。
+- 验证：新增 `tests/ckd-editor-bom.test.ts` 2/2（表头识别、前导零保留、原始文件保存、删除、拒绝 .xls / 无料号列 / 不存在的项目）；`npm run typecheck`、`node --check editor.js` 通过。真实 BOM 文件需用客户样例再验。
+- 按客户样例（`GPOS710 BOM-SMT+assembly_0319.xlsx`，单 sheet、505 行、28 列）修正：料号列优先 `UROVO PN`，排在 `Part Number` 之前（否则会取到厂商料号）；名称取 `物料名称`；用量取 `Usage for <项目> (EE)`，排除 `Total Usage for ...`（整单总量）。样例实测 496 条有效物料、料号唯一、名称无空值（用量 1 的 193 条、>1 的 251 条、空用量 52 条）。
+- 再补充：表头允许中文组合（如「UROVO料号」「物料料号」），完整匹配失败时按「料号/编码」包含匹配，并排除「厂商/供应商/客户/替代/gertec」列；数字料号改为读取单元格显示文本，避免科学计数法或格式丢失。
+- 支持多清单工作簿（客户 `i9600-DVT-BXP1 ... .xlsx`：封面 / 组装BOM清单 / 包装BOM清单 / 删除记录）：跳过封面和删除记录，把所有能识别表头的工作表合并、按料号去重；「虚拟组件」行跳过；合并单元格的 `cell.text` 为空时回退到原始 value 解析。样例实测 88 条有效物料（组装 + 包装），虚拟组件 0 条残留。
+- 客户最终定下映射规则，按此优先级解析：物料号 ← 表头含「物料编码」；名称 ← 含「物料名称」或「名称」；数量 ← 含「标准用量」或「用量」。找不到时再回退到 UROVO PN / 料号、品名 / 描述、Usage for / 数量等兼容别名。测试增加规则与优先级用例（5/5）。
+
+## 2026-11-06：录入页增加项目类型，BOM 只对装配开放
+
+- 侧栏「项目」下面新增「项目类型」下拉，默认 `assemble`；组装测试 / PCBA 测试 / 老化测试 / 出厂测试先作为灰显占位，后续接入。
+- `state.projectType` 控制界面：只有 `assemble` 显示「导入 BOM」和 BOM 状态行；其他类型（未来可选中时）自动隐藏，导入入口也做了拦截。
+- 只改前端 `editor.html` / `editor.js`；服务端仍按 assemble 处理录入，未改变存储结构。
+- 验证：`node --check editor.js` 通过；浏览器实际切换类型需实机确认。
+
+## 2026-11-06：发布后自动同步翻译与摘要
+
+- 需求：录入工序后按需同步翻译和摘要，避免导出时再集中同步、耗时过长；但有些内容不需要英文，不能每次保存都强制翻译。
+- 实现：`POST /api/editor/publish` 成功且确有工序转正后，页面弹窗询问「翻译 + 摘要 / 只更新摘要 / 暂不同步」；选择后调用 `POST /api/editor/sync`（`{projectId, translate, summaries}`），服务端按「库 + 项目」防抖 2 秒排队，后台依次跑 `translate`、`summaries`，范围限定为该项目（`{projectId}`），因此不会写入共享的 `processes_lib`；每个库单独一个 `LibraryMaintenance` 实例；同步失败只忽略，不影响保存。
+- 前端：保存成功状态恢复为「已保存到 Library：N 道工序」，随后弹出同步选择框；选择后在通知栏提示后台同步已开始。
+- 验证：`npm run typecheck` 通过；后台任务依赖模型配置，真实同步结果需在服务器观察 Library 任务状态。
+
+## 2026-11-06：工具与治具默认三条可勾选
+
+- 每道工序的工具表固定前置三条：镊子 1、静电环 1、电批 1；未勾选时灰显（输入框 disabled）、不写入 `Tools.jsonl`；勾选后才参与保存。
+- 打开已有工序时，保存过的工具若名称命中这三条，会回填成勾选状态并带回规格/数量；其余工具仍作为自定义行显示。
+- 新增行、删除行、修改默认工具的规格/数量都走原有保存流程；草稿与正式保存一致。
+- 验证：`node --check editor.js`、`npm run typecheck` 通过；浏览器实际勾选/保存需实机确认。

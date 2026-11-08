@@ -8,11 +8,13 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import sharp from 'sharp';
 import { createCkdUiServer } from '../src/ckd/ui-server.js';
+import { ensureAccountLibrary } from '../src/ckd/library-registry.js';
 import { CkdWorkflow } from '../src/ckd/service.js';
 import { PixelOperationFocusChecker, PIXEL_FOCUS_VERSION } from '../src/ckd/image-pixel-focus.js';
 import type { LibraryModel } from '../src/ckd/library-model.js';
 
 const write=(file:string,value:string|Buffer)=>{fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,value);};
+const project=JSON.stringify({version:1,projectId:'TARGET',displayName:'Target',aliases:['TARGET']});
 const hash=(v:Buffer)=>createHash('sha256').update(v).digest('hex');
 const png=()=>sharp({create:{width:129,height:257,channels:3,background:'#999999'}}).png().toBuffer();
 const observed=(visibility='yes',evidence='Camera connector fully seated')=>({coverage:'complete',confidence:.95,comment:'检查连接器；不根据设备名称推断隐蔽细节。',requirements:[{requirement:'连接器插接到位',visibility,evidence}]});
@@ -58,9 +60,12 @@ test('focused inspection bounds timeout/cancellation, rejects malformed results 
 
 async function appFixture(t:{after(fn:()=>void|Promise<void>):void},model:LibraryModel){
  const root=fixture(t),libraryPath=path.join(root,'ckd-library-v2'),dataDir=path.join(root,'data');
- write(path.join(libraryPath,'product_lib/TARGET/project.json'),JSON.stringify({version:1,projectId:'TARGET',displayName:'Target',aliases:['TARGET']}));
+ write(path.join(libraryPath,'product_lib/TARGET/project.json'),project);
  const folder=path.join(libraryPath,'processes_lib/factory_test/camera_test');write(path.join(folder,'metadata'),'Camera Test');write(path.join(folder,'operation_steps.txt'),'Check camera connector.');write(path.join(folder,'photos/p1.png'),await png());
- await readyClientUser(dataDir);
+ const user=await readyClientUser(dataDir);
+ // 普通用户的任务跑在自己的库；把项目也种进该用户的 product_lib，公共工序由联接共享。
+ const userLibrary=ensureAccountLibrary(libraryPath,dataDir,user.account);
+ write(path.join(userLibrary,'product_lib/TARGET/project.json'),project);
  const app=createCkdUiServer({libraryPath,dataDir,imageScorer:'pixel-v1.23.0',imageQualityModel:model});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
  const address=app.server.address();assert(address&&typeof address==='object');const base=`http://127.0.0.1:${address.port}`;
  t.after(async()=>{app.server.closeAllConnections();await new Promise<void>(r=>app.server.close(()=>r()));});

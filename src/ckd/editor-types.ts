@@ -45,7 +45,8 @@ export interface EditorProcessInput {
   tools?: EditorToolRowInput[];
   /** 每张图一段，按顺序一一对应；用空行连接后写入 Operation_Instruction.txt。 */
   paragraphs?: string[];
-  photos?: EditorPhotoInput[];
+  /** 固定坑位：null 表示该坑位暂时没有图片（草稿允许，发布时要求补图）。 */
+  photos?: (EditorPhotoInput | null)[];
   selfCheck?: string;
   previousStationCheck?: string;
   /** 标准工时（秒），写入 standard_time.txt（本项目扩展字段）。 */
@@ -81,11 +82,14 @@ export interface EditorProcessRecord {
   order: number;
   /** 文件夹名，如 process_01 */
   folder: string;
+  /** 是否还是草稿（未点「保存到 Library」）。 */
+  draft: boolean;
   metadata: string;
   bom: EditorBomRowRecord[];
   tools: EditorToolRowRecord[];
   paragraphs: string[];
-  photos: EditorPhotoRecord[];
+  /** 与 paragraphs 同下标；null 表示该坑位只有文字、没有图片。 */
+  photos: (EditorPhotoRecord | null)[];
   selfCheck: string;
   previousStationCheck: string;
   hours: number | null;

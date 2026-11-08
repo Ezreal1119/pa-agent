@@ -8,6 +8,7 @@ import test from 'node:test';
 import sharp from 'sharp';
 import ExcelJS from 'exceljs';
 import { createCkdUiServer } from '../src/ckd/ui-server.js';
+import { ensureAccountLibrary } from '../src/ckd/library-registry.js';
 import { assessmentSeen } from './helpers/image-assessment.js';
 import { sha256 } from '../src/ckd/scripts.js';
 const input={projectName:'TARGET',documentNumber:'R-1',sopName:'Review',author:'Patrick',sopType:'factory_test',factoryTestProcesses:['Camera Test','Sensor Test']};
@@ -21,7 +22,9 @@ async function fixture(t:{after(fn:()=>Promise<void>|void):void}) {
   put(path.join(folder,'photos/p2.png'),await sharp(png).resize(60,40).png().toBuffer());
  }
  let calls=0;const model={async complete(request:any){calls++;return {model:'controlled',text:JSON.stringify(request.mode==='vision'?assessmentSeen:{subjectIndex:0,detailsVisible:'yes',confidence:.95,comment:'Visible'})};}};
- await readyClientUser(dataDir);
+ const user=await readyClientUser(dataDir);
+ const userLibrary=ensureAccountLibrary(libraryPath,dataDir,user.account);
+ put(path.join(userLibrary,'product_lib/TARGET/project.json'),JSON.stringify({version:1,projectId:'TARGET',displayName:'Target',aliases:[]}));
  let app=createCkdUiServer({libraryPath,dataDir,imageQualityModel:model});let url='',token='';
  async function listen(){app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const a=app.server.address();assert(a&&typeof a==='object');url=`http://127.0.0.1:${a.port}`;}
  await listen();

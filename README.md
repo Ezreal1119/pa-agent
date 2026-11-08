@@ -149,7 +149,7 @@ npm run ckd -- start --input examples/ckd/reference.json \
   --library /your/data/ckd-library-v2 --data-dir /your/app-data
 ```
 
-`projectName`、`documentNumber`、`sopName`、`author` 为必填项。`sopType` 支持 `assemble`、`assembly_test`、`pcba_test`、`aging_test`、`factory_test`，默认 `assembly_test`。`templateLanguage` 支持 `English` 和 `中文`，默认英文；中文选择独立的 `CN_process` 资料，不翻译英文内容。Factory Test 必须在输入 JSON 中给出有序 `factoryTestProcesses`，1–30 项。其他类型在运行中确认参考或手动来源；手动列表支持换行、分隔符、单项继续添加及重复项确认。
+`projectName`、`documentNumber`、`sopName`、`author` 为必填项。`sopType` 支持 `assemble`、`assembly_test`、`pcba_test`、`aging_test`、`factory_test`，默认 `assembly_test`。**Web 工作台和桌面端的表单目前只显示「Assembly · 装配」一项**（代码里由 `ENABLED_SOP_TYPES` 控制，恢复其他类型时把值加回该数组即可；服务端和旧任务仍支持全部类型）。`templateLanguage` 支持 `English` 和 `中文`，默认英文；中文选择独立的 `CN_process` 资料，不翻译英文内容。Factory Test 必须在输入 JSON 中给出有序 `factoryTestProcesses`，1–30 项。其他类型在运行中确认参考或手动来源；手动列表支持换行、分隔符、单项继续添加及重复项确认。
 
 仅 `assemble` 可选填写 `revisionReason`（修订原因，最多 1000 字符）和 `revisionContent`（修订内容，最多 4000 字符，支持多行）；省略时留空。桌面端/Web 新建表单只在装配类型显示这两项，随任务持久化、恢复和“按此信息新建”保留，并写入中英文封面首条修订记录。首条制订者直接使用作者，不再依赖原版本是否填写；后续空白修订行仍按版本条件显示作者。长内容先调整首行可用高度，超出单页可读容量的全文保留在带引用的续页。生成器 CLI 对应 `--revision-reason` 和 `--revision-content`。新字段需更新后端，并使用桌面 0.1.7 或新版 Web；旧客户端不填新字段仍可使用新后端。
 
@@ -440,6 +440,8 @@ npm run desktop:pack:win
 
 0.1.9 起使用管理员在 Web 右上角“用户管理”创建的普通账号，停用旧测试账号 `111 / 222`。初始密码由系统随机生成、仅展示本次，首次登录必须在桌面端修改；之后可在账号区域点击“修改密码”。密码为 8–128 个字符（0.1.10 起），支持长密码、空格和粘贴，不自动填入或保存。令牌有效期 12 小时，仅保存在后端和 Electron 主进程内存；改密、重置、禁用、退出或后端重启后需要重新登录。任务按稳定用户 ID 隔离；旧测试账号和原管理员任务不分配给新用户，管理员仍可在 Web 查看。关闭窗口、退出或禁用账号不取消已运行的服务端任务。
 
+桌面主界面（登录、任务、进度、图片确认）由后端 `/client/` 下发，页面文件在 `desktop/ui/`。改这些页面只需要更新服务器并刷新客户端，不用重新发包；断网或后端未启动时回退到 exe 内打包的旧页面。仍需要发新包的情况：Electron 升级、`main.cjs`/`preload.cjs`/`backend.cjs` 改动、内置域名变更。`/client/` 是公开静态页（不含令牌，登录走主进程 IPC），CSP 限制脚本/样式仅同源。
+
 Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不可删除、改密、禁用或修改角色；可新增普通用户、启用/禁用、重置随机临时密码，不提供永久删除或账号更名。普通用户记录与加盐 scrypt 哈希在 `<data-dir>/ckd/users/users.json` 原子保存，修改有写锁，不进入 Git；管理员凭据不复制到该文件。用户管理不会触发 Library 同步或生成任务。
 
 管理员凭据继续只用于 Web；管理员本人需要使用桌面端时，也创建一个普通账号。普通账号为 3–64 位字母、数字、点、下划线或短横线，以字母/数字开头，大小写不影响唯一性；已禁用账号仍占用原名称。
@@ -449,6 +451,55 @@ Web 仅供管理员登录。用户列表中的系统管理员来自 `.env`，不
 本机客户端地址在 `desktop/config.json`，当前 `http://127.0.0.1:4317`，没有用户设置入口。独立云端版通过 `desktop/electron-builder.cloud.cjs` 将 `https://ckd-sop.patrick-shenzhen.cn` 写入打包元数据，主进程优先使用它；本机配置不改。Windows 上的 127.0.0.1 指 Windows 自己。云端版构建、分发及更新边界见 [桌面端发布说明](docs/desktop-releases.md)。
 
 用户 API 为 `/api/client/login`、`logout`、`me`、`me/password`（POST，仅接受 currentPassword/newPassword）、`status`、`runs`、`runs/:id`、`runs/:id/answer|resume|cancel`、`runs/:id/images/:imageId`（GET 预览、POST 裁剪）、`runs/:id/generate`（POST 确认生成）和 `runs/:id/artifacts/:index`。登录提交普通账号 account/password；新版带 `X-CKD-Password-Change: 1`，结果增加 userId/mustChangePassword。需要改密的账号在旧客户端登录时返回 426 升级提示；新客户端的受限会话仅能查询本人、改密、退出。其余请求带 `Authorization: Bearer <token>`。管理员用户 API 在 `/admin/api/users`（GET 列表、POST 创建）及 `/admin/api/users/:id/status|reset-password`（POST），沿用管理员 Cookie 和来源校验。桌面创建任务继续带 `X-CKD-Image-Review: 1`；客户端由主进程发送请求，无浏览器 Origin，管理员原有 Host/Origin 检查不变。服务只监听本机，不开放 CORS。
+
+### 账号与资料库（一人一库）
+
+每个普通账号对应一个独立的 `ckd-library-v2`，和主库并排放在 `<data-dir>/ckd/library/product_lib_<账号>/ckd-library-v2`（目录后缀沿用账号原样大小写）：
+
+- `product_lib` 是该账号私有的项目目录；普通用户登录后只能看到、修改自己库里的项目；
+- `processes_lib` 是指向主库 `CKD_LIBRARY` 的目录联接（Windows 用 junction，其他平台用符号链接），公共工序资料、翻译、摘要和图片描述只维护一份；
+- 主库就是系统管理员自己的库，部署前的存量项目全部留在主库。
+
+管理员在「用户管理」里新增用户时同时建好该账号的库，用户列表的「资料库」列显示项目数并可「打开」进入该库的录入页，可以增删改任何人的项目。既有账号在首次登录/打开录入页时自动建库；想在部署后一次性建好，可在服务器运行 `npm run ckd:libraries:ensure`（先加 `-- --dry-run` 预览；`--data-dir`/`--library` 可覆盖默认路径，只建目录和联接，不动项目）。主库里已有的项目要分给员工时，用 `npm run ckd:projects:migrate`：`--list` 查看项目，`--project <项目> --to <账号>` 复制，或用 `--map mapping.json` 批量；先加 `--dry-run` 预览。默认复制、不动主库，旧任务仍按主库恢复；目标已存在会拒绝，`--overwrite` 先备份到 `<data-dir>/ckd/project-backups/`。工作台「导出 SOP」也有「资料库」下拉，选中后新任务落在对应的库。普通用户始终只能落在自己的库，传入其他 `library` 参数会被忽略。
+
+任务会把实际使用的 `libraryPath` 记录在任务状态里，恢复、作答和下载都按任务自己记录的库执行，与当前登录是谁无关。禁用、重置或停用账号不会删除库和项目，需要清理时由运维手动归档。接口上：`GET /api/libraries`（管理员）列出所有库，录入接口用 `?library=<账号>` 选库，创建任务的 JSON 用顶层 `library` 字段选库（仅管理员生效）。
+
+同一账号的库同一时间只允许一个出表任务（Library 排他锁），不同账号可以并行。翻译、摘要和整库同步只对主库执行；如果维护期间有人正在出表，源文件 Hash 校验会让该任务失败并要求重跑，不会写出混合版本。
+
+### 逐工序录入的两级保存
+
+录入页有两个保存动作：
+
+- **保存当前工序**：把当前表单原样落成草稿（允许空工序名、图片与步骤数量不一致），左侧列表标「草稿」；草稿带 `draft.json` 标记，**不进入 catalog、不参与出表**；
+- **保存到 Library**：先保存当前工序，再逐条校验该项目+语言下的全部草稿（工序名非空、图片与步骤数一致、图片 1/2/4 张），只把通过的工序转正并写入 `sops.json`；没通过的保留草稿，并在页面上列出是哪一道、缺什么。
+
+资料库里只要还有草稿，创建生成任务会被拒绝，提示先在录入页「保存到 Library」。接口上：保存草稿用 `POST /api/editor/process` 并带 `draft: true`，发布用 `POST /api/editor/publish`（`{projectId, language}`）。发布成功后会弹窗询问是否同步英文：可选「翻译 + 摘要」「只更新摘要」「暂不同步」；选择后服务端按「库 + 项目」防抖 2 秒在后台执行，增量处理，失败不影响保存。
+
+### BOM 导入
+
+录入页侧栏有「项目类型」，目前只开放「装配（assemble）」，组装测试 / PCBA 测试 / 老化测试 / 出厂测试先灰显占位；BOM 导入只在装配类型下显示，其他类型接入后不显示。
+
+录入页侧栏「导入 BOM」支持 `.xlsx` / `.csv`（`.xls` 请先另存为 `.xlsx`，上限 20 MB、2 万行）。解析时在前 15 行里找表头，映射规则按客户约定优先：
+
+- **物料号 ← 表头含「物料编码」**；找不到时回退到 UROVO PN / 料号 / 编码 / Part No 等别名（排除厂商/供应商/客户/替代/gertec 列）；
+- **名称 ← 表头含「物料名称」或「名称」**；找不到时回退到品名 / 描述 / Material Name / Name；
+- **数量 ← 表头含「标准用量」或「用量」**；找不到时回退到 Usage for / 数量 / Qty 等。`Total Usage for ...`（整单总量）会被排除。
+
+数字料号按单元格的显示文本读取（`3.01.01.10209`、`3010110209` 都按原样保存，不会变成科学计数法）。
+
+一个工作簿里有多个清单也能处理：跳过「封面」「删除记录」，把「组装BOM清单」「包装BOM清单」等有表头的工作表合并，按料号去重；名称为「虚拟组件」的行跳过。
+
+导入后侧栏显示「已导入：文件名（N 行）」。BOM 按项目保存在 `product_lib/<项目>/assemble/bom.json`，原始文件保存为同目录的 `bom.import.xlsx|csv`；中英文共用，不参与出表。在物料清单里输入料号（失焦触发）后，会从 BOM 带出名称；BOM 用量为 1 时自动填数量 1，大于 1 或为空时留空，等人工填写。接口为 `GET/POST/DELETE /api/editor/bom`（POST 用 base64 传文件内容）。
+
+### 逐工序录入：图片与步骤坑位
+
+操作图片与步骤改为**固定坑位**：默认 4 个图片位 + 4 个文本位，同一序号的图片和文字绑定，但可以各自独立填写。
+
+- 点击图片位选择文件，或直接把截图 `Ctrl+V` 粘贴进来（自动压到长边 1600px）；
+- 「清空图片」只移除图片，步骤文字保留在该坑位，不会丢失；
+- 拖动坑位可以整对（图片 + 文字）换位置；
+- 已有工序如果超过 4 张图，按实际数量显示，不截断；
+- 草稿允许某个坑位只有文字没有图片；「保存到 Library」时要求用到的坑位都是「图片 + 文字」成对、且图片数是 1 / 2 / 4 张，否则报「第 N 段只有文字、还没有配图」或「第 N 张图还没有写操作步骤」。
 
 新版桌面端在资料准备后先运行原有图片评分，进入“等待图片确认”。此时尚未生成 Excel；每张参与 SOP 的图片可预览并按矩形裁剪，保留区域的四角和边缘可拖动，灰色区域被舍弃。可以直接点击“生成 SOP”，也可先裁剪；裁剪只写当前任务的临时副本，不修改 Library 图片，不触发重新评分或模型调用。完成页只展示 Excel 和原工序资料评分，图片评分在生成前确认页查看。关闭应用/后端重启后重新登录可继续等待中的任务；生成成功或取消时清理临时裁剪图，生成失败时保留供恢复。原图片分析缓存继续按 Hash 复用，裁剪不会写入全库评分缓存。详见 [图片确认与裁剪记录](dev-history/2026-10-14-image-review-crop.md)。
 

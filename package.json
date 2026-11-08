@@ -27,6 +27,8 @@
     "desktop:pack:mac:cloud": "npm --prefix desktop run pack:mac:cloud",
     "desktop:pack:win:cloud": "npm --prefix desktop run pack:win:cloud",
     "ckd:ui": "tsx src/ckd/ui.ts",
+    "ckd:libraries:ensure": "tsx tools/ensure-user-libraries.ts",
+    "ckd:projects:migrate": "tsx tools/migrate-projects.ts",
     "ckd:images:review": "tsx src/ckd/image-review.ts",
     "ckd:images:prewarm": "tsx src/ckd/image-prewarm.ts"
   },

@@ -8,6 +8,7 @@ import { UserStore, validateNewPassword, verifyUserPassword } from '../src/ckd/u
 import { ClientAccess } from '../src/ckd/client-access.js';
 import { AdminAccess, hashAdminPassword } from '../src/ckd/admin-access.js';
 import { createCkdUiServer } from '../src/ckd/ui-server.js';
+import { accountLibraryPath } from '../src/ckd/library-registry.js';
 
 function temp(t: { after(fn: () => void): void }) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ckd-users-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 const password = 'my long personal password 你好';
@@ -28,7 +29,9 @@ test('users persist only salted hashes; account identity is immutable, reserved 
   const result = await store.create('Alice');
   assert.equal(result.initialPassword.length, 20); assert.equal(result.user.mustChangePassword, true); assert.equal('passwordHash' in result.user, false);
   const bytes = fs.readFileSync(path.join(root, 'ckd/users/users.json'), 'utf8');
-  assert.ok(!bytes.includes(result.initialPassword)); assert.ok(!bytes.includes('SystemAdmin')); assert.equal(fs.statSync(path.join(root, 'ckd/users/users.json')).mode & 0o777, 0o600);
+  assert.ok(!bytes.includes(result.initialPassword)); assert.ok(!bytes.includes('SystemAdmin'));
+  // Windows 不保留 POSIX 文件模式（一律 0666），权限位断言只在类 Unix 平台有意义。
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(root, 'ckd/users/users.json')).mode & 0o777, 0o600);
   assert.ok(await verifyUserPassword(result.initialPassword, store.get(result.user.id)!.passwordHash));
   store.setEnabled(result.user.id, false);
   await assert.rejects(new UserStore(root, 'SystemAdmin').create('alice'), /已存在/u);
@@ -128,7 +131,7 @@ test('administrator-only user APIs, ordinary desktop isolation and legacy tasks 
   assert.equal(scope.scope, 'library'); assert.equal(scope.canSwitch, false);
   const editorProcess = await (await editor('/api/editor/process?project=EDITOR&language=中文&order=1', a2.token)).json();
   assert.equal(editorProcess.process.metadata, '录入工序');
-  assert.ok(fs.existsSync(path.join(libraryPath, 'product_lib/EDITOR/assemble/CN_process/process_01/metadata.txt')));
+  assert.ok(fs.existsSync(path.join(accountLibraryPath(dataDir, 'Alice'), 'product_lib/EDITOR/assemble/CN_process/process_01/metadata.txt')), '普通用户的工序落在自己的库里');
   const b = await (await client('/login', '', { account: 'Bob', password: bob.initialPassword })).json();
   await client('/me/password', b.token, { currentPassword: bob.initialPassword, newPassword: password });
   const b2 = await (await client('/login', '', { account: 'Bob', password })).json();

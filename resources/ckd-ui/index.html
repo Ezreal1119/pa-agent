@@ -47,9 +47,10 @@
           <p class="field-help" style="margin:-12px 0 18px">SOP 类型和模板语言只决定读哪个库、哪种语言，不写进封面。</p>
           <div class="fields two-columns">
             <label class="field"><span>SOP 类型 <small>SOP Type</small></span><select name="sopType" id="sop-type"><option value="assembly_test">Assembly Test · 整机测试</option><option value="assemble">Assembly · 装配</option><option value="pcba_test">PCBA Test · 主板测试</option><option value="aging_test">Aging Test · 老化测试</option><option value="factory_test">Factory Test · 工厂测试</option></select></label>
-            <label class="field"><span>模板语言 <small>Template Language</small></span><select name="templateLanguage"><option value="English">English · 英文</option><option value="中文">中文</option></select><span class="field-help">使用对应语言资料，不自动翻译。</span></label>
+            <label class="field"><span>模板语言 <small>Template Language</small></span><select name="templateLanguage"><option value="中文">中文</option><option value="English">English · 英文</option></select><span class="field-help">使用对应语言资料，不自动翻译。</span></label>
           </div>
           <div class="fields">
+            <label class="field" id="library-field" hidden><span>资料库 <small>Library</small></span><select name="library" id="create-library"></select><span class="field-help">管理员可以选择某个用户的库；普通用户始终只能用自己的库。</span></label>
             <label class="field"><span>项目名称 <small>Project Name</small><em>必填</em></span><input name="projectName" placeholder="例如 GPOS730" maxlength="200" required autocomplete="off"><span class="field-help">只用来匹配 Library 里的项目与工序，不写进封面。</span></label>
           </div>
           <div class="cover-divider"><span>封面信息</span><em>留空 = 用逐工序录入时填的；填了就覆盖封面对应单元格</em></div>

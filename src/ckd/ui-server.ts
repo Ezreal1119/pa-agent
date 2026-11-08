@@ -16,13 +16,25 @@ import { AssessmentCalibrationJobs } from "./image-assessment-calibration.js";
 import { readImagePolicy, saveImagePolicy, DEFAULT_POLICY } from "./image-assessment.js";
 import { PixelImageChecker, PIXEL_POLICY, PIXEL_CONFIG_HASH } from './image-pixel.js';
 import { scoringContext, scoreWithContext, checkOperationFocus } from './image-scorer.js';
-import { createProject, deleteProcess, listProcesses, listProjects, readPhoto, readProcess, reorderProcesses, saveProcess, EDITOR_SOP_TYPE } from "./editor-library.js";
+import { createProject, deleteProcess, listProcesses, listProjects, readPhoto, readProcess, reorderProcesses, saveProcess, publishDrafts, EDITOR_SOP_TYPE } from "./editor-library.js";
+import { deleteBom, readBom, saveBom } from './editor-bom.js';
 import { EditorInputError, EDITOR_LANGUAGES, type EditorProcessInput } from "./editor-types.js";
 import { ClientAccess, ClientAccessError } from "./client-access.js";
 import { AdminAccess, AdminAccessError } from "./admin-access.js";
-import { UserError } from './users.js';
+import { UserError, type User } from './users.js';
+import { ensureAccountLibrary, listLibraries } from './library-registry.js';
 
 const uiRoot = fileURLToPath(new URL("../../resources/ckd-ui/", import.meta.url));
+// 桌面主界面也由服务端下发：改 desktop/ui 只需要更新服务器，不用重新发包。
+const desktopUiRoot = fileURLToPath(new URL("../../desktop/ui/", import.meta.url));
+const clientAssets = new Map([
+  ["/client/", ["index.html", "text/html; charset=utf-8"]],
+  ["/client/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/client/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/client/style.css", ["style.css", "text/css; charset=utf-8"]],
+  ["/client/image-crop.js", ["image-crop.js", "text/javascript; charset=utf-8"]],
+]);
+const CLIENT_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const assets = new Map([["/", ["index.html", "text/html; charset=utf-8"]], ["/app.js", ["app.js", "text/javascript; charset=utf-8"]], ["/style.css", ["style.css", "text/css; charset=utf-8"]], ["/login", ["login.html", "text/html; charset=utf-8"]], ["/login.js", ["login.js", "text/javascript; charset=utf-8"]], ['/users', ['users.html', 'text/html; charset=utf-8']], ['/users.js', ['users.js', 'text/javascript; charset=utf-8']], ["/editor", ["editor.html", "text/html; charset=utf-8"]], ["/editor.js", ["editor.js", "text/javascript; charset=utf-8"]], ["/editor.css", ["editor.css", "text/css; charset=utf-8"]]]);
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -65,12 +77,49 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   if (process.env.NODE_ENV === "production" && !publicOrigin) throw new Error("生产环境必须配置 CKD_ADMIN_ORIGIN。");
   const service = new CkdWorkflow(options);
   const clientAccess = new ClientAccess(service.dataDir, Date.now, adminAccess?.account);
+  /* ------------------------------------------------- 一人一库：账号 ↔ 资料库 */
+  // 主库是服务配置的 CKD_LIBRARY（管理员自己的库）；每个普通用户一个 ckd-library-v2，
+  // product_lib 私有，processes_lib 联接到主库共享。
+  const libraryPaths = new Map<string, string>();
+  const libraryServices = new Map<string, CkdWorkflow>();
+  function libraryService(libraryPath: string): CkdWorkflow {
+    const resolved = path.resolve(libraryPath);
+    if (resolved === path.resolve(service.libraryPath)) return service;
+    let instance = libraryServices.get(resolved);
+    if (!instance) { instance = new CkdWorkflow({ ...options, libraryPath: resolved }); libraryServices.set(resolved, instance); }
+    return instance;
+  }
+  function accountLibrary(account: string): string {
+    const key = account.toLowerCase();
+    const cached = libraryPaths.get(key);
+    if (cached) return cached;
+    const library = ensureAccountLibrary(service.libraryPath, service.dataDir, account);
+    libraryPaths.set(key, library);
+    return library;
+  }
+  /** 管理员视角：默认主库，library=<账号> 打开某个用户的库。 */
+  function adminLibrary(requested?: string | null): string {
+    const wanted = (requested ?? "").trim();
+    if (!wanted || wanted.toLowerCase() === "master") return service.libraryPath;
+    const user = clientAccess.users.find(wanted);
+    if (!user) throw new HttpError(404, "资料库不存在。");
+    return accountLibrary(user.account);
+  }
+  /** 主库 + 每个普通用户的库；带项目数，供管理页和工作台下拉使用。 */
+  function librarySummaries() {
+    const accounts = clientAccess.users.list().map(user => ({ account: user.account, name: user.account }));
+    return listLibraries(service.libraryPath, service.dataDir, accounts).map(item => {
+      let projects = 0;
+      try { projects = item.exists ? listProjects(item.path).length : 0; } catch { projects = 0; }
+      return { ...item, projects };
+    });
+  }
   /**
    * 待审核区：<库根>/public，内部结构与库根一致（public/product_lib/<项目>/assemble/...）。
    * catalog 只扫 <库根>/product_lib，所以这里的草稿不会被生成流程读到；
    * 管理员确认后把整个项目目录挪进 product_lib 即可，sops.json 跟着走。
    */
-  const publicEditorRoot = () => { const root = path.join(service.libraryPath, "public"); fs.mkdirSync(root, { recursive: true }); return root; };
+  const publicEditorRoot = (libraryPath: string) => { const root = path.join(libraryPath, "public"); fs.mkdirSync(root, { recursive: true }); return root; };
   const fixedPixel=service.imageQuality instanceof PixelImageChecker;
   const imageCalibration = new AssessmentCalibrationJobs(service.dataDir, service.imageQuality instanceof PixelImageChecker?service.imageQuality.legacy():service.imageQuality);
   const calibrationJobs = new Map<string, Promise<unknown>>();
@@ -85,6 +134,39 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   }
   const maintenance = new LibraryMaintenance({ dataDir: service.dataDir, libraryPath: service.libraryPath, model: options.maintenanceModel, modelTimeoutMs: options.maintenanceModelTimeoutMs, imageChecker:service.imageQuality, onEvent: message => options.onEvent?.({runId:"library",type:"status",message}) });
   const maintenanceJobs = new Map<string, Promise<unknown>>();
+  // 保存后由用户在页面上选择是否同步：每个库一个实例，防抖排队，后台执行。
+  const projectMaintenance = new Map<string, LibraryMaintenance>();
+  function maintenanceFor(libraryPath: string): LibraryMaintenance {
+    const key = path.resolve(libraryPath);
+    let instance = projectMaintenance.get(key);
+    if (!instance) {
+      instance = new LibraryMaintenance({ dataDir: service.dataDir, libraryPath: key, model: options.maintenanceModel, modelTimeoutMs: options.maintenanceModelTimeoutMs });
+      projectMaintenance.set(key, instance);
+    }
+    return instance;
+  }
+  type SyncKind = "translate" | "summaries";
+  const syncTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; kinds: Set<SyncKind> }>();
+  function queueProjectSync(libraryPath: string, projectId: string, kinds: SyncKind[]): void {
+    if (!kinds.length) return;
+    const key = `${path.resolve(libraryPath)}|${projectId}`;
+    const previous = syncTimers.get(key);
+    if (previous) clearTimeout(previous.timer);
+    const pending = new Set<SyncKind>([...(previous?.kinds ?? []), ...kinds]);
+    const timer = setTimeout(() => {
+      syncTimers.delete(key);
+      void (async () => {
+        const instance = maintenanceFor(libraryPath);
+        for (const kind of ["translate", "summaries"] as const) {
+          if (!pending.has(kind)) continue;
+          // 同步失败不能影响保存结果；用户可以再次点同步。
+          try { await instance.start(kind, { projectId }); } catch { /* ignore */ }
+        }
+      })().catch(() => { /* 后台同步失败不影响页面 */ });
+    }, 2000);
+    timer.unref?.();
+    syncTimers.set(key, { timer, kinds: pending });
+  }
   async function launchMaintenance(id: string) {
     if (maintenanceJobs.has(id)) throw new HttpError(409,"Library job is busy.");
     const promise = maintenance.resume(id); maintenanceJobs.set(id,promise);
@@ -135,13 +217,21 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       const adminPrefix = prefixedAdmin ? "/admin" : "";
       const expectedOrigin = prefixedAdmin ? publicOrigin : `http://${host}`;
       const validPostOrigin = !request.headers.origin || (request.headers.origin === expectedOrigin && request.headers["x-ckd-ui"] === "1");
+      // 桌面主界面的静态文件：公开下发（页面本身不含令牌，登录走主进程 IPC），不改管理端 CSP。
+      const clientAsset = clientAssets.get(url.pathname);
+      if (request.method === "GET" && clientAsset) {
+        response.setHeader("Content-Security-Policy", CLIENT_CSP);
+        response.writeHead(200, { "Content-Type": clientAsset[1] });
+        response.end(fs.readFileSync(path.join(desktopUiRoot, clientAsset[0]!)));
+        return;
+      }
       // Desktop editor is a scoped Bearer surface; user management and the rest
       // of the Web workbench still require the administrator cookie.
       const editorSurface = url.pathname === "/editor" || url.pathname === "/editor.js" || url.pathname === "/editor.css"
         || url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/");
-      let editorClient = false;
+      let editorClient = false, editorUserId: string | undefined;
       if (!clientRequest && editorSurface && request.headers.authorization) {
-        clientAccess.authenticate(request.headers.authorization);
+        editorUserId = clientAccess.authenticate(request.headers.authorization);
         editorClient = true;
       }
       if (!clientRequest && adminAccess) {
@@ -166,6 +256,10 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
         }
         if (request.method === "GET" && url.pathname === "/api/auth/session") { json(200, { account: adminAccess.account }); return; }
       }
+      if (!clientRequest && url.pathname === '/api/libraries') {
+        if (!adminAccess || !adminAccess.authenticate(request.headers.cookie)) throw new HttpError(401, '请先以管理员身份登录。');
+        json(200, { libraries: librarySummaries() }); return;
+      }
       if (!clientRequest && (url.pathname === '/api/users' || url.pathname.startsWith('/api/users/'))) {
         if (!adminAccess || !adminAccess.authenticate(request.headers.cookie)) throw new HttpError(401, '请先以管理员身份登录。');
         if (request.method === 'GET' && url.pathname === '/api/users') {
@@ -176,7 +270,10 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           if (!validPostOrigin) throw new HttpError(403, '请求来源无效。');
           if (url.pathname === '/api/users') {
             if (Object.keys(input).some(key => key !== 'account')) throw new HttpError(400, '新建用户只接受账号。');
-            json(201, await clientAccess.users.create(input.account)); return;
+            const created = await clientAccess.users.create(input.account);
+            // 建用户时顺手把资料库建好：product_lib 私有，processes_lib 联接到主库。
+            accountLibrary(created.user.account);
+            json(201, created); return;
           }
           const userAction = /^\/api\/users\/([a-f0-9-]{36})\/(status|reset-password)$/u.exec(url.pathname);
           if (userAction?.[2] === 'status' && Object.keys(input).every(key => key === 'enabled')) { json(200, { user: clientAccess.users.setEnabled(userAction[1]!, input.enabled) }); return; }
@@ -184,7 +281,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
         }
         throw new HttpError(400, '用户管理操作无效，系统管理员不可修改。');
       }
-      let clientAccount: string | undefined;
+      let clientAccount: string | undefined, clientUser: User | undefined;
       if (clientRequest) {
         // Electron main-process requests have no browser Origin. Keep browser/admin rules unchanged.
         if (request.headers.origin) throw new HttpError(403, '请从桌面客户端操作。');
@@ -193,6 +290,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
         if (url.pathname === '/api/client/me/password' && request.method === 'POST') { await clientAccess.changePassword(request.headers.authorization, await body(request)); json(200, { ok: true }); return; }
         if (url.pathname === '/api/client/logout' && request.method === 'POST') { await body(request); clientAccess.logout(request.headers.authorization); json(200, { ok: true }); return; }
         clientAccount = clientAccess.authenticate(request.headers.authorization);
+        clientUser = clientAccess.users.get(clientAccount);
         if (!/^\/api\/client\/(?:status|trash|runs(?:\/[0-9a-f-]{36}(?:\/(?:answer|resume|cancel|generate|trash|restore|artifacts\/\d+|images\/[0-9a-f-]{36}))?)?)$/u.test(url.pathname)) throw new HttpError(404, '接口不存在。');
         url.pathname = url.pathname.replace('/api/client/', '/api/');
       }
@@ -205,19 +303,29 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       if (url.pathname === "/api/editor" || url.pathname.startsWith("/api/editor/")) {
         // DELETE 不在上面的 POST 来源校验覆盖范围内，单独补一次，避免跨站删除工序。
         if (request.method === "DELETE" && !validPostOrigin) throw new HttpError(403, "请求来源无效，请从 CKD 页面操作。");
-        // 桌面客户端（Bearer）直接写正式库 product_lib；只有管理员显式带 scope=public 时才看待审核区。
-        // 之前让 Bearer 固定落 public，会导致「项目建在正式库、工序写 public」时校验不到 project.json，故统一回正式库。
+        // 员工固定写自己的库；管理员可以 ?library=<账号> 打开某个用户的库，默认主库。
+        // 待审核区只给管理员用，员工始终落在自己的 product_lib。
+        const viewerUser = editorUserId ? clientAccess.users.get(editorUserId) : undefined;
+        const viewerLib = viewerUser ? accountLibrary(viewerUser.account) : adminLibrary(url.searchParams.get("library"));
         const wantsPublic = !editorClient && url.searchParams.get("scope") === "public";
-        const editorLibrary = wantsPublic ? publicEditorRoot() : service.libraryPath;
+        const editorLibrary = wantsPublic ? publicEditorRoot(viewerLib) : viewerLib;
+        const libraryId = editorUserId ? (viewerUser?.account ?? "") : (viewerLib === service.libraryPath ? "master" : (url.searchParams.get("library") ?? "master"));
         try {
           if (url.pathname === "/api/editor" && request.method === "GET") {
-            json(200, { sopType: EDITOR_SOP_TYPE, languages: EDITOR_LANGUAGES, projects: listProjects(editorLibrary), scope: wantsPublic ? "public" : "library", canSwitch: !editorClient });
+            const summaries = editorClient ? undefined : librarySummaries();
+            const libraryName = summaries?.find(item => item.path === editorLibrary)?.name ?? (viewerUser?.account || "主库（管理员）");
+            json(200, {
+              sopType: EDITOR_SOP_TYPE, languages: EDITOR_LANGUAGES, projects: listProjects(editorLibrary),
+              scope: wantsPublic ? "public" : "library", canSwitch: !editorClient,
+              library: { id: libraryId, path: editorLibrary, master: viewerLib === service.libraryPath, name: libraryName },
+              libraries: summaries,
+            });
             return;
           }
           if (url.pathname === "/api/editor/projects" && request.method === "POST") {
             const input = await editorBody(request);
-            // 项目是容器，统一建在正式库 product_lib；待审核区只放工序，不放项目。
-            json(200, { project: createProject(service.libraryPath, { projectId: input.projectId, displayName: input.displayName }) });
+            // 项目是容器，建在解析出来的库的 product_lib；待审核区只放工序，不放项目。
+            json(200, { project: createProject(editorLibrary, { projectId: input.projectId, displayName: input.displayName }) });
             return;
           }
           if (url.pathname === "/api/editor/process" && request.method === "GET") {
@@ -231,9 +339,40 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
             json(200, { process: readProcess(editorLibrary, { projectId, language, order }, { includePhotos: url.searchParams.get("photos") !== "0" }) });
             return;
           }
+          if (url.pathname === "/api/editor/publish" && request.method === "POST") {
+            const input = await editorBody(request);
+            json(200, publishDrafts(editorLibrary, { projectId: input.projectId as string, language: input.language }));
+            return;
+          }
+          if (url.pathname === "/api/editor/sync" && request.method === "POST") {
+            const input = await editorBody(request);
+            const kinds: SyncKind[] = [];
+            if (input.translate === true) kinds.push("translate");
+            if (input.summaries === true) kinds.push("summaries");
+            if (kinds.length) queueProjectSync(editorLibrary, String(input.projectId ?? ""), kinds);
+            json(200, { queued: kinds });
+            return;
+          }
+          if (url.pathname === "/api/editor/bom" && request.method === "GET") {
+            json(200, { bom: readBom(editorLibrary, url.searchParams.get("project") ?? "") });
+            return;
+          }
+          if (url.pathname === "/api/editor/bom" && request.method === "POST") {
+            const input = await editorBody(request);
+            const data = typeof input.data === "string" ? Buffer.from(input.data, "base64") : Buffer.alloc(0);
+            json(200, { bom: await saveBom(editorLibrary, { projectId: String(input.projectId ?? ""), fileName: String(input.fileName ?? "BOM"), data }) });
+            return;
+          }
+          if (url.pathname === "/api/editor/bom" && request.method === "DELETE") {
+            deleteBom(editorLibrary, url.searchParams.get("project") ?? "");
+            json(200, { ok: true });
+            return;
+          }
           if (url.pathname === "/api/editor/process" && request.method === "POST") {
             const input = await editorBody(request);
-            json(200, { result: saveProcess(editorLibrary, input as unknown as EditorProcessInput) });
+            const draft = input.draft === true;
+            delete input.draft;
+            json(200, { result: saveProcess(editorLibrary, input as unknown as EditorProcessInput, { draft }) });
             return;
           }
           if (url.pathname === "/api/editor/reorder" && request.method === "POST") {
@@ -342,15 +481,25 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
         const input = await body(request);
         json(200, await validateCkdLibrary(service.libraryPath, input as LibraryValidationOptions,true)); return;
       }
-      if (request.method === "GET" && url.pathname === "/api/status") { json(200, { libraryReady: fs.existsSync(path.join(service.libraryPath, "product_lib")),imageScorer:fixedPixel?'pixel-v1.23.0':'legacy' }); return; }
+      if (request.method === "GET" && url.pathname === "/api/status") {
+        const statusLibrary = clientUser ? accountLibrary(clientUser.account) : service.libraryPath;
+        json(200, { libraryReady: fs.existsSync(path.join(statusLibrary, "product_lib")), imageScorer: fixedPixel ? 'pixel-v1.23.0' : 'legacy' }); return;
+      }
       if (request.method === "GET" && url.pathname === "/api/runs") {
         json(200, { runs: service.list().filter(run => !clientAccount || clientAccess.owns(run.id, clientAccount)).map(run => ({ id: run.id, status: run.status, busy: jobs.has(run.id), inputs: run.inputs, createdAt: run.createdAt })) }); return;
       }
       if(request.method==='GET'&&url.pathname==='/api/trash'){json(200,{runs:service.deleted().filter(run=>!clientAccount||clientAccess.owns(run.id,clientAccount)).map(run=>({id:run.id,status:run.status,busy:false,inputs:run.inputs,createdAt:run.createdAt}))});return;}
       if (request.method === "POST" && url.pathname === "/api/runs") {
-        const input = await body(request); const run = service.create(input as unknown as CreateCkdSopGraphInput, Boolean(clientAccount) && request.headers["x-ckd-image-review"] === "1");
+        const input = await body(request);
+        // 新任务落在谁的库：普通用户固定自己的库；管理员可带 library=<账号>，默认主库。
+        let targetLibrary = service.libraryPath;
+        if (clientUser) targetLibrary = accountLibrary(clientUser.account);
+        else if (typeof input.library === "string") targetLibrary = adminLibrary(input.library);
+        delete input.library;
+        const creator = libraryService(targetLibrary);
+        const run = creator.create(input as unknown as CreateCkdSopGraphInput, Boolean(clientAccount) && request.headers["x-ckd-image-review"] === "1");
         if (clientAccount) clientAccess.claim(run.id, clientAccount);
-        json(202, { run: await launch(run.id, () => service.resume(run.id)) }); return;
+        json(202, { run: await launch(run.id, () => creator.resume(run.id)) }); return;
       }
       const match = /^\/api\/runs\/([0-9a-f-]{36})(?:\/(answer|resume|cancel|generate|trash|restore|artifacts|images)(?:\/([0-9a-f-]+))?)?$/u.exec(url.pathname);
       if (!match) throw new HttpError(404, "页面或任务不存在。");

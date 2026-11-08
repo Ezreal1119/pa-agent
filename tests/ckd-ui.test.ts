@@ -55,6 +55,11 @@ test("local UI serves form, creates durable tasks and answers using question IDs
   const app = await fixture(t);
   const page = await app.get("/"); assert.equal(page.status, 200); assert.match(await page.text(), /Project Name/u); assert.match(page.headers.get("content-security-policy")!, /frame-ancestors 'none'/u);
   assert.equal((await app.get("/app.js")).status, 200); assert.equal((await app.get("/style.css")).status, 200);
+  // 桌面主界面也由服务端下发，改 desktop/ui 不用重新发包。
+  const clientPage = await app.get("/client/");
+  assert.equal(clientPage.status, 200); assert.match(await clientPage.text(), /CKD SOP/u);
+  assert.match(clientPage.headers.get("content-security-policy")!, /default-src 'none'/u);
+  assert.equal((await app.get("/client/app.js")).status, 200); assert.equal((await app.get("/client/style.css")).status, 200);
   assert.equal((await (await app.get("/api/status")).json()).libraryReady, true);
   const invalid = await app.post("/api/runs", { projectName: "" }); assert.equal(invalid.status, 400); assert.equal(app.service.list().length, 0);
   const response = await app.post("/api/runs", input); assert.equal(response.status, 202);

@@ -11,18 +11,34 @@
   <header class="topbar">
     <a class="brand" href="./" aria-label="CKD SOP 首页"><span class="brand-icon">C</span> CKD <span class="brand-light">逐工序录入</span></a>
     <div class="topbar-actions">
+      <span class="muted small" id="library-label"></span>
+      <label class="field inline-field" id="library-field" hidden>
+        <span>资料库</span>
+        <select id="library"></select>
+      </label>
       <label class="scope-switch" id="scope-toggle" hidden title="桌面客户端提交的工序先落在这里，确认后再迁到正式库">
         <input type="checkbox" id="scope-public"><span>待审核区（public）</span>
       </label>
-      <a class="text-button" href="./">返回工作台</a>
+      <a class="text-button" id="back-to-workbench" href="./">返回工作台</a>
     </div>
   </header>
 
   <main class="layout editor-layout">
+    <div id="readonly-banner" class="notice" hidden role="status"></div>
     <aside class="sidebar">
       <label class="field"><span>项目</span><select id="project"></select></label>
+      <label class="field"><span>项目类型</span><select id="project-type">
+        <option value="assemble" selected>装配（assemble）</option>
+        <option value="assembly_test" disabled>组装测试（暂未开放）</option>
+        <option value="pcba_test" disabled>PCBA 测试（暂未开放）</option>
+        <option value="aging_test" disabled>老化测试（暂未开放）</option>
+        <option value="factory_test" disabled>出厂测试（暂未开放）</option>
+      </select></label>
       <label class="field"><span>语言</span><select id="language"><option value="中文">中文</option><option value="English">English</option></select></label>
       <button class="button secondary full" id="new-project" type="button">＋ 新建项目</button>
+      <button class="button secondary full" id="import-bom" type="button">⇪ 导入 BOM</button>
+      <p class="sidebar-note" id="bom-status">未导入 BOM</p>
+      <input id="bom-input" type="file" accept=".xlsx,.csv" hidden>
 
       <div class="sidebar-heading">
         <h2>工序（可拖拽排序）</h2>
@@ -46,7 +62,7 @@
         <p class="hint">这些内容不进 Library，生成 Excel 时自动带到工作台的「基本信息」，由出表流程写进封面单元格。</p>
         <div class="fields two-columns">
           <label class="field"><span>项目 ID <small>= product_lib 下的目录名</small></span><input id="sop-project" readonly></label>
-          <label class="field"><span>SOP 名称</span><input id="sop-name" maxlength="200" placeholder="例如 SQ69BXP Assembly SOP" autocomplete="off"></label>
+          <label class="field"><span>作业指导书名称 <small>会作为 Excel 文件名</small></span><input id="sop-name" maxlength="200" placeholder="例如 GPOS710 整机组装作业指导书" autocomplete="off"></label>
           <label class="field"><span>编制人</span><input id="sop-author" maxlength="200" placeholder="填写编制人姓名" autocomplete="off"></label>
           <label class="field"><span>审核人</span><input id="sop-reviewer" maxlength="200" placeholder="填写审核人姓名；不填留空" autocomplete="off"></label>
           <label class="field"><span>文件编号</span><input id="sop-document" maxlength="200" placeholder="例如 CKD-001" autocomplete="off"></label>
@@ -85,7 +101,7 @@
             <h2>操作图片与步骤</h2>
             <span class="tag" id="photo-count">0 张</span>
           </div>
-          <p class="hint">每张图对应一段步骤，按顺序一一对应。模板支持 1 / 2 / 4 张；上传后自动压到长边 1600px。</p>
+          <p class="hint">图片和步骤按坑位一一对应，但可以各自填写：清空图片不会删掉文字。模板支持 1 / 2 / 4 张；点击坑位选择、拖拽排序，或直接 Ctrl+V 粘贴截图（自动压到长边 1600px）。</p>
           <div id="photos" class="photo-list"></div>
           <label class="dropzone" id="dropzone">
             <input id="photo-input" type="file" accept="image/png,image/jpeg" multiple>
@@ -99,7 +115,7 @@
             <button class="text-button" id="add-bom" type="button">＋ 添加一行</button>
           </div>
           <table class="grid-table">
-            <thead><tr><th>#</th><th>料号</th><th>规格</th><th>数量</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>料号</th><th>名称</th><th>数量</th><th></th></tr></thead>
             <tbody id="bom-body"></tbody>
           </table>
           <p class="hint">模板标准 7 行，超出会排到续页。</p>
@@ -111,7 +127,7 @@
             <button class="text-button" id="add-tool" type="button">＋ 添加一行</button>
           </div>
           <table class="grid-table">
-            <thead><tr><th>#</th><th>名称</th><th>规格</th><th>数量</th><th></th></tr></thead>
+            <thead><tr><th>选</th><th>名称</th><th>规格</th><th>数量</th><th></th></tr></thead>
             <tbody id="tool-body"></tbody>
           </table>
           <p class="hint">模板标准 5 行，超出会排到续页。</p>
@@ -129,8 +145,11 @@
           </div>
         </section>
 
+        <div id="publish-issues" class="publish-issues" role="alert" hidden></div>
+
         <div class="form-footer">
           <p class="save-state" id="save-state">改动还没有保存。</p>
+          <button class="button secondary" id="save-draft" type="button">保存当前工序</button>
           <button class="button primary" id="save" type="submit">保存到 Library</button>
         </div>
       </form>
@@ -147,15 +166,26 @@
         <span>项目文件夹名 <em>必填</em></span>
         <input id="create-project-id" name="projectId" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如 SQ69BXP">
         <small>product_lib 下的目录名，建议用项目代号</small>
-      </label>
-      <label class="field">
-        <span>Excel 上显示的项目名 <em>可留空</em></span>
-        <input id="create-project-name" name="displayName" maxlength="200" autocomplete="off" placeholder="留空则与文件夹名相同">
+        <small class="dialog-warning">导出时按这个名字进行匹配，请注意</small>
       </label>
       <p class="dialog-error" id="create-project-error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button class="button secondary" id="create-project-cancel" type="button">取消</button>
         <button class="button primary" id="create-project-submit" type="submit">创建</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 保存到 Library 成功后再问：要不要同步英文/摘要，避免每次都跑模型 -->
+  <dialog class="editor-dialog" id="sync-dialog" aria-labelledby="sync-title">
+    <form method="dialog">
+      <div class="eyebrow">SYNC</div>
+      <h2 id="sync-title">要同步英文版本吗？</h2>
+      <p class="hint">保存成功。翻译会调用模型并写入英文资料；如果这份 SOP 只需要中文，可以只更新摘要或暂不同步。</p>
+      <div class="dialog-actions">
+        <button class="button quiet" value="none" type="submit">暂不同步</button>
+        <button class="button secondary" value="summaries" type="submit">只更新摘要</button>
+        <button class="button primary" value="translate" type="submit">翻译 + 摘要</button>
       </div>
     </form>
   </dialog>

@@ -32,7 +32,7 @@ async function fixture() {
   const electron = {
     app: { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), on() {}, quit() {} },
     BrowserWindow: FakeWindow,
-    ipcMain: { handle: (name, action) => handlers.set(name, action) },
+    ipcMain: { handle: (name, action) => handlers.set(name, action), on: (name, action) => handlers.set(name, action) },
     session: { defaultSession: permissions, fromPartition: () => ({ ...permissions, webRequest: { onBeforeSendHeaders: (_filter, handler) => { beforeHeaders = handler; } } }) },
     protocol: { registerSchemesAsPrivileged() {}, handle() {} }, dialog: {}, shell: {}, net: {},
   };
@@ -52,6 +52,7 @@ async function fixture() {
 
 test('editor opens only after business authentication and closes on login, password change and revocation', async () => {
   const f = await fixture(); f.backend.statusCode = 403;
+  assert.equal(f.windows[0].url, 'https://backend.example/client/', '主界面改为从服务器加载');
   assert.equal((await f.call('openEditor')).code, 403); assert.equal(f.windows.length, 1);
   f.backend.statusCode = 0;
   assert.equal((await f.call('openEditor')).ok, true); const old = f.windows[1];

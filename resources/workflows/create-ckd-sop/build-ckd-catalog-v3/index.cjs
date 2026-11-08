@@ -629,7 +629,8 @@ function buildCatalog(input) {
     );
     for (const processId of fs.existsSync(projectProcessesRoot) ? sortedEntries(projectProcessesRoot) : []) {
       if (processId.isSymbolicLink()) throw new Error(`CKD Library cannot contain symlinks: ${processId.name}`);
-      if (processId.isDirectory()) processIds.add(processId.name);
+      // draft.json 是录入页的草稿标记：不参与出表，等用户点「保存到 Library」后才会移除。
+      if (processId.isDirectory() && !fs.existsSync(path.join(projectProcessesRoot, processId.name, "draft.json"))) processIds.add(processId.name);
     }
   }
   const processes = [];

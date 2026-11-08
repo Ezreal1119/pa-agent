@@ -9,6 +9,7 @@ const { BackendClient } = createRequire(import.meta.url)('../desktop/backend.cjs
 import { ClientAccess } from '../src/ckd/client-access.js';
 import { UserStore } from '../src/ckd/users.js';
 import { createCkdUiServer } from '../src/ckd/ui-server.js';
+import { ensureAccountLibrary } from '../src/ckd/library-registry.js';
 const input={projectName:'TARGET',documentNumber:'CLIENT-001',sopName:'相机检查',author:'Patrick'};
 const write=(file:string,text:string)=>{fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,text);};
 async function fixture(t:{after(fn:()=>Promise<void>|void):void}){
@@ -17,6 +18,9 @@ async function fixture(t:{after(fn:()=>Promise<void>|void):void}){
  for(const type of ['factory_test','assembly_test']){write(path.join(libraryPath,'processes_lib',type,'camera_test','metadata'),'Camera Test');write(path.join(libraryPath,'processes_lib',type,'camera_test','operation_steps.txt'),'Check camera image.');}
  const users=new UserStore(dataDir), created=await users.create('client-test');
  await users.changePassword(created.user.id,1,created.initialPassword,'client-test-long-password');
+ // 普通用户的任务跑在自己的库里；公共工序资料由 processes_lib 联接共享。
+ const userLibrary=ensureAccountLibrary(libraryPath,dataDir,'client-test');
+ write(path.join(userLibrary,'product_lib/TARGET/project.json'),JSON.stringify({version:1,projectId:'TARGET',displayName:'Target',aliases:['TARGET']}));
  let app=createCkdUiServer({libraryPath,dataDir});
  const listen=async()=>{app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const a=app.server.address();assert(a&&typeof a==='object');return `http://127.0.0.1:${a.port}`;};
  let url=await listen();let token:string|undefined;

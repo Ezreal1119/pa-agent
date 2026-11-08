@@ -6,7 +6,7 @@
   <main class="users-main"><div class="eyebrow">USER MANAGEMENT</div><h1>用户管理</h1><p class="muted">普通用户通过桌面端使用 SOP。初始密码首次登录后必须修改。</p>
     <p id="users-notice" role="alert" hidden></p>
     <form id="create-user-form" class="card users-create"><label class="field">新增普通用户<input name="account" required minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{2,63}" autocomplete="off" placeholder="账号，例如 patrick.test"><span class="field-help">3–64 位字母、数字、点、下划线或短横线。创建后不可更名。</span></label><button type="submit" class="primary">新增用户</button></form>
-    <section class="card"><div class="table-scroll"><table class="users-table"><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>密码状态</th><th>操作</th></tr></thead><tbody id="users-list"></tbody></table></div></section>
+    <section class="card"><div class="table-scroll"><table class="users-table"><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>密码状态</th><th>资料库</th><th>操作</th></tr></thead><tbody id="users-list"></tbody></table></div></section>
   </main>
   <dialog id="credentials-dialog" class="credentials-dialog" aria-labelledby="credentials-title"><h2 id="credentials-title">请保存初始密码</h2><p id="credentials-account"></p><p class="muted">密码仅展示本次。请通过合适的渠道交给用户；关闭后无法再次查看，需要时可以重置。</p><label class="field">初始密码<input id="initial-password" readonly autocomplete="off" spellcheck="false"></label><p id="copy-result" role="status"></p><div class="actions"><button id="copy-password" type="button">复制密码</button><button id="close-credentials" type="button" class="primary">已保存，关闭</button></div></dialog>
 </body></html>
