@@ -70,13 +70,23 @@ export async function runSyncTranslations(scoped:MaintenanceContext,parent:Maint
    const enChanged=previous?current.enHash!==previous.enHash:current.enHash!==null;
    const cnChanged=previous?current.cnHash!==previous.cnHash:current.cnHash!==null;
    const qualityIssue=managedQualityIssue(parent,current,previous);
+   const photoPath=/[\\/](?:photos|operation_photos|previous_station_check_photos)(?:[\\/]|$)/iu.test(current.en);
+   const photoNeedsSync=photoPath&&current.cnHash!==null&&current.enHash!==current.cnHash;
    const finish=(entry:Entry,status:'reused'|'skipped'|'planned'|'updated',message?:string)=>{checkpoint(key,entry);scoped.record({key,status,message});};
-   if(previous&&!enChanged&&!cnChanged&&!qualityIssue){finish({...current,generated:previous.generated},'reused');return;}
+   if(previous&&!enChanged&&!cnChanged&&!qualityIssue&&!photoNeedsSync){finish({...current,generated:previous.generated},'reused');return;}
    if(!previous&&!baseline.initialized&&current.enHash!==null&&current.cnHash!==null){finish({...current,generated:knownEntry(parent,current)?.generated},'skipped','Initial independent bilingual content retained; Hash baseline established');return;}
    if(current.enHash===null&&current.cnHash===null){finish(current,'reused','Both sides absent');return;}
    // Existing baselines make deletions different from missing counterparts.
-   const sourceSide: 'en'|'cn'=qualityIssue&&previous?.generated?(previous.generated==='en'?'cn':'en'):cnChanged?'cn':enChanged?'en':current.cnHash!==null?'cn':'en';
-   const targetSide:'en'|'cn'=sourceSide==='cn'?'en':'cn',source=current[sourceSide],target=current[targetSide],sourceHash=current[`${sourceSide}Hash`],targetHash=current[`${targetSide}Hash`];
+   let sourceSide: 'en'|'cn'=qualityIssue&&previous?.generated?(previous.generated==='en'?'cn':'en'):cnChanged?'cn':enChanged?'en':current.cnHash!==null?'cn':'en';
+   let targetSide:'en'|'cn'=sourceSide==='cn'?'en':'cn';
+   // Personal account libraries: CN photos are authoritative and overwrite EN byte-for-byte.
+   // Master library keeps the historical independent-photo behavior for its bilingual pairs.
+   const personalLibrary=/(?:^|[\\/])product_lib_[^\\/]+[\\/]ckd-library-v2$/iu.test(parent.root);
+   if(photoPath){
+    if(personalLibrary){sourceSide='cn';targetSide='en';}
+    else if(current.cnHash===null&&fs.existsSync(safePath(parent.root,path.dirname(current.cn)))&&fs.readdirSync(safePath(parent.root,path.dirname(current.cn))).length){finish({...current,generated:previous?.generated},'skipped','Independent CN photo directory retained');return;}
+   }
+   const source=current[sourceSide],target=current[targetSide],sourceHash=current[`${sourceSide}Hash`],targetHash=current[`${targetSide}Hash`];
    if(enChanged&&cnChanged&&current.cnHash!==null)parent.warning(`Both languages changed; Chinese wins: ${current.cn} -> ${current.en}`);
    if(sourceHash===null){
     const record=parent.translations[target],owned=previous?.generated===targetSide&&(current.kind==='directory'||!!record&&record.source===source&&record.targetHash===targetHash);
@@ -96,12 +106,6 @@ export async function runSyncTranslations(scoped:MaintenanceContext,parent:Maint
     if(parent.job.input.dryRun){scoped.record({key,status:'planned',message:`Create directory: ${target}`});return;}
     parent.job.sync!.checkpoint={key,entry};parent.save();scoped.commit(key,{[source]:fileHash(safePath(parent.root,source))},[{relative:target,data:Buffer.alloc(0),directory:true,before:null}]);recoverSyncCheckpoint(parent,dataDir,baseline);scoped.record({key,status:'updated',message:'Empty/override directory retained'});return;
    }
-   // On first adoption, do not merge images into a pre-existing independent photo override.
-   const photo=/[\\/](?:photos|operation_photos|previous_station_check_photos)[\\/]/iu.test(target);
-   const targetParent=path.dirname(target),preParent=[...snapshot.values()].find(e=>e.kind==='directory'&&e[targetSide]===targetParent);
-   // An empty target photo directory is a placeholder, not an independent override.
-   const targetHasFiles=(()=>{try{return fs.readdirSync(safePath(parent.root,targetParent)).length>0;}catch{return false;}})();
-   if(photo&&targetHasFiles&&preParent?.[`${targetSide}Hash`]!==null&&preParent!==undefined&&!knownEntry(parent,preParent)?.generated){finish(current,'skipped','Initial independent photo directory retained');return;}
    if(parent.job.input.dryRun){scoped.record({key,status:'planned',message:`${sourceSide==='cn'?'中文 → English':'English → 中文'}: ${target}${qualityIssue?' (quality recheck)':''}`});return;}
    const result=await translatedFile(parent,safePath(parent.root,source),targetSide==='cn'?'中文':'English');
    const translation:ManagedTranslation={source,target,sourceHash,targetHash:sha(result.data),language:(targetSide==='cn'?'中文':'English') as Language,model:result.model};

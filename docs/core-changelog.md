@@ -691,3 +691,10 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 复用：同步的快速复用分支也会重新评估“照片对一侧为空”的条目，避免旧个人库基线直接把缺失图片判成 reused。
 - 同时：直接翻译路径也允许填充空的目标照片目录；JPEG 同步规则保持。
 - 验证：`tests/ckd-library-sync.test.ts` 新增“空目标 photos 目录 + CN JPEG”用例通过；原有独立照片覆盖用例改为使用真实的非空人工图片；24/25 通过，唯一失败仍是 Windows 下 managed-translations registry 键反斜杠的既有测试问题。
+## 2026-11-09：个人库照片同步改为 CN 原样覆盖 EN
+
+- 按客户要求，个人账号库（`product_lib_<账号>/ckd-library-v2`）同步时，CN_process 工序内的照片目录（`photos` / `Operation_Photos` 等）按字节原样覆盖到对应英文 `processes` 目录，不再保留“英文独立照片目录”。
+- 照片在个人库只走 CN → EN；CN 没有的照片不会反向写回中文；英文比 CN 多出的文件保留在原处。
+- 复用分支遇到 CN/EN 照片 Hash 不一致会重新同步，旧基线也会被覆盖为 CN 内容。
+- 管理员主库保持原有双语独立照片规则，避免影响现有主库数据。
+- 验证：`tests/ckd-library-sync.test.ts` 的 JPEG 同步、CN 照片流向英文、独立照片用例通过；全套 24/25（唯一失败为 Windows registry 路径分隔符的既有测试）；`npm run typecheck` 通过。
