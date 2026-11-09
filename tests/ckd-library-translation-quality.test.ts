@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { translateText, verifyTranslatedFileQuality, verifyTranslationQuality } from "../src/ckd/library-translation.js";
+import { translateText, verifyTranslatedFileQuality, verifyTranslation, verifyTranslationQuality } from "../src/ckd/library-translation.js";
 import type { LibraryModelRequest } from "../src/ckd/library-model.js";
 
 const fixture = (t: { after(fn: () => void): void }) => {
@@ -86,4 +86,10 @@ test("managed JSONL text fields are compared without treating part numbers as pr
     verifyTranslatedFileQuality(source, target, "中文");
     fs.writeFileSync(target, '{"partno":"GPOS730","name":"检查，Check the camera cable","qty":"2"}\n');
     assert.throws(() => verifyTranslatedFileQuality(source, target, "中文"), /English phrase/u);
+});
+
+test("numeric guard accepts a space between a number and its unit", () => {
+  const source = "1.作业前检查电批扭力：0.8±0.1kgf.cm\n2.螺丝不能有打滑，打花现象";
+  const target = "1. Check the electric screwdriver torque before operation: 0.8±0.1 kgf.cm\n2. Screws must not slip or be damaged.";
+  assert.doesNotThrow(() => verifyTranslation(source, target));
 });

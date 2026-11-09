@@ -672,3 +672,9 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 原因：`library-translation.ts` 的 `allowedFile` 只允许 `txt / jsonl / png`，而录入页保存的操作图片是 JPEG（`.jpg`），同步扫描时被直接跳过。
 - 修复：允许 `png / jpg / jpeg`；其余同步规则（照片目录独立覆盖、按 Hash 复用）不变。
 - 验证：`tests/ckd-library-sync.test.ts` 新增「CN JPEG operation photos are copied to the English process」用例通过（sharp 生成真实 JPEG）；该文件另有 1 个与本修复无关的既有失败（Windows 下 managed-translations registry 键使用反斜杠，测试按正斜杠取值），Linux 不受影响。
+## 2026-11-09：修复翻译校验误判 `0.1kgf`
+
+- 现象：GPOS710 的 process_02/03 `Self_Check.txt`、`Previous_Station_Check.txt` 同步时报 “Translation changed numeric values or technical identifiers”，图片和摘要阶段被阻止。
+- 原因：`protectedParts` 的“字母+数字技术标识”正则从 `0.1kgf` 中匹配出了 `1kgf`；模型把单位写成 `0.1 kgf` 后这个伪标识消失，校验误判。数字本身没有变化。
+- 修复：技术标识正则加 `(?<![\d.])`，紧跟在数字/小数点后的字母后缀不再单独识别为标识；数字序列和真正的型号标识（如 `GPOS730`）仍严格校验。
+- 验证：新增回归用例 `numeric guard accepts a space between a number and its unit`；`tests/ckd-library-translation-quality.test.ts` 6/6、`npm run typecheck` 通过。部署后恢复同步即可继续图片和摘要阶段。

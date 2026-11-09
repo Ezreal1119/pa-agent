@@ -4,7 +4,7 @@ import { atomicJson } from "./store.js";
 import { directories, fileHash, readObject, readUtf8, safePath, sha, sopTypes, walk, type Language } from "./library-source.js";
 import type { MaintenanceContext, ManagedTranslation } from "./library-job-types.js";
 const natural = new Set(["name", "spec", "specs", "description"]);
-const protectedParts = (text: string) => [...(text.match(/\d+(?:\.\d+)*/gu) ?? []), ...(text.match(/\b[\w-]+\.(?:exe|dll|bin|hex|img|ini|cfg|json|txt|bat|sh|zip|apk)\b/giu) ?? []), ...(text.match(/\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9][A-Za-z0-9_-]*\b/gu) ?? [])].sort();
+const protectedParts = (text: string) => [...(text.match(/\d+(?:\.\d+)*/gu) ?? []), ...(text.match(/\b[\w-]+\.(?:exe|dll|bin|hex|img|ini|cfg|json|txt|bat|sh|zip|apk)\b/giu) ?? []), ...(text.match(/(?<![\d.])\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9][A-Za-z0-9_-]*\b/gu) ?? [])].sort();
 const digits = (text: string) => text.match(/\d+(?:\.\d+)*/gu) ?? [];
 const soundQuote = (value: string) => /^(?:滴滴|嘀嘀|哔哔|嘟嘟|beep(?:[ -]beep)?|ding(?:[ -]dong)?|buzz(?:ing)?)$/iu.test(value.slice(1, -1));
 const literalParts = (text: string) => [
