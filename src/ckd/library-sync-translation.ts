@@ -101,7 +101,7 @@ export async function runSyncTranslations(scoped:MaintenanceContext,parent:Maint
    const targetParent=path.dirname(target),preParent=[...snapshot.values()].find(e=>e.kind==='directory'&&e[targetSide]===targetParent);
    // An empty target photo directory is a placeholder, not an independent override.
    const targetHasFiles=(()=>{try{return fs.readdirSync(safePath(parent.root,targetParent)).length>0;}catch{return false;}})();
-   if(!previous&&!baseline.initialized&&photo&&targetHasFiles&&preParent?.[`${targetSide}Hash`]!==null&&preParent!==undefined&&!knownEntry(parent,preParent)?.generated){finish(current,'skipped','Initial independent photo directory retained');return;}
+   if(photo&&targetHasFiles&&preParent?.[`${targetSide}Hash`]!==null&&preParent!==undefined&&!knownEntry(parent,preParent)?.generated){finish(current,'skipped','Initial independent photo directory retained');return;}
    if(parent.job.input.dryRun){scoped.record({key,status:'planned',message:`${sourceSide==='cn'?'中文 → English':'English → 中文'}: ${target}${qualityIssue?' (quality recheck)':''}`});return;}
    const result=await translatedFile(parent,safePath(parent.root,source),targetSide==='cn'?'中文':'English');
    const translation:ManagedTranslation={source,target,sourceHash,targetHash:sha(result.data),language:(targetSide==='cn'?'中文':'English') as Language,model:result.model};
