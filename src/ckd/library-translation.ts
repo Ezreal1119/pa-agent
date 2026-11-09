@@ -377,7 +377,7 @@ export async function runTranslations(context: MaintenanceContext): Promise<void
                         if (isImageSet && fs.existsSync(path.join(targetRoot, parent)) && !context.translations[path.relative(context.root, path.join(targetRoot, suffix))]) {
                             const existing = walk(path.join(targetRoot, parent));
                             const managed = existing.length > 0 && existing.every(file => { const record = context.translations[path.relative(context.root, file)]; return record && record.targetHash === fileHash(file) && path.dirname(record.source) === path.relative(context.root, path.join(sourceRoot, parent)); });
-                            if (!managed) {
+                            if (existing.length > 0 && !managed) {
                                 const target = path.relative(context.root, path.join(targetRoot, suffix));
                                 operations.set(target, { source: path.relative(context.root, source), target, language, skip: "Existing independent photo directory retained" });
                                 continue;

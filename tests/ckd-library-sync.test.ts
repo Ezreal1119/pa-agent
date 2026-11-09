@@ -117,9 +117,9 @@ test('one changed side becomes source, both changed Chinese wins and reports; em
  write(path.join(f.en,'operation_steps.txt'),'');j=await f.service.start('sync');assert.equal(j.status,'completed',JSON.stringify(j));assert.equal(fs.statSync(path.join(f.cn,'operation_steps.txt')).size,0);
 });
 test('initial independent bilingual contents and photo override are adopted without guessing authority',async t=>{
- const f=fixture(t);write(path.join(f.cn,'metadata.txt'),'人工中文');write(path.join(f.cn,'operation_steps.txt'),'中文工序');fs.mkdirSync(path.join(f.cn,'photos'),{recursive:true});write(path.join(f.en,'photos/p1.png'),png);
+ const f=fixture(t);write(path.join(f.cn,'metadata.txt'),'人工中文');write(path.join(f.cn,'operation_steps.txt'),'中文工序');const manualPng=await sharp({create:{width:3,height:3,channels:3,background:'#000000'}}).png().toBuffer();write(path.join(f.cn,'photos/manual.png'),manualPng);write(path.join(f.en,'photos/p1.png'),png);
  let j=await f.service.start('sync',{dryRun:true});assert.equal(j.status,'completed',JSON.stringify(j));assert.equal(f.calls.length,0);assert.ok(!fs.existsSync(path.join(f.dataDir,'ckd/library-cache',sha(f.libraryPath),'sync-baseline.json')));
- j=await f.service.start('sync');assert.equal(j.status,'completed',JSON.stringify(j));assert.equal(fs.readFileSync(path.join(f.cn,'metadata.txt'),'utf8'),'人工中文');assert.ok(!fs.existsSync(path.join(f.cn,'photos/p1.png')));
+ j=await f.service.start('sync');assert.equal(j.status,'completed',JSON.stringify(j));assert.equal(fs.readFileSync(path.join(f.cn,'metadata.txt'),'utf8'),'人工中文');assert.ok(!fs.existsSync(path.join(f.cn,'photos/p1.png')));assert.ok(fs.existsSync(path.join(f.cn,'photos/manual.png')));
  write(path.join(f.en,'operation_steps.txt'),'Updated port.');j=await f.service.start('sync');assert.equal(fs.readFileSync(path.join(f.cn,'operation_steps.txt'),'utf8'),'中：'+mockTranslated('Updated port.','中文'));
 });
 test('syntax failure blocks all models and Library writes; resume rescans corrected files',async t=>{
@@ -210,6 +210,7 @@ test('CN JPEG operation photos are copied to the English process', async t => {
   const f = fixture(t);
   const jpg = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#ffffff' } }).jpeg().toBuffer();
   write(path.join(f.cn, 'photos/p1.jpg'), jpg);
+  fs.mkdirSync(path.join(f.en, 'photos'), { recursive: true });
   const job = await f.service.start('sync');
   assert.equal(job.status, 'completed', JSON.stringify(job));
   assert.ok(fs.existsSync(path.join(f.en, 'photos/p1.jpg')));

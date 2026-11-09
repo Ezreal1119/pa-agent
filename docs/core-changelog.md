@@ -683,3 +683,10 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 上述修复后仍可能遇到模型真的改动数字/标识的情况；原来的错误只有一句话，无法定位。
 - `verifyTranslation` 现在在报错中附带 `missing` / `added` 两个列表，直接显示源文有、译文没有的标识，以及译文多出的标识。
 - 验证：`tests/ckd-library-translation-quality.test.ts` 6/6、`npm run typecheck` 通过。
+## 2026-11-09：修复个人库空照片目录导致操作图片不同步
+
+- 现象：管理员主库同步正常，个人账号库/其他个人库同步后英文 processes 仍缺操作图片。
+- 原因：`runSyncTranslations` 首次接管时，只要目标 `photos` 目录已存在就按“独立照片目录”跳过；个人库中该目录常常是空占位目录，于是 CN 的 JPEG 永远不会复制过去。主库没有这个空目录，所以正常。
+- 修复：目标照片目录只有存在实际文件时才视为独立覆盖；空目录按占位处理，允许补图。非空独立目录仍然保留、不合并。
+- 同时：直接翻译路径也允许填充空的目标照片目录；JPEG 同步规则保持。
+- 验证：`tests/ckd-library-sync.test.ts` 新增“空目标 photos 目录 + CN JPEG”用例通过；原有独立照片覆盖用例改为使用真实的非空人工图片；24/25 通过，唯一失败仍是 Windows 下 managed-translations registry 键反斜杠的既有测试问题。
