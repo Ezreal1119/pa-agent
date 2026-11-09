@@ -2340,7 +2340,6 @@ function buildAssemblyProcessSheets(
  */
 function applyEnglishTypography(workbook) {
   const seen = new Set();
-  const cjk = /[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/u;
   const textOf = cell => {
     try { return String(cell.text || ""); } catch { return String(cell.value ?? ""); }
   };
@@ -2348,19 +2347,18 @@ function applyEnglishTypography(workbook) {
     const target = cell.master || cell;
     if (seen.has(target.address)) return;
     seen.add(target.address);
-    const patch = (font, text) => {
-      const hasChinese = cjk.test(text);
-      const next = { ...(font || {}), name: hasChinese ? "黑体" : "Calibri", charset: hasChinese ? 134 : 0 };
+    const patch = font => {
+      const next = { ...(font || {}), name: "Calibri", charset: 0 };
       if (size) next.size = size;
       delete next.scheme;
       return next;
     };
     const value = target.value;
     if (value && typeof value === "object" && Array.isArray(value.richText)) {
-      for (const run of value.richText) run.font = patch(run.font, String(run.text || ""));
-      target.font = patch(target.font, value.richText.map(run => run.text || "").join(""));
+      for (const run of value.richText) run.font = patch(run.font);
+      target.font = patch(target.font);
     } else {
-      target.font = patch(target.font, textOf(target));
+      target.font = patch(target.font);
     }
   };
   const sectionLabel = /^(?:\d+[.)]\s*)?(Bill of Materials|Tools\/Fixtures|BOM Continuation|Tools Continuation|Previous Station Check|Self-Check|Technical Requirements|Operation Instruction)\b/i;

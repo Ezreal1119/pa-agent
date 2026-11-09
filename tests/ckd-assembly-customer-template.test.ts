@@ -341,11 +341,12 @@ test('Assembly customer typography follows logical regions across languages, til
         const cell = sheet.getCell(row, col).master;
         assert.equal(cell.font.name, 'Calibri', cell.address); assert.equal(cell.font.size, 14, cell.address);
       }
-      for (const ref of [`A${map(23)}`, `A${map(31)}`]) assert.equal(sheet.getCell(ref).font.name, '黑体', ref);
+      for (const ref of [`A${map(23)}`, `A${map(31)}`]) assert.equal(sheet.getCell(ref).font.name, 'Calibri', ref);
     }
     const captions = count === 1 ? [[30, 7]] : count === 2 ? [[30, 7], [30, 15]] : [[19, 7], [19, 15], [34, 7], [34, 15]];
     for (const [row, col] of captions) {
-      assert.equal(sheet.getCell(map(row!), col!).font.name, '黑体'); assert.equal(sheet.getCell(map(row!), col!).font.size, 22);
+      assert.equal(sheet.getCell(map(row!), col!).font.name, language === '中文' ? '黑体' : 'Calibri');
+      assert.equal(sheet.getCell(map(row!), col!).font.size, 22);
     }
     assert.equal(sheet.getCell(8, 1).value, '1'); assert.equal(sheet.getCell(map(17), 1).value, '1', 'Process table keeps its index');
     validReferences(workbook);
@@ -369,8 +370,12 @@ test('Assembly chart centers every cell, separates mixed-script fonts, omits onl
     }
     for (const ref of ['D7', 'E7']) {
       const runs = (chart.getCell(ref).value as ExcelJS.CellRichTextValue).richText;
-      assert.ok(runs.some(run => run.font!.name === '黑体')); assert.ok(runs.some(run => run.font!.name === 'Calibri'));
-      for (const run of runs) assert.equal(run.font!.name, /[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/u.test(run.text) ? '黑体' : 'Calibri');
+      if (language === '中文') {
+        assert.ok(runs.some(run => run.font!.name === '黑体')); assert.ok(runs.some(run => run.font!.name === 'Calibri'));
+        for (const run of runs) assert.equal(run.font!.name, /[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/u.test(run.text) ? '黑体' : 'Calibri');
+      } else {
+        for (const run of runs) assert.equal(run.font!.name, 'Calibri');
+      }
     }
     assert.equal(chart.getCell('A7').font.name, 'Calibri'); assert.equal(chart.getCell('F7').font.name, 'Calibri');
     assert.equal((chart.getCell('C4').value as ExcelJS.CellFormulaValue).result, 'D-001');
