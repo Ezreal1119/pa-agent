@@ -133,24 +133,37 @@ function buildAssemblyWorkbook(workbook, options, h) {
     }
     return lines * size * (compact ? 1.2 : 1.4) + (compact ? 6 : 10);
   }
-  function writeText(sheet, text, range, processName, label, preserveAlignment = false) {
+  function writeText(sheet, text, range, processName, label, preserveAlignment = false, shrink = false) {
     const [first, last, left, right] = range, cell = sheet.getCell(first, left);
     // Imported cells can share a style object. Detach before changing alignment.
     cell.style = { ...cell.style, alignment: { ...cell.alignment,
       ...(preserveAlignment ? {} : { horizontal: "left", vertical: "top" }), wrapText: true } };
     if (!text) { cell.value = null; return; }
-    if (textHeight(sheet, text, first, left, right) <= blockHeight(sheet, first, last) - 4) { cell.value = text; return; }
+    const block = blockHeight(sheet, first, last) - 4;
+    if (textHeight(sheet, text, first, left, right) <= block) { cell.value = text; return; }
+    const baseSize = cell.font?.size || 11;
+    // Check text: prefer a slightly smaller font over cutting the sentence. Keep at least 12pt.
+    if (shrink) {
+      for (let size = baseSize - 1; size >= 12; size--) {
+        cell.font = { ...cell.font, size };
+        if (textHeight(sheet, text, first, left, right) <= block) { cell.value = text; return; }
+      }
+    }
     const name = freshName(labels.continuation);
     textRequests.push({ name, processName, label, text, font: { ...cell.font } });
-    const reference = `${labels.full}「${name}」`;
+    const reference = chinese ? `${labels.full}「${name}」` : `${labels.full}"${name}"`;
     // A short excerpt is useful on the process page; the continuation retains the complete original.
     const chars = Array.from(text); let low = 0, high = chars.length;
     while (low < high) {
       const mid = Math.ceil((low + high) / 2);
       const preview = `${chars.slice(0, mid).join("")}…\n${reference}`;
-      if (textHeight(sheet, preview, first, left, right) <= blockHeight(sheet, first, last) - 4) low = mid; else high = mid - 1;
+      if (textHeight(sheet, preview, first, left, right) <= block) low = mid; else high = mid - 1;
     }
-    cell.value = low ? `${chars.slice(0, low).join("")}…\n${reference}` : reference;
+    // Do not cut in the middle of an English word; keep the cut only if it stays close.
+    let cut = low;
+    while (cut > 0 && !/[\s，。；、,.;!?]/u.test(chars[cut - 1])) cut--;
+    if (cut < low / 2) cut = low;
+    cell.value = cut ? `${chars.slice(0, cut).join("")}…\n${reference}` : reference;
     warnings.push(`${processName}: ${label} ${chinese ? "超过原区容量，完整内容保存在" : "exceeds the original area; full text retained in"}「${name}」。`);
   }
   function tablePlan(template, records, first, last, protectedRows = []) {
@@ -369,8 +382,8 @@ function buildAssemblyWorkbook(workbook, options, h) {
       }
       // Splitting the check-text/photo merge creates new cell styles.
       styleRange(sheet, map(23), map(29), 1, 6, { name: "黑体", size: 16, color: { argb: "FFFF0000" }, underline: true });
-      writeText(sheet, textFile(folder, "Previous_Station_Check.txt"), [map(23), map(previousPhoto ? 26 : 29), 1, 6], metadataName, labels.previous);
-      writeText(sheet, textFile(folder, "Self_Check.txt"), [map(31), map(35), 1, 6], metadataName, labels.self);
+      writeText(sheet, textFile(folder, "Previous_Station_Check.txt"), [map(23), map(previousPhoto ? 26 : 29), 1, 6], metadataName, labels.previous, false, !chinese);
+      writeText(sheet, textFile(folder, "Self_Check.txt"), [map(31), map(35), 1, 6], metadataName, labels.self, false, !chinese);
       paper(sheet, `A1:V${map(36)}`); h.setSheetZoom(sheet, 80); pages.push({ sheet, footer: `U${map(36)}` });
     }
   }

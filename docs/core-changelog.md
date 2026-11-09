@@ -659,3 +659,10 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 实现：`resources/workflows/create-ckd-sop/create-ckd-sop-v3/fill_sop_sheet.js` 在英文输出写盘前调用 `applyEnglishTypography`：所有工作表字体改为 Calibri（保留字号/加粗/颜色/下划线，去掉 theme scheme）；识别主表和续表的 `Bill of Materials` / `Tools/Fixtures` 区块，把数据行（跳过区块标题和列头）设为 14 号。中文输出不调用，保持原字体。
 - 兼容：按反馈改为严格 Calibri，英文输出中所有单元格和富文本 run 都设为 Calibri（含中文/全角标点），中文由 Excel 字体回退显示；中文输出仍保持原字体。
 - 验证：`tests/ckd-assembly-customer-template.test.ts` 16/16 通过，新增/调整断言覆盖英文封面 Calibri、工序页表体 14 号、中文输出不变；另生成英文样例扫描全部单元格，黑体 0 处，BOM/工具表体为 Calibri 14。`node --check`、`npm run typecheck` 通过。未重新生成历史 Excel。
+
+## 2026-11-09：英文检查文字超出时自动降字号
+
+- 需求：英文「作业前检查 / 自检」被截断时，优先缩小字号而不是直接截断。
+- 实现：`assembly-template.cjs` 的 `writeText` 增加 `shrink` 参数，仅英文检查文字启用：从当前字号逐级降到 12 号重新估算，能放下就完整显示；12 号仍放不下才走摘要 + 续页。图片说明（22 号）和封面不降字号，保持原版式。
+- 同时：英文输出 `Full text in..."` 改用英文引号；兜底截断尽量按单词/标点边界，不再出现 `the m…` 这种半截单词。
+- 验证：`tests/ckd-assembly-customer-template.test.ts` 17/17 通过，新增用例确认长英文检查文字完整显示且字号小于 16；`node --check`、`npm run typecheck` 通过。

@@ -400,3 +400,14 @@ test('Assembly 16-point tables give wrapped records spare row height and retain 
   assert.equal(result.warnings.length, 1); assert.match(result.warnings[0], /原页1行/u);
   validReferences(workbook);
 });
+
+test('long English check text shrinks the font instead of truncating', async t => {
+  const root = fixture(t), text = '1.After confirming the good product is correct, it flows to the next process.\n2.All materials are subject to the material list, and the operator must confirm the part number against the work order before assembly.\n3.Check whether the probe is pressed in place; if any defect cannot be judged, confirm with the line leader before continuing.\n4.Put the confirmed good product into the next fixture and make sure it is seated.';
+  const dir = source(root, 'shrink', 1);
+  put(path.join(dir, 'Previous_Station_Check.txt'), text);
+  const { workbook } = await generate(root, ['shrink'], 'English'), sheet = workbook.worksheets[2]!;
+  const cell = sheet.getCell('A23');
+  assert.equal(cell.value, text);
+  assert.ok(!String(cell.value).includes('...'));
+  assert.ok(cell.font.size! < 16 && cell.font.size! >= 12, `font size ${cell.font.size}`);
+});
