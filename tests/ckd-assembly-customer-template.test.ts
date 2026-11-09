@@ -242,7 +242,12 @@ test('Assembly cover wraps document names and preserves centered template styles
     assert.ok(cover.getRow(4).height! > original.getRow(4).height!);
     for (const ref of ['A4', 'C7', 'D7', 'F7']) {
       assert.deepEqual(cover.getCell(ref).alignment, { ...original.getCell(ref).alignment, wrapText: true });
-      assert.deepEqual(cover.getCell(ref).font, original.getCell(ref).font);
+      if (language === '中文') assert.deepEqual(cover.getCell(ref).font, original.getCell(ref).font);
+      else {
+        const expected = { ...original.getCell(ref).font, name: 'Calibri' };
+        delete expected.scheme; delete expected.charset;
+        assert.deepEqual(cover.getCell(ref).font, expected);
+      }
       assert.deepEqual(cover.getCell(ref).border, original.getCell(ref).border);
     }
     assert.equal(cover.getCell('C7').value, 'Patrick');
@@ -318,15 +323,25 @@ test('Assembly customer typography follows logical regions across languages, til
     assert.equal(footer, 38, 'Inserted table rows keep mapped styles and footer positions');
     const map = (row: number) => row + (row >= 15 ? 1 : 0) + (row >= 22 ? 1 : 0);
     for (const row of [6, 15, 22, 30, 36]) {
-      assert.equal(sheet.getCell(map(row), 1).font.name, '黑体'); assert.equal(sheet.getCell(map(row), 1).font.size, 16);
+      assert.equal(sheet.getCell(map(row), 1).font.name, language === '中文' ? '黑体' : 'Calibri');
+      assert.equal(sheet.getCell(map(row), 1).font.size, 16, `section row ${row} -> ${map(row)}`);
     }
-    for (const [first, last] of [[7, 14], [16, 21], [23, 29], [31, 35]]) {
-      const end = map(last!) + (last === 14 || last === 21 ? 1 : 0);
-      for (let row = map(first!); row <= end; row++) for (let col = 1; col <= 6; col++) {
-        const cell = sheet.getCell(row, col).master;
-        assert.equal(cell.font.name, '黑体', cell.address); assert.equal(cell.font.size, 16, cell.address);
-        if (first! >= 23) { assert.equal(cell.font.color!.argb, 'FFFF0000'); assert.equal(cell.font.underline, true); }
+    if (language === '中文') {
+      for (const [first, last] of [[7, 14], [16, 21], [23, 29], [31, 35]]) {
+        const end = map(last!) + (last === 14 || last === 21 ? 1 : 0);
+        for (let row = map(first!); row <= end; row++) for (let col = 1; col <= 6; col++) {
+          const cell = sheet.getCell(row, col).master;
+          assert.equal(cell.font.name, '黑体', cell.address); assert.equal(cell.font.size, 16, cell.address);
+          if (first! >= 23) { assert.equal(cell.font.color!.argb, 'FFFF0000'); assert.equal(cell.font.underline, true); }
+        }
       }
+    } else {
+      // English: table bodies are Calibri 14pt; Chinese operation/check text keeps the CJK face.
+      for (const [first, last] of [[8, 14], [17, 21]]) for (let row = map(first!); row <= map(last!); row++) for (let col = 1; col <= 6; col++) {
+        const cell = sheet.getCell(row, col).master;
+        assert.equal(cell.font.name, 'Calibri', cell.address); assert.equal(cell.font.size, 14, cell.address);
+      }
+      for (const ref of [`A${map(23)}`, `A${map(31)}`]) assert.equal(sheet.getCell(ref).font.name, '黑体', ref);
     }
     const captions = count === 1 ? [[30, 7]] : count === 2 ? [[30, 7], [30, 15]] : [[19, 7], [19, 15], [34, 7], [34, 15]];
     for (const [row, col] of captions) {

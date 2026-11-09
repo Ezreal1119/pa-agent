@@ -2334,6 +2334,63 @@ function buildAssemblyProcessSheets(
   return { warnings, pageCount };
 }
 
+/**
+ * English output typography: Calibri everywhere; Bill of Materials / Tools-Fixtures
+ * table bodies at 14pt. Chinese output must not call this.
+ */
+function applyEnglishTypography(workbook) {
+  const seen = new Set();
+  const cjk = /[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/u;
+  const textOf = cell => {
+    try { return String(cell.text || ""); } catch { return String(cell.value ?? ""); }
+  };
+  const setFont = (cell, size) => {
+    const target = cell.master || cell;
+    if (seen.has(target.address)) return;
+    seen.add(target.address);
+    const patch = (font, text) => {
+      const hasChinese = cjk.test(text);
+      const next = { ...(font || {}), name: hasChinese ? "黑体" : "Calibri", charset: hasChinese ? 134 : 0 };
+      if (size) next.size = size;
+      delete next.scheme;
+      return next;
+    };
+    const value = target.value;
+    if (value && typeof value === "object" && Array.isArray(value.richText)) {
+      for (const run of value.richText) run.font = patch(run.font, String(run.text || ""));
+      target.font = patch(target.font, value.richText.map(run => run.text || "").join(""));
+    } else {
+      target.font = patch(target.font, textOf(target));
+    }
+  };
+  const sectionLabel = /^(?:\d+[.)]\s*)?(Bill of Materials|Tools\/Fixtures|BOM Continuation|Tools Continuation|Previous Station Check|Self-Check|Technical Requirements|Operation Instruction)\b/i;
+  for (const sheet of workbook.worksheets) {
+    seen.clear();
+    sheet.eachRow({ includeEmpty: false }, row => {
+      row.eachCell({ includeEmpty: true }, cell => setFont(cell));
+    });
+    const sections = [];
+    for (let row = 1; row <= sheet.rowCount; row++) {
+      const match = sectionLabel.exec(textOf(sheet.getCell(row, 1)).trim());
+      if (match) sections.push({ row, kind: match[1] });
+    }
+    // The body pass must be allowed to restyle cells that already received the Calibri pass.
+    seen.clear();
+    for (let index = 0; index < sections.length; index++) {
+      const section = sections[index], continuation = /Continuation$/i.test(section.kind);
+      if (!/^(Bill of Materials|Tools\/Fixtures|BOM Continuation|Tools Continuation)$/i.test(section.kind)) continue;
+      // Main table: section title, column header, then data. Continuation: title/brief/blank/header, then data.
+      const start = section.row + (continuation ? 4 : 2);
+      const end = (sections[index + 1]?.row ?? sheet.rowCount + 1) - 1;
+      const lastColumn = continuation ? 4 : 6;
+      for (let row = start; row <= end; row++) {
+        if (continuation && row === sheet.rowCount) continue; // page-number footer
+        for (let column = 1; column <= lastColumn; column++) setFont(sheet.getCell(row, column), 14);
+      }
+    }
+  }
+}
+
 async function buildCkdSop(options) {
   const templateLanguage = normalizeTemplateLanguage(options.templateLanguage);
   const templatePath = path.resolve(
@@ -2400,6 +2457,8 @@ async function buildCkdSop(options) {
     }
     fillSheet(workbook, worksheet, path.resolve(options.dataDir), assetsDir);
   }
+
+  if (templateLanguage === TEMPLATE_LANGUAGE_ENGLISH) applyEnglishTypography(workbook);
 
   await workbook.xlsx.writeFile(outputPath);
   return {
