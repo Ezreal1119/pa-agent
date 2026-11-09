@@ -2,6 +2,9 @@ import { SyncNotifications, syncDestination, syncGroupDestination } from "../syn
 import { QuestionReviewService } from "../question-review/service.js";
 import { questionReviewRoute } from "../question-review/routes.js";
 import { ReviewError } from "../question-review/types.js";
+import { ExportAccess, exportTokens, type ExportToken } from "../knowledge-export/access.js";
+import { ExportError } from "../knowledge-export/snapshot.js";
+import { KnowledgeExportHttp, KNOWLEDGE_EXPORT_PATH } from "../knowledge-export/http.js";
 import { UsageLedger, configureUsagePricing } from "../usage/ledger.js";
 import { balanceCommand, libraryCommand } from "./wecom-commands.js";
 import { firmwareConfig, LocalFirmwareClient, type FirmwareClient } from "../firmware/client.js";
@@ -81,7 +84,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -92,6 +95,8 @@ export async function createWebServer(options: WebOptions = {}) {
     if (error.code === "ENOENT") return {} as Record<string, string>;
     throw error;
   });
+  const knowledgeTokens = options.knowledgeExport?.tokens ?? exportTokens({ ...diskEnv, ...process.env });
+  const knowledgeExport = new KnowledgeExportHttp(dataDir, new ExportAccess(knowledgeTokens));
   const firmwareOptions = firmwareConfig({ ...diskEnv, ...process.env });
   const libraryOptions = libraryConfig({ ...diskEnv, ...process.env });
   const sftpOptions = sftpConfig(cwd, dataDir, { ...diskEnv, ...process.env });
@@ -143,6 +148,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const configured = () => Boolean(settings.apiKey && settings.baseUrl && settings.modelId);
   const redact = (error: unknown) => {
     let message = error instanceof Error ? error.message : String(error);
+    for (const reader of knowledgeTokens) message = message.split(reader.token).join("[REDACTED]");
     if (mcpOptions.apiKey) message = message.split(mcpOptions.apiKey).join("[REDACTED]");
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (firmwareOptions.token) message = message.split(firmwareOptions.token).join("[REDACTED]");
@@ -459,6 +465,12 @@ export async function createWebServer(options: WebOptions = {}) {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const method = req.method;
+      if (url.pathname === KNOWLEDGE_EXPORT_PATH) {
+        // Public HTTPS host policy is retained; only this route accepts download credentials.
+        try { originPolicy.check(req, (server.address() as import("node:net").AddressInfo).port); }
+        catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
+        await knowledgeExport.handle(req, res, url); return;
+      }
       if (url.pathname === "/mcp") {
         if (!mcpOptions.enabled) throw new HttpError(404, "MCP is disabled. Enable it in Agent settings.");
         // MCP uses its own Bearer key, independent of browser login/CSRF and WeCom credentials.
@@ -1147,7 +1159,7 @@ export async function createWebServer(options: WebOptions = {}) {
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
-      json(res, error instanceof HttpError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError || error instanceof ReviewError ? error.status : 500, { error: redact(error) });
+      json(res, error instanceof HttpError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError || error instanceof ReviewError || error instanceof ExportError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;

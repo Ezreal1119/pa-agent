@@ -63,6 +63,8 @@ const session = await runtime.createSession(sessionManager);
 
 A local Web testing interface now lives in `src/web` and `resources/web` on this checkout; see below.
 
+The optional [business knowledge export API](docs/knowledge-export.md) provides a ZIP snapshot through `GET /api/knowledge/export` using dedicated per-reader Bearer tokens configured in `KNOWLEDGE_EXPORT_TOKENS`. Only formal product/UMS Markdown and main business memory are exported; conversations, attachments, extra memory, credentials and settings stay private. The endpoint is disabled by default.
+
 ## Default expert skills and memory
 
 The configured data directory (`AGENT_DATA_DIR`, default `.data/`) contains the required product expert and optional UMS skill:
