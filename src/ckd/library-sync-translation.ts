@@ -112,8 +112,12 @@ export async function runSyncTranslations(scoped:MaintenanceContext,parent:Maint
  for(const [key,entry] of work){
   await yieldLibraryTurn(parent.signal);
   const previous=baseline.pairs[key];
+  // A photo pair missing on one side may be an empty placeholder from an earlier
+  // adoption; re-evaluate it instead of fast-path reusing the baseline.
+  const photoPair=/[\\/](?:photos|operation_photos|previous_station_check_photos)[\\/]/iu.test(entry.en);
+  const missingPhoto=photoPair&&((entry.enHash===null)!==(entry.cnHash===null));
   // Snapshot hashes already prove an unchanged pair. Its durable baseline needs no checkpoint.
-  if(previous&&entry.enHash===previous.enHash&&entry.cnHash===previous.cnHash&&!managedQualityIssue(parent,entry,previous)){scoped.record({key,status:'reused'});continue;}
+  if(previous&&entry.enHash===previous.enHash&&entry.cnHash===previous.cnHash&&!managedQualityIssue(parent,entry,previous)&&!missingPhoto){scoped.record({key,status:'reused'});continue;}
   await perform(key,entry);
  }
  for(const [key,entry] of deletedDirectories.sort(([,a],[,b])=>b.en.length-a.en.length)){await yieldLibraryTurn(parent.signal);await perform(key,entry,true);}
