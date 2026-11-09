@@ -666,3 +666,9 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 实现：`assembly-template.cjs` 的 `writeText` 增加 `shrink` 参数，仅英文检查文字启用：从当前字号逐级降到 12 号重新估算，能放下就完整显示；12 号仍放不下才走摘要 + 续页。图片说明（22 号）和封面不降字号，保持原版式。
 - 同时：英文输出 `Full text in..."` 改用英文引号；兜底截断尽量按单词/标点边界，不再出现 `the m…` 这种半截单词。
 - 验证：`tests/ckd-assembly-customer-template.test.ts` 17/17 通过，新增用例确认长英文检查文字完整显示且字号小于 16；`node --check`、`npm run typecheck` 通过。
+## 2026-11-09：修复中文工序 JPEG 操作图片不同步
+
+- 现象：CN_process 里的操作图片没有复制到英文 processes 目录。
+- 原因：`library-translation.ts` 的 `allowedFile` 只允许 `txt / jsonl / png`，而录入页保存的操作图片是 JPEG（`.jpg`），同步扫描时被直接跳过。
+- 修复：允许 `png / jpg / jpeg`；其余同步规则（照片目录独立覆盖、按 Hash 复用）不变。
+- 验证：`tests/ckd-library-sync.test.ts` 新增「CN JPEG operation photos are copied to the English process」用例通过（sharp 生成真实 JPEG）；该文件另有 1 个与本修复无关的既有失败（Windows 下 managed-translations registry 键使用反斜杠，测试按正斜杠取值），Linux 不受影响。

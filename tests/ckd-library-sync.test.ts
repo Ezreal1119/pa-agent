@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {once} from 'node:events';
+import sharp from 'sharp';
 import {LibraryMaintenance} from '../src/ckd/library-maintenance.js';
 import {ImageAssessmentChecker,saveImagePolicy,DEFAULT_POLICY} from '../src/ckd/image-assessment.js';
 import {assessmentSeen} from './helpers/image-assessment.js';
@@ -203,4 +204,14 @@ test('external edits during translation are not overwritten; dry run never chang
  const f=fixture(t),before=fileHash(f.libraryPath);await f.service.start('sync',{dryRun:true});assert.equal(fileHash(f.libraryPath),before);let once=false;
  const model:LibraryModel={async complete(req,signal){if(req.purpose==='translate'&&!once){once=true;write(path.join(f.cn,'metadata.txt'),'外部修改');}return f.model.complete(req,signal);}};
  const j=await new LibraryMaintenance({libraryPath:f.libraryPath,dataDir:f.dataDir,model,imageChecker:f.imageChecker}).start('sync');assert.equal(j.status,'partial_failed',JSON.stringify(j));assert.equal(fs.readFileSync(path.join(f.cn,'metadata.txt'),'utf8'),'外部修改');assert.ok(!j.sync!.stages.summaries);
+});
+
+test('CN JPEG operation photos are copied to the English process', async t => {
+  const f = fixture(t);
+  const jpg = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#ffffff' } }).jpeg().toBuffer();
+  write(path.join(f.cn, 'photos/p1.jpg'), jpg);
+  const job = await f.service.start('sync');
+  assert.equal(job.status, 'completed', JSON.stringify(job));
+  assert.ok(fs.existsSync(path.join(f.en, 'photos/p1.jpg')));
+  assert.deepEqual(fs.readFileSync(path.join(f.en, 'photos/p1.jpg')), jpg);
 });

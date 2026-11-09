@@ -341,7 +341,7 @@ export async function runTranslations(context: MaintenanceContext): Promise<void
         const name = path.basename(relative).toLowerCase();
         if (["summary.json", "overview.json"].includes(name))
             return false;
-        return name === "metadata" || /\.(?:txt|jsonl|png)$/iu.test(name);
+        return name === "metadata" || /\.(?:txt|jsonl|png|jpe?g)$/iu.test(name);
     };
     for (const pair of pairs) {
         const en = safePath(context.root, pair.en);
