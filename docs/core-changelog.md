@@ -678,3 +678,8 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 原因：`protectedParts` 的“字母+数字技术标识”正则从 `0.1kgf` 中匹配出了 `1kgf`；模型把单位写成 `0.1 kgf` 后这个伪标识消失，校验误判。数字本身没有变化。
 - 修复：技术标识正则加 `(?<![\d.])`，紧跟在数字/小数点后的字母后缀不再单独识别为标识；数字序列和真正的型号标识（如 `GPOS730`）仍严格校验。
 - 验证：新增回归用例 `numeric guard accepts a space between a number and its unit`；`tests/ckd-library-translation-quality.test.ts` 6/6、`npm run typecheck` 通过。部署后恢复同步即可继续图片和摘要阶段。
+## 2026-11-09：翻译数字校验增加差异诊断
+
+- 上述修复后仍可能遇到模型真的改动数字/标识的情况；原来的错误只有一句话，无法定位。
+- `verifyTranslation` 现在在报错中附带 `missing` / `added` 两个列表，直接显示源文有、译文没有的标识，以及译文多出的标识。
+- 验证：`tests/ckd-library-translation-quality.test.ts` 6/6、`npm run typecheck` 通过。

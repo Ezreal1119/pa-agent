@@ -17,8 +17,12 @@ const literalParts = (text: string) => [
 export function verifyTranslation(source: string, target: string): void {
     if (source.trim() && !target.trim())
         throw new Error("Empty translation.");
-    if (JSON.stringify(protectedParts(source)) !== JSON.stringify(protectedParts(target)))
-        throw new Error("Translation changed numeric values or technical identifiers.");
+    const before = protectedParts(source), after = protectedParts(target);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+        const missing = before.filter(part => !after.includes(part));
+        const added = after.filter(part => !before.includes(part));
+        throw new Error(`Translation changed numeric values or technical identifiers (missing: ${missing.join(", ") || "-"}; added: ${added.join(", ") || "-"}).`);
+    }
     if (JSON.stringify(digits(source)) !== JSON.stringify(digits(target)))
         throw new Error("Translation changed numeric sequence order.");
     if (JSON.stringify(literalParts(source)) !== JSON.stringify(literalParts(target)))
