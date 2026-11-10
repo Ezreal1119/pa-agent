@@ -145,8 +145,6 @@
           </div>
         </section>
 
-        <div id="publish-issues" class="publish-issues" role="alert" hidden></div>
-
         <div class="form-footer">
           <p class="save-state" id="save-state">改动还没有保存。</p>
           <button class="button secondary" id="save-draft" type="button">保存当前工序</button>
@@ -154,6 +152,11 @@
         </div>
       </form>
     </section>
+
+    <aside class="issues-rail" id="publish-rail" hidden>
+      <h2>待处理问题</h2>
+      <div id="publish-issues" class="publish-issues" role="alert"></div>
+    </aside>
   </main>
 
   <!-- 新建项目弹窗：Electron 渲染进程不支持 window.prompt()，网页端与桌面端统一用页面内 dialog -->

@@ -1,5 +1,6 @@
 /* 逐工序录入页：沿用工作台的深色主题变量，只补布局与表格样式。 */
 .editor-layout{grid-template-columns:280px minmax(0,1fr);gap:40px}
+.editor-layout.has-issues{grid-template-columns:280px minmax(0,1fr) 300px;gap:32px}
 .editor-layout .sidebar{position:sticky;top:24px;align-self:start}
 .editor-layout .field>span{font-size:12px;color:var(--muted);font-weight:500}
 .editor-layout .field{margin-bottom:16px}
@@ -44,8 +45,11 @@
 .save-state.ok{color:var(--accent)}
 .save-state.bad{color:var(--danger)}
 
-/* 保存到 Library 的逐条错误：放在表单底部，不挡上面的内容 */
-.publish-issues{margin:8px 0 0 auto;max-width:560px;padding:12px 14px;border:1px solid #8d5d4b;background:#35251f;border-radius:10px;color:#f0c9b8;font-size:13px}
+/* 保存到 Library 的逐条错误：固定右侧独立栏 */
+.editor-layout.has-issues{align-items:start}
+.issues-rail{position:sticky;top:24px;max-height:calc(100vh - 48px);overflow:auto}
+.issues-rail h2{font-size:14px;font-weight:600;margin:0 0 10px;color:var(--muted)}
+.publish-issues{margin:0;padding:12px 14px;border:1px solid #8d5d4b;background:#35251f;border-radius:10px;color:#f0c9b8;font-size:13px;overflow-wrap:anywhere}
 .publish-issues strong{display:block;margin-bottom:6px;color:#ffd9c8}
 .publish-issues ul{margin:0;padding-left:18px}
 .publish-issues li{margin:2px 0;line-height:1.5}
@@ -54,7 +58,8 @@
 .section-head h2{font-size:16px}
 .hint{font-size:12px;color:var(--muted);margin:0 0 14px}
 .tag{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--muted)}
-@media(max-width:900px){.editor-layout{grid-template-columns:1fr;gap:20px}.editor-layout .sidebar{position:static}.photo-list{grid-template-columns:1fr 1fr}}
+@media(max-width:1200px){.editor-layout{grid-template-columns:280px minmax(0,1fr)}.issues-rail{grid-column:2;position:static;max-height:none}}
+@media(max-width:900px){.editor-layout{grid-template-columns:1fr;gap:20px}.editor-layout .sidebar{position:static}.issues-rail{grid-column:1}.photo-list{grid-template-columns:1fr 1fr}}
 @media(max-width:650px){.photo-list{grid-template-columns:1fr}.form-footer{flex-direction:column;align-items:stretch}.form-footer .button{width:100%}}
 
 /* 「作业前检查」自动带出上一道自检时的弱化显示，用户一改就恢复正常色 */

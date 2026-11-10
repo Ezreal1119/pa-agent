@@ -82,13 +82,17 @@
     box.textContent = message;
   }
 
-  /** 发布失败的逐条原因，显示在表单底部而不是顶部。 */
+  /** 发布失败的逐条原因，显示在右侧独立栏。 */
   function renderPublishIssues(issues) {
     const box = $("publish-issues");
+    const rail = $("publish-rail");
+    const layout = document.querySelector(".editor-layout");
+    if (layout) layout.classList.toggle("has-issues", Boolean(issues && issues.length));
     if (!box) return;
     if (!issues || !issues.length) {
       box.hidden = true;
       box.replaceChildren();
+      if (rail) rail.hidden = true;
       return;
     }
     const title = document.createElement("strong");
@@ -101,6 +105,7 @@
     }
     box.replaceChildren(title, list);
     box.hidden = false;
+    if (rail) rail.hidden = false;
   }
 
   function setState(text, kind) {
