@@ -294,11 +294,28 @@ async function loadLibrarySyncDetails(){
  finally{button.disabled=false;}
 }
 function copyIssue(value){const b=node('button','复制路径 / 错误','copy-error');b.type='button';b.addEventListener('click',async()=>{try{if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(value);else{const t=node('textarea');t.value=value;document.body.append(t);t.select();const copied=document.execCommand('copy');t.remove();if(!copied)throw new Error('请选中路径后复制。');}b.textContent='已复制';}catch(e){notice(e.message);}});return b;}
+function syncIssueInfo(item){
+ const key=String(item.key??''),message=String(item.message??item.status??''),path=key.replace(/^[^:]+:/u,'');
+ const project=/product_lib[\\/]([^\\/]+)/u.exec(path)?.[1]??'';
+ const process=/process_\d+/u.exec(path)?.[0]??'';
+ const type=/Translation changed numeric|technical identifiers|missing:|added:/iu.test(message)?'翻译校验'
+  :/image|图片|vision|评分/iu.test(`${path} ${message}`)?'图片评分'
+  :/summary|overview|摘要/iu.test(`${path} ${message}`)?'摘要'
+  :/Deleted|retained|删除|保留/iu.test(message)?'删除/保留'
+  :key.startsWith('images:')?'图片评分':key.startsWith('translate:')?'翻译':key.startsWith('summaries:')||key.startsWith('removed-summary:')?'摘要':key.startsWith('orphan:')?'清理':'同步';
+ return {project,process,type,message,key};
+}
 function renderLibrarySyncDetails(job){
  const results=$('library-sync-detail-content');results.replaceChildren();if(job.error)results.append(node('p',job.error,'quality-warning'));
  if(job.sync?.validation&&!job.sync.validation.valid)for(const error of job.sync.validation.errors)results.append(node('p',`${error.file}${error.line?` 第${error.line}行${error.column?`第${error.column}列`:''}`:''}：${error.message}`,'quality-warning small'));
  for(const warning of job.warnings){const hash=/image ([a-f0-9]{64})/u.exec(warning)?.[1],paths=(job.sync?.images??[]).filter(i=>i.imageHash===hash).map(i=>i.path).filter(p=>!warning.includes(p));const message=paths.length?`${warning}\n${[...new Set(paths)].join('\n')}`:warning;results.append(node('p',message,'quality-warning small issue-path'),copyIssue(message));}
- const issues=job.items.filter(i=>['error','conflict'].includes(i.status)||i.message?.includes('Deleted')||i.message?.includes('retained'));if(issues.length){const detail=node('details');detail.append(node('summary',`删除、保留及错误记录（${issues.length}）`));for(const i of issues){const message=`${i.key}：${i.message??i.status}`;detail.append(node('p',message,'small issue-path'),copyIssue(message));}results.append(detail);}
+ const issues=job.items.filter(i=>['error','conflict'].includes(i.status)||i.message?.includes('Deleted')||i.message?.includes('retained'));if(issues.length){
+  if(['interrupted','partial_failed','failed'].includes(job.status)){const retry=node('button','重试失败项','button secondary');retry.type='button';retry.addEventListener('click',()=>librarySyncAction('resume'));results.append(retry);}
+  const groups=new Map();for(const item of issues){const info=syncIssueInfo(item),group=`${info.project||'整库'}|${info.process||'全库'}`;(groups.get(group)??groups.set(group,{project:info.project||'整库',process:info.process||'全库',items:[]}).get(group)).items.push(info);}
+  const detail=node('details');detail.open=true;detail.append(node('summary',`失败、删除及保留记录（${issues.length}）`));
+  for(const group of groups.values()){const section=node('details');section.open=true;section.append(node('summary',`${group.project} · ${group.process}（${group.items.length} 条）`));for(const info of group.items){const message=info.message.length>300?`${info.message.slice(0,300)}…`:info.message;section.append(node('p',`${info.type}：${message}`,'small issue-path'),copyIssue(`${info.key}\n${info.message}`));}detail.append(section);}
+  results.append(detail);
+ }
  const images=job.sync?.images??[],unique=new Map(images.map(i=>[i.imageHash,i])),allPaths=new Map();for(const image of images){const paths=allPaths.get(image.imageHash)??[];if(!paths.includes(image.path))paths.push(image.path);allPaths.set(image.imageHash,paths);}if(unique.size){const section=node('details');section.append(node('summary',`图片 ${images.length} 个路径，${unique.size} 张不同图片；${[...unique.values()].filter(i=>i.fallback||i.result?.reminder).length} 张需修改/复核。`));let listed=false;section.addEventListener('toggle',()=>{if(!section.open||listed)return;listed=true;for(const image of unique.values()){const detail=node('details');detail.append(node('summary',`${image.path} · ${image.fallback?0:image.result?.score??'未评分'}${image.fallback||image.result?.reminder?' · 需复核':''}`));let rendered=false;detail.addEventListener('toggle',()=>{if(!detail.open||rendered)return;rendered=true;const paths=allPaths.get(image.imageHash)??[image.path];detail.append(node('code',paths.join('\n'),'issue-path'),copyIssue(paths.join('\n')));if(image.result||image.fallback){const content=node('div');renderImageAssessment(content,image.fallback??image.result);detail.append(content);}else detail.append(node('p',image.error,'quality-warning'));});section.append(detail);}});results.append(section);}
 }
 async function loadLibrarySyncHistory(){const {jobs}=await api('/api/library/jobs/progress');const history=$('library-sync-history');history.replaceChildren();for(const job of jobs.filter(j=>j.kind==='sync').slice(0,15)){const button=node('button',`${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.input.dryRun?'预览':'同步'} · ${syncStatusLabels[job.status]??job.status}`,'text-button');button.type='button';button.addEventListener('click',()=>showLibrarySync(job));history.append(button);}if(librarySyncId){const job=jobs.find(j=>j.id===librarySyncId);if(job)showLibrarySync(job);else try{showLibrarySync((await api(`/api/library/jobs/${librarySyncId}/progress`)).job);}catch{const newest=jobs.find(j=>j.kind==='sync');if(newest)showLibrarySync(newest);}}else{const newest=jobs.find(j=>j.kind==='sync');if(newest)showLibrarySync(newest);}}

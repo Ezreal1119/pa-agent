@@ -22,6 +22,14 @@ const cropDialog = new window.CkdCropDialog();
 const savedFiles = new Map(), downloadsInFlight = new Map();
 function el(tag, text, cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=text; if(cls)n.className=cls; return n; }
 function notice(text='', retry=false) { $('notice').hidden=!text; $('notice-text').textContent=text; $('retry').hidden=!retry; }
+function friendlyError(text, code) {
+  const raw = String(text ?? '').trim();
+  if (code === 'offline' || /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network|Failed to fetch|socket hang up|连接被拒绝/i.test(raw)) return '无法连接服务器，请检查网络后重试。';
+  if (code === 401 || (/401|登录.*(过期|失效)|session|token/i.test(raw) && logged)) return '登录已过期，请重新登录。';
+  if (/timeout|timed out|超时/i.test(raw)) return '服务响应超时，请稍后重试。';
+  if (/\b(500|502|503|504)\b|Internal Server Error|服务不可用/i.test(raw)) return '服务暂不可用，请稍后重试。';
+  return raw;
+}
 function remember(id) { try { if(id)localStorage.setItem('ckd.client.selected',id);else localStorage.removeItem('ckd.client.selected'); } catch {} }
 let currentAccount = '';
 function loginView() { cropDialog.close(true);renderedReview='';logged=false;generation++;current=null;selected=null;pending=false;polling=false;currentAccount='';savedFiles.clear();downloadsInFlight.clear();for(const id of ['task-list','run-details','scores','downloads','image-review-scores','question-options','steps'])$(id).replaceChildren();for(const id of ['account-label','password-account','run-title','run-subtitle','run-error','question-title','question-help','working-title','working-detail','delivery-status'])$(id).textContent='';$('answer-text').value='';$('create-form').reset();$('password-form').reset();$('password-view').hidden=true;$('workspace').hidden=true;$('login-view').hidden=false;$('password').value='';remember(null); }
@@ -30,12 +38,12 @@ async function call(method,...args) {
   const result=await window.ckd[method](...args);
   if(!result.ok) {
     if(result.code===401&&logged)loginView();
-    offline=result.code==='offline';notice(result.error,offline);
-    const error=new Error(result.error);error.code=result.code;throw error;
+    offline=result.code==='offline';const message=friendlyError(result.error,result.code);notice(message,offline);
+    const error=new Error(message);error.code=result.code;throw error;
   }
   offline=false;return result.value;
 }
-function safely(action) { return async(...args)=>{try{await action(...args);}catch(error){notice(error.message,error.code==='offline');}}; }
+function safely(action) { return async(...args)=>{try{await action(...args);}catch(error){notice(friendlyError(error.message,error.code),error.code==='offline');}}; }
 function factoryVisibility() {
   const type=$('sop-type').value,form=$('create-form');$('factory-field').hidden=type!=='factory_test';form.elements.factoryTestProcesses.required=type==='factory_test';
   for(const [id,key] of [['revision-reason-field','revisionReason'],['revision-content-field','revisionContent']]) {$(id).hidden=type!=='assemble';form.elements[key].disabled=type!=='assemble';}
