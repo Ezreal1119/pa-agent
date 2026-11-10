@@ -706,3 +706,10 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 后端：删除 `publicEditorRoot` 和 `scope` 分支；旧请求即使带 `scope=public` 也会忽略并读写当前账号库。
 - 已有 `<库根>/public` 目录不自动删除，避免误删历史数据；确认不需要后由管理员手动清理。
 - 验证：`tests/ckd-users.test.ts` 5/5 通过（员工写自己的库，旧 scope 参数被忽略）；`node --check editor.js`、`npm run typecheck` 通过。
+
+## 2026-11-10：保留工序名自动生成
+
+- 录入页「工序名」旁提供「根据步骤生成」按钮；只把图片坑位里的操作步骤发给文字模型，工序检查/自检、工具、物料不参与。
+- 后端 `POST /api/editor/name-suggestion` 复用现有文字模型，要求 8–12 字、动词开头、重复动作可用 `*N`；模型失败时退回“取第一段前 12 字”的规则兜底，不阻塞保存。
+- 生成结果只填入输入框，仍可手动修改，不自动覆盖已填名称。
+- 验证：`tests/ckd-editor-naming.test.ts` 3/3；`npm run typecheck`、`node --check editor.js` 通过。
