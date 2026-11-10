@@ -813,3 +813,12 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 「保存到 Library」时服务端逐道校验：料号不在 BOM、重复料号、数量非正数都会阻止发布，并在右侧问题栏列出；
 - BOM 未导入或为空时不做料号校验，保持原有录入流程。
 - 验证：`tests/ckd-editor-bom.test.ts`、`tests/ckd-editor-drafts.test.ts` 6/6 通过；`npm run typecheck`、`node --check editor.js` 通过。
+
+## 2026-11-10：管理端功能改为独立视图
+
+- 侧栏「同步更新 Library / 参考图片校准 / 检查资料库 / 图片评分与设置」点击后只显示对应面板；
+- 导出 SOP 视图不再同时挂着同步、图片、检查面板，不需要往下滑才能看到导出表单；
+- 关闭面板回到当前任务详情；没有任务时回到导出表单；
+- 侧栏当前功能按钮高亮；
+- 只改 `resources/ckd-ui/app.js` / `style.css`，无需后端。
+- 验证：`node --check resources/ckd-ui/app.js` 通过；实际切换需刷新页面确认。

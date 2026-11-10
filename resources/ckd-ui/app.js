@@ -55,8 +55,10 @@ function refreshCoverHint() {
 /** 首屏「基本信息」也刷一次提示（首屏不经过 newTask）。 */
 function prefillEditorInfo() { refreshCoverHint(); }
 function newTask(input) {
+  adminView='export';
   generation++; selectedId=null; current=null; shownQuestion=null; remember(null); notice('');
   $('create-view').hidden=false; $('run-view').hidden=true;
+  showAdminView('export');
   $('create-form').reset();
   if(input) { const form=$('create-form'); const select=form.elements.sopType; if(input.sopType!==undefined && [...select.options].some(option=>option.value===input.sopType)) select.value=input.sopType; for(const key of ['templateLanguage','projectName','documentNumber','sopName','author','revisionReason','revisionContent']) if(input[key]!==undefined && input[key]!=='') form.elements[key].value=input[key]; form.elements.factoryTestProcesses.value=(input.factoryTestProcesses||[]).join('\n'); }
   factoryVisibility(); refreshCoverHint(); void refreshList();
@@ -74,12 +76,14 @@ async function refreshList() {
   }
 }
 async function selectTask(id) {
+  adminView='export';
+  for(const panel of adminPanelIds)$(panel).hidden=true;
   const ticket=++generation; selectedId=id; remember(id); notice('');
   try { const result=await api(`/api/runs/${id}`); if(ticket!==generation) return; render(result.run); await refreshList(); }
   catch(error) { if(ticket===generation) notice(error.message); }
 }
 function render(run) {
-  current=run; $('create-view').hidden=true; $('run-view').hidden=false;
+  current=run;if(adminView==='export'){$('create-view').hidden=true; $('run-view').hidden=false;}
   $('run-title').textContent=run.inputs.sopName; $('run-status').textContent=labels[run.status];
   $('run-subtitle').textContent=`${run.inputs.projectName} · ${types[run.inputs.sopType]} · ${run.inputs.templateLanguage}`;
   const index=stages.findIndex(([id])=>id===run.currentNodeId);
@@ -170,11 +174,25 @@ $('cancel-button').addEventListener('click',()=>mutate('cancel'));
 $('reuse-button').addEventListener('click',()=>{if(current)newTask(current.inputs);});
 $('refresh').addEventListener('click',()=>refreshList().catch(error=>notice(error.message)));
 let polling=false;
+let adminView='export';
+const adminPanelIds=['library-sync-panel','image-settings-panel','validation-panel'];
+const adminPanelFor={sync:'library-sync-panel',images:'image-settings-panel',validation:'validation-panel'};
+function showAdminView(view){
+  adminView=view;
+  for(const id of adminPanelIds)$(id).hidden=adminPanelFor[view]!==id;
+  $('create-view').hidden=view!=='export'||!!current;
+  $('run-view').hidden=view!=='export'||!current;
+  $('new-task').classList.toggle('active',view==='export');
+  $('sync-library').classList.toggle('active',view==='sync');
+  $('image-settings').classList.toggle('active',view==='images');
+  $('check-library').classList.toggle('active',view==='validation');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
 setInterval(async()=>{if(polling||pending||!selectedId||!current||(!current.busy&&current.status!=='running'))return;polling=true;const id=selectedId,ticket=generation;try{const result=await api(`/api/runs/${id}`);if(ticket===generation){render(result.run);await refreshList();}}catch(error){if(ticket===generation)notice(`无法连接本地服务：${error.message}`);}finally{polling=false;}},1200);
 (async()=>{try{const status=await api('/api/status');$('library-status').textContent=status.libraryReady?'本地资料库已就绪':'资料库未找到';if(!status.libraryReady)notice('未找到 Library。请设置 CKD_LIBRARY 指向 ckd-library-v2，再重新启动本地界面。');await refreshList();let saved;try{saved=localStorage.getItem('ckd.selectedTask');}catch{}if(saved)await selectTask(saved);}catch(error){notice(error.message);}factoryVisibility();prefillEditorInfo();})();
 
-$('check-library').addEventListener('click',()=>{ $('validation-panel').hidden=false; $('validation-panel').scrollIntoView({block:'start',behavior:'smooth'}); });
-$('close-validation').addEventListener('click',()=>{ $('validation-panel').hidden=true; });
+$('check-library').addEventListener('click',()=>showAdminView('validation'));
+$('close-validation').addEventListener('click',()=>showAdminView('export'));
 $('validation-form').addEventListener('submit',async event=>{
   event.preventDefault();const button=$('validate-button');button.disabled=true;button.textContent='正在检查…';
   $('validation-summary').textContent='正在逐个检查资料文件，请稍候…';$('validation-errors').replaceChildren();
@@ -256,8 +274,8 @@ async function loadCalibration(){
   }
   $('calibration-status').textContent=c?`当前 ${c.sampleCount} 张样本，拟合 offset ${c.parameters.bias.toFixed(2)}${c.parameters.bias>0?'（保守规则执行0，不加分）':''}${c.weightsHash!==value.weightsHash?'；权重已改变，请重新校准':''}`:'新七项规则尚未校准，可先测试未校准分数。';
 }
-$('image-settings').addEventListener('click',async()=>{$('image-settings-panel').hidden=false;$('image-settings-panel').scrollIntoView({block:'start',behavior:'smooth'});try{const result=await api('/api/images/policy');applyImagePolicyResponse(result);await loadCalibration();}catch(error){$('image-policy-message').textContent=error.message;}});
-$('close-image-settings').addEventListener('click',()=>{$('image-settings-panel').hidden=true;});
+$('image-settings').addEventListener('click',async()=>{showAdminView('images');try{const result=await api('/api/images/policy');applyImagePolicyResponse(result);await loadCalibration();}catch(error){$('image-policy-message').textContent=error.message;}});
+$('close-image-settings').addEventListener('click',()=>showAdminView('export'));
 $('reset-image-policy').addEventListener('click',()=>{if(imageDefaults){fillImagePolicy(imageDefaults);$('image-policy-message').textContent='已填入默认值，点击保存后生效。';}});
 $('image-policy-form').addEventListener('submit',async event=>{event.preventDefault();if(imageReadOnly)return;const button=$('save-image-policy');button.disabled=true;try{const result=await api('/api/images/policy',collectImagePolicy());fillImagePolicy(result.policy);$('image-policy-message').textContent='设置已保存。新的评估使用新设置；已完成的报告不变。修改权重后请重新校准。';await loadCalibration();}catch(error){$('image-policy-message').textContent=error.message;}finally{button.disabled=false;}});
 $('image-test-form').addEventListener('submit',async event=>{event.preventDefault();const file=$('image-test-file').files[0];if(!file)return;const button=$('test-image-button');button.disabled=true;$('image-test-result').replaceChildren();$('image-test-message').textContent='正在分析图片，请稍候…';try{if(!['image/png','image/jpeg'].includes(file.type)||file.size>10*1024*1024)throw new Error('请选择 10 MiB 以内的 PNG/JPEG 图片。');if(imagePreviewUrl)URL.revokeObjectURL(imagePreviewUrl);imagePreviewUrl=URL.createObjectURL(file);$('image-test-preview').src=imagePreviewUrl;$('image-test-preview').hidden=false;const operationContext=$('image-test-context').value.trim();const response=await fetch(adminUrl('/api/images/quality'+(operationContext?'?context='+encodeURIComponent(operationContext):'')),{method:'POST',headers:{'Content-Type':file.type,'X-CKD-UI':'1'},body:file});const value=await response.json();if(response.status===401&&adminBase)location.assign(adminBase+'/login');if(!response.ok)throw new Error(value.error);renderImageAssessment($('image-test-result'),value.fallback??value.result);$('image-test-message').textContent=value.fallback?'分析失败，以0分兜底并警告；可显式重试，原图未修改。':'检测完成。图片未被修改或自动裁剪。';}catch(error){$('image-test-message').textContent=error.message;}finally{button.disabled=false;}});
@@ -358,9 +376,9 @@ async function syncAllLibraries(){
 }
 $('sync-all-libraries').addEventListener('click',syncAllLibraries);
 async function loadLibrarySyncHistory(){const {jobs}=await api('/api/library/jobs/progress');const history=$('library-sync-history');history.replaceChildren();for(const job of jobs.filter(j=>j.kind==='sync').slice(0,15)){const button=node('button',`${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.input.dryRun?'预览':'同步'} · ${syncStatusLabels[job.status]??job.status}`,'text-button');button.type='button';button.addEventListener('click',()=>showLibrarySync(job));history.append(button);}if(librarySyncId){const job=jobs.find(j=>j.id===librarySyncId);if(job)showLibrarySync(job);else try{showLibrarySync((await api(`/api/library/jobs/${librarySyncId}/progress`)).job);}catch{const newest=jobs.find(j=>j.kind==='sync');if(newest)showLibrarySync(newest);}}else{const newest=jobs.find(j=>j.kind==='sync');if(newest)showLibrarySync(newest);}}
-$('sync-library').addEventListener('click',async()=>{$('library-sync-panel').hidden=false;$('library-sync-panel').scrollIntoView({block:'start',behavior:'smooth'});try{await loadLibrarySyncHistory();}catch(error){$('library-sync-status').textContent=error.message;}});
-$('close-library-sync').addEventListener('click',()=>{$('library-sync-panel').hidden=true;});
-$('open-reference-calibration').addEventListener('click',async()=>{$('image-settings-panel').hidden=false;try{const result=await api('/api/images/policy');applyImagePolicyResponse(result);await loadCalibration();$(imageReadOnly?'calibration-status':'calibrate-images').scrollIntoView({block:'center',behavior:'smooth'});}catch(error){$('image-policy-message').textContent=error.message;}});
+$('sync-library').addEventListener('click',async()=>{showAdminView('sync');try{await loadLibrarySyncHistory();}catch(error){$('library-sync-status').textContent=error.message;}});
+$('close-library-sync').addEventListener('click',()=>showAdminView('export'));
+$('open-reference-calibration').addEventListener('click',async()=>{showAdminView('images');try{const result=await api('/api/images/policy');applyImagePolicyResponse(result);await loadCalibration();$(imageReadOnly?'calibration-status':'calibrate-images').scrollIntoView({block:'center',behavior:'smooth'});}catch(error){$('image-policy-message').textContent=error.message;}});
 async function librarySyncAction(action,dryRun=false){if(librarySyncBusy&&action==='start')return;const buttons=[$('start-library-sync'),$('plan-library-sync')];buttons.forEach(b=>b.disabled=true);try{const {job}=await api(action==='start'?'/api/library/sync':`/api/library/jobs/${librarySyncId}/${action}`,action==='start'?{dryRun}:{});showLibrarySync(job);}catch(error){$('library-sync-status').textContent=error.message;buttons.forEach(b=>b.disabled=librarySyncBusy);}}
 $('start-library-sync').addEventListener('click',()=>librarySyncAction('start'));
 $('plan-library-sync').addEventListener('click',()=>librarySyncAction('start',true));

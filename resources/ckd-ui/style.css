@@ -22,3 +22,5 @@
 #cover-hint{margin:0 0 20px}
 
 .sync-all-results{margin-top:10px}.sync-all-row{display:grid;grid-template-columns:minmax(160px,1fr) minmax(220px,1.5fr);gap:12px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-top:6px;font-size:12px}.sync-all-name{font-weight:600}.sync-all-state{color:var(--muted)}
+
+.sidebar .button.active{border-color:var(--accent);color:var(--accent);background:rgba(162,194,146,.08)}
