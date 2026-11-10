@@ -778,3 +778,11 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 低于 `minimum` 时提示“当前版本已不再支持，请升级”；
 - 兼容性：旧客户端没有 `window.ckd.version` 时直接跳过，不报错；需要安装包含此逻辑的新包后才会提示后续版本。
 - 验证：`npm run typecheck`、`node --check desktop/main.cjs/preload.cjs/ui/app.js` 通过；实际提示需打包新版本并设置版本配置后验证。
+
+## 2026-11-10：桌面端 0.1.12 打包
+
+- `desktop/package.json` / `package-lock.json` 版本升至 `0.1.12`；
+- 包含版本更新检查（preload `version()` / `openExternal`）、断线与会话过期友好提示；
+- 构建产物：`desktop/release/cloud/CKD-SOP-Cloud-0.1.12-win-x64.exe`，111,449,438 字节，SHA256 `A23B2862F68B0AC361BC582ABA1E1819A0BF2CC255E4BD29C2012F8DC116459F`；
+- 已验证打包内 `package.json` 版本为 0.1.12，preload 包含 `ckd:version` / `ckd:openExternal`；
+- 安装包本身不进 Git，发布时上传并配置 `CKD_DESKTOP_DOWNLOAD_URL`。
