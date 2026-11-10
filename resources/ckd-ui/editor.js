@@ -71,28 +71,35 @@
     return value;
   }
 
+  function updateIssueRail() {
+    const rail = $("publish-rail"), layout = document.querySelector(".editor-layout");
+    const noticeBox = $("notice"), issues = $("publish-issues");
+    const visible = Boolean((noticeBox && !noticeBox.hidden) || (issues && !issues.hidden));
+    if (rail) rail.hidden = !visible;
+    if (layout) layout.classList.toggle("has-issues", visible);
+  }
+
   function notice(message) {
     const box = $("notice");
     if (!message) {
       box.hidden = true;
       box.textContent = "";
+      updateIssueRail();
       return;
     }
     box.hidden = false;
     box.textContent = message;
+    updateIssueRail();
   }
 
   /** 发布失败的逐条原因，显示在右侧独立栏。 */
   function renderPublishIssues(issues) {
     const box = $("publish-issues");
-    const rail = $("publish-rail");
-    const layout = document.querySelector(".editor-layout");
-    if (layout) layout.classList.toggle("has-issues", Boolean(issues && issues.length));
     if (!box) return;
     if (!issues || !issues.length) {
       box.hidden = true;
       box.replaceChildren();
-      if (rail) rail.hidden = true;
+      updateIssueRail();
       return;
     }
     const title = document.createElement("strong");
@@ -105,7 +112,7 @@
     }
     box.replaceChildren(title, list);
     box.hidden = false;
-    if (rail) rail.hidden = false;
+    updateIssueRail();
   }
 
   function setState(text, kind) {
