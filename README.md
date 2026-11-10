@@ -237,6 +237,12 @@ Set `WECOM_ENABLED=true` and the Bot ID/Secret plus a dedicated `WECOM_API_TOKEN
 Run `npm run test:wecom` for isolated transport/API and real-file-worker integration tests. Run `npm run wecom:bridge` for foreground operation after configuration. For VPS setup, install the two supplied service units and manage `product-expert.service` and `wecom-bridge.service` independently. Neither unit starts, stops or restarts the other. Full configuration, root deployment commands, recovery limits and real-bot acceptance steps: [WeCom bridge](docs/wecom-bridge.md).
 
 
+## Plain HTTP question API
+
+For curl or backend integrations, enable `AGENT_API_ENABLED=true` and configure a dedicated `AGENT_API_KEY` (at least 32 characters), then restart the Web service. `POST /api/v1/ask` accepts `{ "question": "...", "conversation_id": "optional returned UUID", "request_id": "optional random UUID" }` with `Authorization: Bearer <AGENT_API_KEY>`. Fast answers return JSON with HTTP 200; longer tasks return HTTP 202 and a `task_id`. Retrieve with `GET /api/v1/tasks/:id`, or cancel with `POST /api/v1/tasks/:id/cancel` (no body). No browser Cookie, CSRF token or MCP protocol is required.
+
+The API shares the global Agent run gate (default 4 active + 8 waiting), with one pending question per conversation. Its text-only runner has no file or memory-write tools. Task results and conversation handles use a separate `.data/http-api/` namespace; Web/WeCom/MCP IDs and credentials cannot be used as API task handles. Reuse `request_id` when retrying a disconnected request to avoid a second model run. The single API key represents one integration identity; it can access that API namespace's tasks, and rotation preserves those handles. The API is disabled by default and its key grants no administrator access. See [configuration and curl examples](docs/http-api.md).
+
 ## HTTPS domain access
 
 For HTTPS reverse-proxy access, set `WEB_PUBLIC_URL=https://urovo-agent.patrick-shenzhen.cn` in the VPS `.env` (origin only, without `/login`) and restart **product-expert.service**. The listener remains on 127.0.0.1; the configured domain is an explicit Host/Origin allowance. Both preserved public Host and rewritten loopback Host are supported; client-provided forwarded headers never grant additional trust. With the field blank, the original loopback-only behavior remains.

@@ -1,3 +1,6 @@
+import { httpApiConfig, type HttpApiOptions } from "../http-api/config.js";
+import { ExpertHttpApi, HTTP_API_PREFIX } from "../http-api/http.js";
+import { TaskRequestError } from "../mcp/errors.js";
 import { SyncNotifications, syncDestination, syncGroupDestination } from "../sync-notifications/service.js";
 import { QuestionReviewService } from "../question-review/service.js";
 import { questionReviewRoute } from "../question-review/routes.js";
@@ -34,7 +37,7 @@ import { WebAuth } from "./auth.js";
 import { WecomContacts, observation } from "./wecom-contacts.js";
 import { WebOriginPolicy, RequestOriginError } from "./origin.js";
 import { BridgeAccess } from "./bridge-access.js";
-import { RunGate, boundedSetting } from "./run-gate.js";
+import { RunGate, RunQueueFullError, boundedSetting } from "./run-gate.js";
 import { ExtraMemoryStore, EXTRA_MEMORY_SECTION } from "../agent/extra-memory.js";
 import { mainMemoryFile } from "../agent/memory-paths.js";
 import { fileToolConfig, FILE_TOOL_NAMES, FILE_EXTENSIONS, type FileToolOptions } from "../file-tools/config.js";
@@ -50,7 +53,7 @@ import { webToolConfig, WEB_TOOL_NAMES, type WebToolOptions } from "../web-tools
 import { mcpConfig, type McpOptions } from "../mcp/config.js";
 import { McpAccess } from "../mcp/auth.js";
 import { McpStore } from "../mcp/store.js";
-import { McpService } from "../mcp/service.js";
+import { McpService, type McpHost } from "../mcp/service.js";
 import { handleMcp } from "../mcp/http.js";
 import { runMcpAgent } from "../mcp/runner.js";
 
@@ -84,8 +87,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
-type RecordState = { userRoleStyle?: string; channel?: "mcp"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+type RecordState = { userRoleStyle?: string; channel?: "mcp" | "http-api"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
+export interface WebOptions { httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -101,6 +104,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const firmwareOptions = firmwareConfig({ ...diskEnv, ...process.env });
   const libraryOptions = libraryConfig({ ...diskEnv, ...process.env });
   const sftpOptions = sftpConfig(cwd, dataDir, { ...diskEnv, ...process.env });
+  const httpApiOptions = httpApiConfig(options.httpApi, { ...diskEnv, ...process.env });
   const mcpOptions = mcpConfig(options.mcp, { ...diskEnv, ...process.env });
   const mcpAccess = new McpAccess(mcpOptions.apiKey);
   const originPolicy = new WebOriginPolicy(options.publicUrl ?? process.env.WEB_PUBLIC_URL ?? diskEnv.WEB_PUBLIC_URL ?? "");
@@ -146,10 +150,12 @@ export async function createWebServer(options: WebOptions = {}) {
   let configuring = false;
   let openingSessions = 0;
   let mcp: McpService | undefined;
+  let httpApiService: McpService | undefined;
   const configured = () => Boolean(settings.apiKey && settings.baseUrl && settings.modelId);
   const redact = (error: unknown) => {
     let message = error instanceof Error ? error.message : String(error);
     for (const reader of knowledgeTokens) message = message.split(reader.token).join("[REDACTED]");
+    if (httpApiOptions.apiKey) message = message.split(httpApiOptions.apiKey).join("[REDACTED]");
     if (mcpOptions.apiKey) message = message.split(mcpOptions.apiKey).join("[REDACTED]");
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (firmwareOptions.token) message = message.split(firmwareOptions.token).join("[REDACTED]");
@@ -237,10 +243,12 @@ export async function createWebServer(options: WebOptions = {}) {
     await fileStore.remove(id);
     await bridge.remove(id);
     await mcp?.removeSession(id);
+    await httpApiService?.removeSession(id);
     item?.session?.dispose(); records.delete(id);
   });
   const mcpStore = new McpStore(dataDir, mcpOptions.retainedTaskLimit);
-  mcp = new McpService(mcpStore, mcpOptions, {
+  const httpApiStore = new McpStore(dataDir, httpApiOptions.retainedTaskLimit, "http-api");
+  const taskHost: McpHost = {
     redact,
     recover: async (task, needsAnswer) => {
       const files = await recoveryFiles(); const file = files.get(task.sessionId);
@@ -268,14 +276,17 @@ export async function createWebServer(options: WebOptions = {}) {
     },
     run: async (task, question, signal, update) => {
       if (configuring) throw new Error("Agent settings are being updated. Please retry later.");
-      const item: RecordState = records.get(task.sessionId) ?? { channel: "mcp", id: task.sessionId, running: false, title: question.slice(0, 36), updated: new Date().toISOString() };
+      const channel = httpApiStore.hasSession(task.sessionId) ? "http-api" : "mcp";
+      const item: RecordState = records.get(task.sessionId) ?? { channel, id: task.sessionId, running: false, title: question.slice(0, 36), updated: new Date().toISOString() };
       if (item.running || item.mutating || item.opening) throw new Error("This MCP conversation is busy.");
-      records.set(item.id, item); item.channel = "mcp"; item.running = true; item.cancelled = false;
+      records.set(item.id, item); item.channel = channel; item.running = true; item.cancelled = false;
       const local = new AbortController(); const abort = AbortSignal.any([signal, local.signal]);
       item.cancelQueued = () => local.abort(new Error("This run was stopped."));
       let release: (() => void) | undefined;
       try {
-        release = await runGate.acquire(abort); abort.throwIfAborted();
+        try { release = await runGate.acquire(abort); }
+        catch (error) { if (error instanceof RunQueueFullError) throw new TaskRequestError(429, error.message); throw error; }
+        abort.throwIfAborted();
         const session = await getSession(item); abort.throwIfAborted(); item.activeRunId = task.id;
         return await runMcpAgent(session, task, question, abort, { modelId: settings.modelId, effort: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default", update, redact });
       } catch (error) {
@@ -285,11 +296,15 @@ export async function createWebServer(options: WebOptions = {}) {
         item.persistedFile = item.session?.sessionFile ?? item.persistedFile; item.session?.dispose(); item.session = undefined; item.activeRunId = undefined; item.cancelQueued = undefined; item.running = false; item.updated = new Date().toISOString(); release?.();
       }
     },
-  });
+  };
+  mcp = new McpService(mcpStore, mcpOptions, taskHost);
+  httpApiService = new McpService(httpApiStore, httpApiOptions, taskHost);
+  const httpApi = new ExpertHttpApi(httpApiOptions.enabled, httpApiOptions.apiKey, httpApiService, redact);
   let recoveryIndex: Map<string, string> | undefined;
   const recoveryMetrics = new Map<string, Map<string, RunMetric>>();
   async function recoveryFiles() { return recoveryIndex ??= new Map((await savedSessions()).map(session => [session.id, session.path])); }
-  await mcp.start(); recoveryMetrics.clear(); recoveryIndex = undefined;
+  await mcp.start();
+  await httpApiService.start(); recoveryMetrics.clear(); recoveryIndex = undefined;
   await retention.cleanup(); retention.start();
   async function savedSessions() {
     if (!await fs.stat(sessionsDir).catch(() => undefined)) return [];
@@ -329,7 +344,7 @@ export async function createWebServer(options: WebOptions = {}) {
         const engine = await getRuntime();
         const saved = (await savedSessions()).find(s => s.id === item.id);
         const manager = saved ? SessionManager.open(saved.path, sessionsDir, cwd) : SessionManager.create(cwd, sessionsDir, { id: item.id });
-        const textOnly = item.channel === "mcp" || mcpStore.hasSession(item.id) || manager.getEntries().some(entry => entry.type === "custom" && entry.customType === RUN_METRICS_TYPE && Boolean((entry.data as Partial<RunMetric>)?.mcpTaskId));
+        const textOnly = Boolean(item.channel) || mcpStore.hasSession(item.id) || httpApiStore.hasSession(item.id) || manager.getEntries().some(entry => entry.type === "custom" && entry.customType === RUN_METRICS_TYPE && Boolean((entry.data as Partial<RunMetric>)?.mcpTaskId));
         const session = await engine.createSession(manager, { textOnly, userRoleStyle: () => item.userRoleStyle });
         // Replay persisted snapshots after a restart; cursors make this idempotent.
         await wecomContacts.recoverSession(item.id, getRunMetrics(session));
@@ -417,6 +432,11 @@ export async function createWebServer(options: WebOptions = {}) {
         try { originPolicy.check(req, (server.address() as import("node:net").AddressInfo).port); }
         catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
         await knowledgeExport.handle(req, res, url); return;
+      }
+      if (url.pathname === HTTP_API_PREFIX || url.pathname.startsWith(`${HTTP_API_PREFIX}/`)) {
+        try { originPolicy.check(req, (server.address() as import("node:net").AddressInfo).port); }
+        catch (error) { if (error instanceof RequestOriginError) throw new HttpError(403, error.message); throw error; }
+        await httpApi.handle(req, res, url); return;
       }
       if (url.pathname === "/mcp") {
         if (!mcpOptions.enabled) throw new HttpError(404, "MCP is disabled. Enable it in Agent settings.");
@@ -893,6 +913,7 @@ export async function createWebServer(options: WebOptions = {}) {
             }
             const target = await managedFile(item);
             await mcp?.removeSession(item.id);
+            await httpApiService?.removeSession(item.id);
             await fileStore.remove(item.id);
             if (target?.exists) await fs.unlink(target.file);
             item.session?.dispose(); item.session = undefined;
@@ -1136,7 +1157,7 @@ export async function createWebServer(options: WebOptions = {}) {
     const sftpClosing = sftpSync.close();
     const syncClosing = synchronize.close();
     const memoryClosing = memoryInjection.close();
-    await mcp?.close();
+    await Promise.all([mcp?.close(), httpApiService?.close()]);
     await Promise.allSettled([...records.values()].filter(r => r.running).map(r => { r.cancelQueued?.(); return r.session?.abort(); }));
     await wecomClosing;
     await libraryClosing;

@@ -1,3 +1,5 @@
+export class RunQueueFullError extends Error {}
+
 /** One shared limit for browser and machine-API runs, including waiting cancellation. */
 export class RunGate {
   private active = 0;
@@ -24,7 +26,7 @@ export class RunGate {
         }
       };
       if (this.active < this.limit) entry.grant();
-      else if (this.waiting.length >= this.queueLimit) reject(new Error("The run queue is full. Try again later."));
+      else if (this.waiting.length >= this.queueLimit) reject(new RunQueueFullError("The run queue is full. Try again later."));
       else { this.waiting.push(entry); signal.addEventListener("abort", entry.cancel, { once: true }); }
     });
   }

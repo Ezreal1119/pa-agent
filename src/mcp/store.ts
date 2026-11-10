@@ -1,3 +1,4 @@
+import { TaskRequestError } from "./errors.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { existsSync, realpathSync } from "node:fs";
@@ -11,7 +12,7 @@ export interface McpTask {
   status: TaskStatus; created: number; updated: number; modelId?: string; started?: number; finished?: number;
   usage: TokenUsage; toolCalls: number; elapsedMs: number | null;
 }
-export interface TaskAnswer { answer: string; error?: string; truncated?: boolean; }
+export interface TaskAnswer { answer: string; error?: string; error_code?: "capacity_exceeded"; truncated?: boolean; }
 interface Totals { submitted: number; started: number; completed: number; failed: number; cancelled: number; interrupted: number; inputTokens: number; outputTokens: number; requests: number; reportedRequests: number; }
 interface Database { version: 1; since: number; tasks: Record<string, McpTask>; conversations: Record<string, { sessionId: string; updated: number; submitted?: number; usage?: TokenUsage }>; totals: Totals; }
 export const emptyUsage = (): TokenUsage => ({ input: 0, output: 0, requests: 0, reportedRequests: 0 });
@@ -26,10 +27,10 @@ export class McpStore {
   private data: Database = { version: 1, since: Date.now(), tasks: {}, conversations: {}, totals: totals() };
   private queue = Promise.resolve();
   private directory: string;
-  constructor(dataDir: string, private readonly limit = 5000) {
+  constructor(dataDir: string, private readonly limit = 5000, namespace: "mcp" | "http-api" = "mcp") {
     const root = path.resolve(dataDir); let ancestor = root;
     while (!existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
-    this.directory = path.join(realpathSync(ancestor), path.relative(ancestor, root), "mcp");
+    this.directory = path.join(realpathSync(ancestor), path.relative(ancestor, root), namespace);
   }
   get file() { return path.join(this.directory, "state.json"); }
   private async read(file: string, limit: number) {
@@ -75,16 +76,16 @@ export class McpStore {
       if (requestId) {
         const previous = Object.values(data.tasks).find(task => task.requestId === requestId);
         if (previous) {
-          if (previous.questionHash !== questionHash || conversationId && previous.conversationId !== conversationId) throw new Error("request_id was already used for a different question or conversation.");
+          if (previous.questionHash !== questionHash || conversationId && previous.conversationId !== conversationId) throw new TaskRequestError(409, "request_id was already used for a different question or conversation.");
           return { task: structuredClone(previous), duplicate: true };
         }
       }
-      if (Object.values(data.tasks).filter(task => !terminal(task.status)).length >= pendingLimit) throw new Error("The MCP task queue is full. Try again later.");
-      if (Object.keys(data.tasks).length >= this.limit) throw new Error("MCP retained-task capacity reached. Clean up expired tasks before submitting more.");
+      if (Object.values(data.tasks).filter(task => !terminal(task.status)).length >= pendingLimit) throw new TaskRequestError(429, "The MCP task queue is full. Try again later.");
+      if (Object.keys(data.tasks).length >= this.limit) throw new TaskRequestError(429, "MCP retained-task capacity reached. Clean up expired tasks before submitting more.");
       const conversation = conversationId && data.conversations[conversationId];
-      if (conversationId && (!conversation || conversation.updated < Date.now() - month)) throw new Error("MCP conversation not found or expired. Omit conversation_id to start a new one.");
-      if (conversationId && Object.values(data.tasks).some(task => task.conversationId === conversationId && !terminal(task.status))) throw new Error("This MCP conversation already has a pending task.");
-      if (!conversation && Object.keys(data.conversations).length >= this.limit) throw new Error("MCP conversation capacity reached.");
+      if (conversationId && (!conversation || conversation.updated < Date.now() - month)) throw new TaskRequestError(404, "MCP conversation not found or expired. Omit conversation_id to start a new one.");
+      if (conversationId && Object.values(data.tasks).some(task => task.conversationId === conversationId && !terminal(task.status))) throw new TaskRequestError(409, "This MCP conversation already has a pending task.");
+      if (!conversation && Object.keys(data.conversations).length >= this.limit) throw new TaskRequestError(429, "MCP conversation capacity reached.");
       const id = randomUUID(); const handle = conversationId ?? randomUUID(); const sessionId = conversation ? conversation.sessionId : randomUUID(); const now = Date.now();
       const task: McpTask = { id, conversationId: handle, sessionId, questionHash, ...(requestId ? { requestId } : {}), status: "queued", created: now, updated: now, usage: emptyUsage(), toolCalls: 0, elapsedMs: null };
       data.conversations[handle] = { ...conversation, sessionId, updated: now, submitted: (conversation ? conversation.submitted ?? 0 : 0) + 1, usage: conversation ? conversation.usage ?? emptyUsage() : emptyUsage() }; data.tasks[id] = task; data.totals.submitted++;
@@ -114,7 +115,7 @@ export class McpStore {
       return structuredClone(next);
     });
   }
-  private answerPath(id: string) { if (!uuid(id)) throw new Error("Invalid task_id."); return path.join(this.directory, "answers", `${id}.json`); }
+  private answerPath(id: string) { if (!uuid(id)) throw new TaskRequestError(400, "Invalid task_id."); return path.join(this.directory, "answers", `${id}.json`); }
   async answer(id: string): Promise<(TaskAnswer & { snapshot?: McpTask }) | undefined> {
     try {
       const answer = await this.read(this.answerPath(id), 2 * 1024 * 1024);
@@ -122,7 +123,7 @@ export class McpStore {
       return answer;
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
   }
-  async get(id: string) { await this.queue; const task = this.data.tasks[id]; if (!task) throw new Error("MCP task not found or expired."); return structuredClone(task); }
+  async get(id: string) { await this.queue; const task = this.data.tasks[id]; if (!task) throw new TaskRequestError(404, "MCP task not found or expired."); return structuredClone(task); }
   tasks() { return Object.values(structuredClone(this.data.tasks)); }
   hasSession(sessionId: string) { return Object.values(this.data.conversations).some(entry => entry.sessionId === sessionId); }
   async usageTotals() {

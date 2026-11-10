@@ -1,3 +1,4 @@
+import { TaskRequestError } from "./errors.js";
 import { createHash } from "node:crypto";
 import { McpStore, terminal, uuid, type McpTask, type TaskAnswer } from "./store.js";
 import type { mcpConfig } from "./config.js";
@@ -40,9 +41,9 @@ export class McpService {
     await this.store.update(id, changes);
   }
   async ask(args: AskArguments) {
-    if (this.stopping) throw new Error("The MCP service is shutting down.");
-    if (typeof args.question !== "string" || !args.question.trim() || args.question.length > 12000) throw new Error("Provide a non-empty text question of at most 12000 characters.");
-    if (args.conversation_id !== undefined && !uuid(args.conversation_id) || args.request_id !== undefined && !uuid(args.request_id)) throw new Error("conversation_id and request_id must be server-issued or random UUIDs.");
+    if (this.stopping) throw new TaskRequestError(503, "The MCP service is shutting down.");
+    if (typeof args.question !== "string" || !args.question.trim() || args.question.length > 12000) throw new TaskRequestError(400, "Provide a non-empty text question of at most 12000 characters.");
+    if (args.conversation_id !== undefined && !uuid(args.conversation_id) || args.request_id !== undefined && !uuid(args.request_id)) throw new TaskRequestError(400, "conversation_id and request_id must be server-issued or random UUIDs.");
     const submitted = await this.store.submit(createHash("sha256").update(args.question).digest("hex"), args.conversation_id, args.request_id, this.config.pendingLimit);
     const task = submitted.task;
     if (!submitted.duplicate) {
@@ -57,7 +58,7 @@ export class McpService {
           await this.store.update(task.id, { status: state, finished: Date.now() }, { ...result, answer, ...(result.answer.length > answer.length ? { truncated: true } : {}) });
         } catch (error) {
           const current = await this.store.get(task.id);
-          await this.store.update(task.id, { status: controller.signal.aborted ? "cancelled" : terminal(current.status) ? current.status : "failed", finished: Date.now() }, { answer: "", error: this.host.redact(controller.signal.aborted ? controller.signal.reason ?? error : error) });
+          await this.store.update(task.id, { status: controller.signal.aborted ? "cancelled" : terminal(current.status) ? current.status : "failed", finished: Date.now() }, { answer: "", error: this.host.redact(controller.signal.aborted ? controller.signal.reason ?? error : error), ...(error instanceof TaskRequestError && error.status === 429 ? { error_code: "capacity_exceeded" as const } : {}) });
         } finally { clearTimeout(timer); this.active.delete(task.id); }
       })().catch(error => console.error("MCP task persistence:", this.host.redact(error)));
       this.active.set(task.id, { controller, done });
@@ -71,12 +72,12 @@ export class McpService {
     return this.result(task.id);
   }
   async result(id: string) {
-    if (!uuid(id)) throw new Error("Invalid task_id.");
+    if (!uuid(id)) throw new TaskRequestError(400, "Invalid task_id.");
     const task = await this.store.get(id); const answer = terminal(task.status) ? await this.store.answer(id) : undefined;
     const u = task.usage;
     return {
       task_id: task.id, conversation_id: task.conversationId, status: task.status,
-      answer: answer?.answer ?? null, ...(answer?.error ? { error: answer.error } : {}), ...(answer?.truncated ? { truncated: true } : {}),
+      answer: answer?.answer ?? null, ...(answer?.error_code ? { error_code: answer.error_code } : {}), ...(answer?.error ? { error: answer.error } : {}), ...(answer?.truncated ? { truncated: true } : {}),
       model: task.modelId ?? null, created_at: new Date(task.created).toISOString(), finished_at: task.finished ? new Date(task.finished).toISOString() : null,
       elapsed_ms: task.elapsedMs, tool_calls: task.toolCalls,
       usage: { input_tokens: u.input, output_tokens: u.output, total_tokens: u.input + u.output, model_requests: u.requests, reported_requests: u.reportedRequests, missing_requests: u.requests - u.reportedRequests, coverage: !u.requests ? "not_started" : !u.reportedRequests ? "unavailable" : u.requests === u.reportedRequests ? "complete" : "partial" },
@@ -84,17 +85,17 @@ export class McpService {
     };
   }
   async cancel(id: string) {
-    if (!uuid(id)) throw new Error("Invalid task_id.");
+    if (!uuid(id)) throw new TaskRequestError(400, "Invalid task_id.");
     await this.store.get(id);
     this.active.get(id)?.controller.abort(new Error("MCP task cancelled by the caller."));
     // Cancellation is cooperative: a running request may still be finalizing its usage snapshot.
     return { ...await this.result(id), cancellation_requested: this.active.has(id) };
   }
   hasSession(id: string) { return this.store.hasSession(id); }
-  async removeSession(id: string) { for (const task of this.store.tasks()) if (task.sessionId === id && this.active.has(task.id)) throw new Error("This MCP conversation has an active task."); await this.store.cleanup(id); }
+  async removeSession(id: string) { if (!this.store.hasSession(id)) return; for (const task of this.store.tasks()) if (task.sessionId === id && this.active.has(task.id)) throw new Error("This MCP conversation has an active task."); await this.store.cleanup(id); }
   async close() {
     this.stopping = true; clearInterval(this.sweep);
-    for (const task of this.active.values()) task.controller.abort(new Error("The MCP service is shutting down."));
+    for (const task of this.active.values()) task.controller.abort(new TaskRequestError(503, "The MCP service is shutting down."));
     await Promise.allSettled([...this.active.values()].map(task => task.done));
   }
 }
