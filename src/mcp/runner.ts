@@ -42,6 +42,9 @@ export async function runMcpAgent(session: AgentSession, task: McpTask, question
   try {
     signal.throwIfAborted(); if (options.effort !== "provider-default") session.setThinkingLevel(options.effort);
     persist(); await persistence; if (persistenceError) throw persistenceError;
+    // Cancellation may arrive while the initial snapshot is being saved, before
+    // the SDK has a running prompt for session.abort() to stop.
+    signal.throwIfAborted();
     await session.prompt(question);
     const last = session.messages.findLast(m => m.role === "assistant");
     if (signal.aborted || last?.role === "assistant" && last.stopReason === "aborted") { metric.status = "stopped"; error = options.redact(signal.reason ?? new Error("MCP task stopped.")); }

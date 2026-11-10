@@ -9,8 +9,15 @@ import {once} from 'node:events';
 import {createWebServer} from '../dist/web/server.js';
 import {writeMemoryFixture} from './memory-fixtures.mjs';
 import {httpApiConfig} from '../dist/http-api/config.js';
+import {runMcpAgent} from '../dist/mcp/runner.js';
 
 const KEY='HTTP_API_TEST_SECRET_'.repeat(3), MCP_KEY='MCP_API_TEST_SECRET', BRIDGE_KEY='WECOM_BRIDGE_TEST_SECRET_'.repeat(2);
+test('cancellation during initial task persistence cannot start a later model request',async()=>{
+ const controller=new AbortController();let prompts=0,updates=0;
+ const session={messages:[],agent:{},sessionManager:{getBranch:()=>[],appendCustomEntry(){}},subscribe:()=>()=>{},async abort(){},async prompt(){prompts++;}};
+ const result=await runMcpAgent(session,{id:randomUUID()},'Do not start',controller.signal,{modelId:'fixture',effort:'provider-default',redact:error=>error.message,async update(){if(updates++===0){await new Promise(r=>setTimeout(r,1));controller.abort(new Error('Deadline before model request'));}}});
+ assert.equal(prompts,0);assert.equal(result.status,'cancelled');assert.match(result.error,/Deadline before model request/);assert.equal(updates,2);
+});
 function reply(res,text='API answer',tool){
  res.writeHead(200,{'Content-Type':'text/event-stream'});
  const delta=tool?{tool_calls:[{index:0,id:randomUUID(),type:'function',function:{name:tool.name,arguments:JSON.stringify(tool.args)}}]}:{content:text};
