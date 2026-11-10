@@ -29,6 +29,19 @@ import { ensureAccountLibrary, listLibraries } from './library-registry.js';
 const uiRoot = fileURLToPath(new URL("../../resources/ckd-ui/", import.meta.url));
 // 桌面主界面也由服务端下发：改 desktop/ui 只需要更新服务器，不用重新发包。
 const desktopUiRoot = fileURLToPath(new URL("../../desktop/ui/", import.meta.url));
+function desktopVersionInfo() {
+  let latest = process.env.CKD_DESKTOP_VERSION?.trim();
+  if (!latest) {
+    try { latest = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../desktop/package.json", import.meta.url)), "utf8")).version; }
+    catch { latest = "0.0.0"; }
+  }
+  return {
+    latest,
+    minimum: process.env.CKD_DESKTOP_MIN_VERSION?.trim() || "0.0.0",
+    downloadUrl: process.env.CKD_DESKTOP_DOWNLOAD_URL?.trim() || "https://github.com/Ezreal1119/pa-agent/releases/latest",
+    notes: process.env.CKD_DESKTOP_NOTES?.trim() || "",
+  };
+}
 const clientAssets = new Map([
   ["/client/", ["index.html", "text/html; charset=utf-8"]],
   ["/client/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -283,6 +296,7 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       if (clientRequest) {
         // Electron main-process requests have no browser Origin. Keep browser/admin rules unchanged.
         if (request.headers.origin) throw new HttpError(403, '请从桌面客户端操作。');
+        if (url.pathname === '/api/client/version' && request.method === 'GET') { json(200, desktopVersionInfo()); return; }
         if (url.pathname === '/api/client/login' && request.method === 'POST') { json(200, await clientAccess.login(await body(request), request.headers['x-ckd-password-change'] === '1')); return; }
         if (url.pathname === '/api/client/me' && request.method === 'GET') { json(200, { user: clientAccess.me(request.headers.authorization) }); return; }
         if (url.pathname === '/api/client/me/password' && request.method === 'POST') { await clientAccess.changePassword(request.headers.authorization, await body(request)); json(200, { ok: true }); return; }

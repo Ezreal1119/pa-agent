@@ -768,3 +768,13 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 提示按「项目 · 类型」合并，显示条数和一条示例，完整内容可复制；
 - 最多展开 12 类，超出只显示剩余类别数；
 - 验证：`node --check resources/ckd-ui/app.js` 通过；实际任务显示待刷新确认。
+
+## 2026-11-10：桌面端版本更新提示
+
+- 服务端新增公开接口 `/api/client/version`，返回 `latest / minimum / downloadUrl / notes`；
+- 默认 `latest` 读 `desktop/package.json` 版本，可用 `CKD_DESKTOP_VERSION`、`CKD_DESKTOP_MIN_VERSION`、`CKD_DESKTOP_DOWNLOAD_URL`、`CKD_DESKTOP_NOTES` 覆盖；
+- 桌面端 preload 新增 `version()` 和 `openExternal(url)`；主进程通过 IPC 查询版本并校验链接只允许 HTTPS；
+- 主界面启动时比较当前安装版本：发现新版本显示顶部提示条，可「查看更新」或「稍后」；
+- 低于 `minimum` 时提示“当前版本已不再支持，请升级”；
+- 兼容性：旧客户端没有 `window.ckd.version` 时直接跳过，不报错；需要安装包含此逻辑的新包后才会提示后续版本。
+- 验证：`npm run typecheck`、`node --check desktop/main.cjs/preload.cjs/ui/app.js` 通过；实际提示需打包新版本并设置版本配置后验证。

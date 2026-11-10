@@ -28,6 +28,20 @@ function register(name, action) {
     } catch (error) { if (!changesSession && generation !== sessionGeneration) return { ok: false, code: 'session_changed', error: '登录已改变，请重试当前操作。' }; if (error.code === 401) { sessionGeneration++; saved.clear(); backend.cancelDownloads(); closeEditor(); } return { ok: false, code: error.code || 'error', error: error.message || '操作失败，请重试。' }; }
   });
 }
+ipcMain.handle('ckd:version', async event => {
+  try {
+    if (!window || event.sender !== window.webContents) throw new ClientError(403, '请求来源无效。');
+    const response = await fetch(new URL('/api/client/version', backendUrl));
+    if (!response.ok) throw new ClientError(response.status, '版本服务暂不可用。');
+    return { ok: true, value: { current: app.getVersion(), ...await response.json() } };
+  } catch (error) { return { ok: false, code: error.code || 'error', error: error.message || '版本检查失败，请稍后重试。' }; }
+});
+ipcMain.handle('ckd:openExternal', async (event, url) => {
+  if (!window || event.sender !== window.webContents) throw new ClientError(403, '请求来源无效。');
+  if (typeof url !== 'string' || !/^https:\/\//u.test(url)) throw new ClientError(400, '链接无效。');
+  await shell.openExternal(url);
+  return { ok: true };
+});
 for (const name of ['status', 'list', 'deleted', 'trash', 'restore', 'get', 'start', 'answer', 'resume', 'cancel', 'image', 'crop', 'generate', 'me']) register(name, (...args) => backend[name](...args));
 register('changePassword', async input => { const result = await backend.changePassword(input); sessionGeneration++; saved.clear(); closeEditor(); return result; });
 register('login', input => { sessionGeneration++; saved.clear(); closeEditor(); return backend.login(input); });

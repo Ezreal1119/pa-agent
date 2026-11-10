@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('ckd', Object.freeze({
   me: () => ipcRenderer.invoke('ckd:me'),
   changePassword: input => ipcRenderer.invoke('ckd:changePassword', input),
   status: () => ipcRenderer.invoke('ckd:status'),
+  version: () => ipcRenderer.invoke('ckd:version'),
+  openExternal: url => ipcRenderer.invoke('ckd:openExternal', url),
   list: () => ipcRenderer.invoke('ckd:list'),
   deleted: () => ipcRenderer.invoke('ckd:deleted'),
   trash: id => ipcRenderer.invoke('ckd:trash',id),

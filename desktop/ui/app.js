@@ -225,4 +225,37 @@ $('password-form').addEventListener('submit',safely(async event=>{
 }));
 $('retry').addEventListener('click',safely(async()=>{notice();if(!logged){$('account').focus();return;}await call('status');if(selected)await selectTask(selected);else await refreshList();}));
 setInterval(async()=>{if(!logged||!$('password-view').hidden||offline||!current||pending||polling||!['running','awaiting_clarification'].includes(current.status))return;const ticket=generation,id=current.id;polling=true;try{const {run}=await call('get',id);if(ticket===generation&&logged){render(run);if(!run.busy)await refreshList();}}catch{}finally{polling=false;}},1500);
+function compareVersions(a, b) {
+  const left = String(a).split('.').map(value => Number.parseInt(value, 10) || 0);
+  const right = String(b).split('.').map(value => Number.parseInt(value, 10) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff) return diff;
+  }
+  return 0;
+}
+async function checkDesktopUpdate() {
+  if (typeof window.ckd?.version !== 'function') return;
+  try {
+    const result = await window.ckd.version();
+    if (!result?.ok || !result.value?.latest) return;
+    const { current, latest, minimum, downloadUrl } = result.value;
+    if (compareVersions(latest, current) <= 0) return;
+    let dismissed = null;
+    try { dismissed = localStorage.getItem('ckd.updateDismissed'); } catch {}
+    if (dismissed === latest) return;
+    const forced = minimum && compareVersions(current, minimum) < 0;
+    $('update-text').textContent = forced
+      ? `当前版本 ${current} 已不再支持，请升级到 ${latest}。`
+      : `发现新版本 ${latest}（当前 ${current}）。`;
+    $('update-open').hidden = !downloadUrl;
+    $('update-open').onclick = () => { if (downloadUrl) void window.ckd.openExternal(downloadUrl); };
+    $('update-dismiss').onclick = () => {
+      $('update-banner').hidden = true;
+      try { localStorage.setItem('ckd.updateDismissed', latest); } catch {}
+    };
+    $('update-banner').hidden = false;
+  } catch {}
+}
+void checkDesktopUpdate();
 factoryVisibility();

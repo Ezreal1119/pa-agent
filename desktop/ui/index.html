@@ -7,6 +7,11 @@
 </head>
 <body>
   <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="retry" type="button" hidden>重试连接</button></div>
+  <div id="update-banner" class="update-banner" role="status" hidden>
+    <span id="update-text"></span>
+    <button id="update-open" class="text-button" type="button" hidden>查看更新</button>
+    <button id="update-dismiss" class="text-button" type="button">稍后</button>
+  </div>
   <section id="login-view" class="login-layout">
     <div class="intro"><div class="brand">CKD SOP <span>V3</span></div><h1>从工序到<br>作业指导书。</h1><p>填写信息，确认流程，<br>生成附有质量评分的 SOP 工作簿。</p><div class="intro-steps">01 填写　→　02 确认　→　03 交付</div></div>
     <form id="login-form" class="login-card"><div class="eyebrow">欢迎使用</div><h2>登录工作台</h2><p class="muted">使用你的账号继续。</p><label>账号<input id="account" name="account" required autocomplete="username" autofocus></label><label>密码<input id="password" name="password" type="password" required autocomplete="off"></label><button class="primary" id="login-submit">登录 →</button><p class="muted small">任务保存在服务端，关闭应用后可继续。</p></form>
