@@ -305,10 +305,25 @@ function syncIssueInfo(item){
   :key.startsWith('images:')?'图片评分':key.startsWith('translate:')?'翻译':key.startsWith('summaries:')||key.startsWith('removed-summary:')?'摘要':key.startsWith('orphan:')?'清理':'同步';
  return {project,process,type,message,key};
 }
+function warningInfo(warning){
+ const text=String(warning);
+ let type='其他提示';
+ if(/Different historical descriptions/iu.test(text))type='图片历史描述不一致';
+ else if(/Deleted|retained|删除|保留/iu.test(text))type='删除/保留';
+ else if(/image|图片|vision|评分/iu.test(text))type='图片处理';
+ const project=/product_lib[\\/]([^\\/]+)/u.exec(text)?.[1]||(/processes_lib/u.test(text)?'公共工序':'');
+ return {type,project,text};
+}
 function renderLibrarySyncDetails(job){
  const results=$('library-sync-detail-content');results.replaceChildren();if(job.error)results.append(node('p',job.error,'quality-warning'));
  if(job.sync?.validation&&!job.sync.validation.valid)for(const error of job.sync.validation.errors)results.append(node('p',`${error.file}${error.line?` 第${error.line}行${error.column?`第${error.column}列`:''}`:''}：${error.message}`,'quality-warning small'));
- for(const warning of job.warnings){const hash=/image ([a-f0-9]{64})/u.exec(warning)?.[1],paths=(job.sync?.images??[]).filter(i=>i.imageHash===hash).map(i=>i.path).filter(p=>!warning.includes(p));const message=paths.length?`${warning}\n${[...new Set(paths)].join('\n')}`:warning;results.append(node('p',message,'quality-warning small issue-path'),copyIssue(message));}
+ if(job.warnings.length){
+  const groups=new Map();for(const warning of job.warnings){const info=warningInfo(warning),key=`${info.project}|${info.type}`;const group=groups.get(key)??groups.set(key,{project:info.project||'整库',type:info.type,items:[]}).get(key);group.items.push(info.text);}
+  const detail=node('details');detail.append(node('summary',`提示 ${job.warnings.length} 条（按类型合并，点击展开）`));detail.append(node('p','同类提示只显示计数和一条示例，完整内容可复制。','muted small'));
+  for(const group of [...groups.values()].slice(0,12)){const sample=group.items[0];const card=node('div',undefined,'warning-group');card.append(node('p',`${group.project} · ${group.type} · ${group.items.length} 条`,'small'));card.append(node('code',sample.length>240?`${sample.slice(0,240)}…`:sample,'issue-path'),copyIssue(group.items.join('\n')));detail.append(card);}
+  if(groups.size>12)detail.append(node('p',`另有 ${groups.size-12} 类提示未展开，可复制全部或到任务详情查看。`,'muted small'));
+  results.append(detail);
+ }
  const issues=job.items.filter(i=>['error','conflict'].includes(i.status)||i.message?.includes('Deleted')||i.message?.includes('retained'));if(issues.length){
   if(['interrupted','partial_failed','failed'].includes(job.status)){const retry=node('button','重试失败项','button secondary');retry.type='button';retry.addEventListener('click',()=>librarySyncAction('resume'));results.append(retry);}
   const groups=new Map();for(const item of issues){const info=syncIssueInfo(item),group=`${info.project||'整库'}|${info.process||'全库'}`;(groups.get(group)??groups.set(group,{project:info.project||'整库',process:info.process||'全库',items:[]}).get(group)).items.push(info);}
