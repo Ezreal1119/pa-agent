@@ -15,3 +15,6 @@
 .update-banner{position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:80;display:flex;align-items:center;gap:12px;max-width:min(720px,calc(100vw - 32px));padding:10px 14px;border:1px solid #7d6a3b;border-radius:10px;background:#332b1c;color:#f0dfb0;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
 .update-banner .text-button{white-space:nowrap;color:#f0dfb0}
 @media(max-width:650px){.update-banner{top:56px;left:12px;right:12px;transform:none;flex-wrap:wrap}}
+
+/* Installed version badge */
+.app-version{font-size:11px;font-weight:500;color:var(--muted);letter-spacing:0;margin-left:2px}

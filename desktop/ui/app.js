@@ -238,8 +238,13 @@ async function checkDesktopUpdate() {
   if (typeof window.ckd?.version !== 'function') return;
   try {
     const result = await window.ckd.version();
-    if (!result?.ok || !result.value?.latest) return;
+    if (!result?.ok || !result.value) return;
     const { current, latest, minimum, downloadUrl } = result.value;
+    if (current) {
+      for (const node of document.querySelectorAll('[data-app-version]')) node.textContent = `v${current}`;
+      document.title = `CKD SOP v${current}`;
+    }
+    if (!latest) return;
     if (compareVersions(latest, current) <= 0) return;
     let dismissed = null;
     try { dismissed = localStorage.getItem('ckd.updateDismissed'); } catch {}

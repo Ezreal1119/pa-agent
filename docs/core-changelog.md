@@ -786,3 +786,11 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 构建产物：`desktop/release/cloud/CKD-SOP-Cloud-0.1.12-win-x64.exe`，111,449,438 字节，SHA256 `A23B2862F68B0AC361BC582ABA1E1819A0BF2CC255E4BD29C2012F8DC116459F`；
 - 已验证打包内 `package.json` 版本为 0.1.12，preload 包含 `ckd:version` / `ckd:openExternal`；
 - 安装包本身不进 Git，发布时上传并配置 `CKD_DESKTOP_DOWNLOAD_URL`。
+
+## 2026-11-10：桌面端显示当前版本并整理发版文档
+
+- 登录页和侧栏品牌后显示当前安装版本 `v0.1.12`；原生窗口标题同步为 `CKD SOP v0.1.12`；
+- 版本号来自 preload `version()` IPC，旧客户端没有该接口时显示为空，不影响使用；
+- 新增 `docs/desktop-release.md`，记录版本号、打包、上传、`.env`、验证和回滚步骤；
+- 0.1.12 安装包重新构建：`111,449,410` 字节，SHA256 `bba55ce75de3648133d9b75f3e76c3195c7f23f0b9450b5dd05254a510b229d4`；此前记录的 `A23B...` 为未包含版本号显示的旧包，以本条为准。
+- 验证：`node --check desktop/main.cjs/preload.cjs/ui/app.js` 通过；包内已确认包含 `app.getVersion()` 和 `data-app-version`。

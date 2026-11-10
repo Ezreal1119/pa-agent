@@ -118,7 +118,7 @@ ipcMain.on('ckd-editor:focus-main', event => {
 });
 
 function createWindow() {
-  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 900, minHeight: 640, title: productName, backgroundColor: '#101b17', autoHideMenuBar: true,
+  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 900, minHeight: 640, title: `${productName} v${app.getVersion()}`, backgroundColor: '#101b17', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   window.setMenu(null);
   window.webContents.on('page-title-updated', event => event.preventDefault());
