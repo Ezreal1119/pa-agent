@@ -259,7 +259,7 @@
   }
 
   function normalizePartno(value) {
-    return String(value ?? "").trim().toLowerCase();
+    return String(value ?? "").trim();
   }
 
   function renderBomStatus(info) {
@@ -281,6 +281,7 @@
       state.bomInfo = info;
       state.bomIndex = new Map((info?.rows || []).map(row => [normalizePartno(row.partno), row]));
       renderBomStatus(info);
+      validateBomRows();
     } catch {
       state.bomIndex = new Map();
       state.bomInfo = null;
@@ -300,6 +301,7 @@
     state.bomInfo = value.bom;
     state.bomIndex = new Map((value.bom?.rows || []).map(row => [normalizePartno(row.partno), row]));
     renderBomStatus(value.bom);
+    validateBomRows();
     notice(`已导入 BOM：${value.bom.fileName}（${value.bom.rows.length} 行）。输入料号会自动带出名称，用量 1 会自动填数量。`);
   }
 
@@ -389,12 +391,44 @@
       .map((row, index) => `
         <tr data-index="${index}">
           <td>${index + 1}</td>
-          <td><input data-field="partno" value="${escapeHtml(row.partno)}" placeholder="料号" autocomplete="off"></td>
+          <td><input data-field="partno" value="${escapeHtml(row.partno)}" placeholder="料号" autocomplete="off"><div class="bom-error" hidden></div></td>
           <td><input data-field="spec" value="${escapeHtml(row.spec)}" placeholder="名称" autocomplete="off"></td>
           <td><input data-field="qty" value="${escapeHtml(row.qty)}" placeholder="必填" inputmode="decimal"></td>
           <td><button type="button" class="row-remove" data-action="remove-bom" aria-label="删除这一行">×</button></td>
         </tr>`)
       .join("");
+    validateBomRows();
+  }
+
+  function bomRowError(row) {
+    const partno = String(row?.partno ?? "").trim();
+    if (!partno || !state.bomInfo?.rows?.length) return "";
+    if (!state.bomIndex.has(partno)) return "BOM 中未找到这个料号";
+    if (state.bom.filter(item => String(item.partno ?? "").trim() === partno).length > 1) return "料号在本工序中重复";
+    const qty = String(row?.qty ?? "").trim();
+    if (!qty || !Number.isFinite(Number(qty)) || Number(qty) <= 0) return "数量必须大于 0";
+    return "";
+  }
+
+  function applyBomRowError(rowEl, message) {
+    const input = rowEl.querySelector('[data-field="partno"]');
+    if (!input) return;
+    input.classList.toggle("input-error", Boolean(message));
+    let error = rowEl.querySelector(".bom-error");
+    if (!error) {
+      error = document.createElement("div");
+      error.className = "bom-error";
+      input.parentElement.append(error);
+    }
+    error.textContent = message;
+    error.hidden = !message;
+  }
+
+  function validateBomRows() {
+    for (const rowEl of $("bom-body").querySelectorAll("tr")) {
+      const row = state.bom[Number(rowEl.dataset.index)];
+      if (row) applyBomRowError(rowEl, bomRowError(row));
+    }
   }
 
   function renderTools() {
@@ -1137,6 +1171,10 @@
       if (!row || !field) return;
       const index = Number(row.dataset.index);
       if (state.bom[index]) state.bom[index][field] = event.target.value;
+      if (field === "partno" || field === "qty") {
+        const record = state.bom[index];
+        if (record) applyBomRowError(row, bomRowError(record));
+      }
     });
     $("bom-body").addEventListener("click", event => {
       if (event.target.dataset.action !== "remove-bom") return;
@@ -1155,7 +1193,11 @@
       const record = state.bom[index];
       if (record) record.partno = input.value;
       const hit = state.bomIndex.get(normalizePartno(input.value));
-      if (!hit) return;
+      applyBomRowError(row, record ? bomRowError(record) : "");
+      if (!hit) {
+        markDirty();
+        return;
+      }
       let changed = false;
       const nameInput = row.querySelector('[data-field="spec"]');
       if (nameInput && !nameInput.value.trim() && hit.name) {
@@ -1170,6 +1212,7 @@
         changed = true;
       }
       if (changed) markDirty();
+      if (record) applyBomRowError(row, bomRowError(record));
     });
     $("import-bom").addEventListener("click", () => {
       if (state.projectType !== "assemble") { notice("只有装配项目支持导入 BOM。"); return; }

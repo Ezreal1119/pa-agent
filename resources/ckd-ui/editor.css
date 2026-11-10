@@ -133,3 +133,7 @@
 .editor-layout.has-issues ~ .editor-toast{right:348px}
 @media(max-width:1200px){.editor-layout.has-issues ~ .editor-toast{right:24px}}
 @media(max-width:650px){.editor-toast{top:72px;right:12px;left:12px;max-width:none}}
+
+/* BOM ?????:?????,?????? */
+.bom-error{margin-top:4px;color:#e06666;font-size:11px;line-height:1.35}
+input.input-error{border-color:#a94f4f;background:#3a2323;color:#ffd9c8}

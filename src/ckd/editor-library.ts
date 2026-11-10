@@ -29,6 +29,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isInside } from "./store.js";
 import { acquireLibraryLock } from "./library-lock.js";
+import { readBom, type BomInfo } from "./editor-bom.js";
 import { ImageInputError, inspectImage } from "./image-input.js";
 import {
   EditorInputError,
@@ -773,12 +774,31 @@ export interface DraftIssue { folder: string; metadata: string; message: string 
  * 把当前项目+语言下的所有草稿逐条按正式规则校验：
  * 通过的去掉草稿标记、成为正式工序；不通过的保留草稿并回报原因。
  */
+/** BOM 只做料号精准匹配；人工填写优先，不用 BOM 数量覆盖。 */
+function validateBomAgainst(rows: EditorBomRowRecord[], info: BomInfo | null): string[] {
+  if (!info?.rows.length) return [];
+  const known = new Set(info.rows.map(row => row.partno.trim()));
+  const seen = new Set<string>();
+  const issues: string[] = [];
+  for (const row of rows) {
+    const partno = row.partno.trim();
+    if (!partno) continue;
+    if (!known.has(partno)) issues.push(`料号 ${partno} 不在 BOM 中。`);
+    if (seen.has(partno)) issues.push(`料号 ${partno} 在工序中重复。`);
+    seen.add(partno);
+    if (!Number.isFinite(row.qty) || row.qty <= 0) issues.push(`料号 ${partno} 的数量必须大于 0。`);
+  }
+  return [...new Set(issues)];
+}
+
 export function publishDrafts(library: string, input: { projectId: unknown; language: unknown }): { published: { folder: string; metadata: string }[]; issues: DraftIssue[] } {
   const root = libraryRoot(library);
   const projectId = validateProjectId(input.projectId);
   const language = validateLanguage(input.language);
   const parent = assemblyRoot(root, projectId, language);
   const drafts = listProcessFolders(root, projectId, language).filter(folder => fs.existsSync(path.join(parent, folder, DRAFT_FILE)));
+  let bomInfo: BomInfo | null = null;
+  try { bomInfo = readBom(library, projectId); } catch { /* BOM 未导入或损坏时不做料号校验 */ }
   const published: { folder: string; metadata: string }[] = [], issues: DraftIssue[] = [];
   for (const folder of drafts) {
     const order = Number(FOLDER_PATTERN.exec(folder)?.[1] ?? 0);
@@ -787,6 +807,8 @@ export function publishDrafts(library: string, input: { projectId: unknown; lang
       const record = readProcess(library, { projectId, language, order }, { includePhotos: true });
       metadata = record.metadata;
       if (!record.metadata.trim()) throw new EditorInputError("工序名为空。");
+      const bomIssues = validateBomAgainst(record.bom, bomInfo);
+      if (bomIssues.length) throw new EditorInputError(bomIssues.join("；"));
       // 去掉尾部全空坑位；剩下的必须是连续「图 + 文字」配对。
       let last = record.photos.length - 1;
       while (last >= 0 && record.photos[last] === null && !String(record.paragraphs[last] ?? "").trim()) last--;
