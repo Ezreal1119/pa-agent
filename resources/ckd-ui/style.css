@@ -20,3 +20,5 @@
 .cover-divider span{font-size:14px;font-weight:600;color:var(--text)}
 .cover-divider em{font-style:normal;font-size:11px;color:var(--muted);margin-left:auto;text-align:right}
 #cover-hint{margin:0 0 20px}
+
+.sync-all-results{margin-top:10px}.sync-all-row{display:grid;grid-template-columns:minmax(160px,1fr) minmax(220px,1.5fr);gap:12px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-top:6px;font-size:12px}.sync-all-name{font-weight:600}.sync-all-state{color:var(--muted)}

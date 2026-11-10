@@ -14,8 +14,9 @@
         <div class="panel-heading"><div><div class="eyebrow">LIBRARY ADMINISTRATION</div><h2 id="library-sync-title">同步更新 Library</h2></div><button id="close-library-sync" class="text-button" type="button">收起</button></div>
         <p class="muted">修改、上传或删除资料后，执行语法检查 → 中英文同步 → 图片评分 → 图片描述与摘要更新。中英文同时变化时以中文为准并记录覆盖。参考图片校准独立执行。</p>
         <p class="muted small">首次保留无法判断修改来源的既有双语资料并建立基线；之后根据 Hash 同步。自动生成的对应文件可跟随删除，人工内容保留并报告。执行期间请暂停编辑 Library；开始前保存评分参数，任务使用参数快照。</p>
-        <div class="run-actions"><button id="start-library-sync" class="button primary" type="button">开始同步更新</button><button id="plan-library-sync" class="button secondary" type="button">只检查与预览</button><button id="resume-library-sync" class="button secondary" type="button" hidden>恢复同步</button><button id="cancel-library-sync" class="button secondary" type="button" hidden>取消同步</button></div>
+        <div class="run-actions"><button id="start-library-sync" class="button primary" type="button">开始同步更新</button><button id="plan-library-sync" class="button secondary" type="button">只检查与预览</button><button id="sync-all-libraries" class="button secondary" type="button">同步所有库</button><button id="resume-library-sync" class="button secondary" type="button" hidden>恢复同步</button><button id="cancel-library-sync" class="button secondary" type="button" hidden>取消同步</button></div>
         <p id="library-sync-status" role="status" class="muted">准备就绪。预览不调用模型、不修改 Library 或同步基线。</p>
+        <div id="library-sync-all-results" class="sync-all-results" hidden></div>
         <div id="library-sync-stages"></div><div id="library-sync-results"></div>
         <details><summary>同步任务历史</summary><div id="library-sync-history"></div></details>
       </section>

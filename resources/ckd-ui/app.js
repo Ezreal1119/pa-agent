@@ -333,6 +333,30 @@ function renderLibrarySyncDetails(job){
  }
  const images=job.sync?.images??[],unique=new Map(images.map(i=>[i.imageHash,i])),allPaths=new Map();for(const image of images){const paths=allPaths.get(image.imageHash)??[];if(!paths.includes(image.path))paths.push(image.path);allPaths.set(image.imageHash,paths);}if(unique.size){const section=node('details');section.append(node('summary',`图片 ${images.length} 个路径，${unique.size} 张不同图片；${[...unique.values()].filter(i=>i.fallback||i.result?.reminder).length} 张需修改/复核。`));let listed=false;section.addEventListener('toggle',()=>{if(!section.open||listed)return;listed=true;for(const image of unique.values()){const detail=node('details');detail.append(node('summary',`${image.path} · ${image.fallback?0:image.result?.score??'未评分'}${image.fallback||image.result?.reminder?' · 需复核':''}`));let rendered=false;detail.addEventListener('toggle',()=>{if(!detail.open||rendered)return;rendered=true;const paths=allPaths.get(image.imageHash)??[image.path];detail.append(node('code',paths.join('\n'),'issue-path'),copyIssue(paths.join('\n')));if(image.result||image.fallback){const content=node('div');renderImageAssessment(content,image.fallback??image.result);detail.append(content);}else detail.append(node('p',image.error,'quality-warning'));});section.append(detail);}});results.append(section);}
 }
+let syncAllBatchId=null,syncAllBusy=false,syncAllPolling=false;
+function renderSyncAllBatch(batch){
+ const box=$('library-sync-all-results');box.hidden=false;box.replaceChildren();
+ box.append(node('p',`同步所有库：${{running:'进行中',completed:'已完成',partial_failed:'部分失败'}[batch.status]??batch.status}`, 'muted small'));
+ for(const item of batch.items){
+  const counts=item.counts??{},row=node('div',undefined,'sync-all-row');
+  row.append(node('span',item.name,'sync-all-name'));
+  row.append(node('span',`${{pending:'等待',running:'同步中',completed:'完成',partial_failed:'部分失败',failed:'失败',interrupted:'中断'}[item.status]??item.status} · 更新 ${counts.updated??0} / 复用 ${counts.reused??0} / 错误 ${counts.error??0}`,'sync-all-state'));
+  if(item.error)row.append(node('span',item.error,'quality-warning small'));
+  box.append(row);
+ }
+}
+async function pollSyncAllBatch(){
+ if(!syncAllBatchId||syncAllPolling)return;syncAllPolling=true;
+ try{const {batch}=await api(`/api/library/sync-all/${syncAllBatchId}`);renderSyncAllBatch(batch);if(batch.status==='running'){setTimeout(pollSyncAllBatch,1500);return;}syncAllBusy=false;$('sync-all-libraries').disabled=false;}
+ catch(error){$('library-sync-status').textContent=error.message;syncAllBusy=false;$('sync-all-libraries').disabled=false;}
+ finally{syncAllPolling=false;}
+}
+async function syncAllLibraries(){
+ if(syncAllBusy)return;syncAllBusy=true;$('sync-all-libraries').disabled=true;
+ try{const {batch}=await api('/api/library/sync-all',{method:'POST',body:{}});syncAllBatchId=batch.id;renderSyncAllBatch(batch);void pollSyncAllBatch();}
+ catch(error){$('library-sync-status').textContent=error.message;syncAllBusy=false;$('sync-all-libraries').disabled=false;}
+}
+$('sync-all-libraries').addEventListener('click',syncAllLibraries);
 async function loadLibrarySyncHistory(){const {jobs}=await api('/api/library/jobs/progress');const history=$('library-sync-history');history.replaceChildren();for(const job of jobs.filter(j=>j.kind==='sync').slice(0,15)){const button=node('button',`${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.input.dryRun?'预览':'同步'} · ${syncStatusLabels[job.status]??job.status}`,'text-button');button.type='button';button.addEventListener('click',()=>showLibrarySync(job));history.append(button);}if(librarySyncId){const job=jobs.find(j=>j.id===librarySyncId);if(job)showLibrarySync(job);else try{showLibrarySync((await api(`/api/library/jobs/${librarySyncId}/progress`)).job);}catch{const newest=jobs.find(j=>j.kind==='sync');if(newest)showLibrarySync(newest);}}else{const newest=jobs.find(j=>j.kind==='sync');if(newest)showLibrarySync(newest);}}
 $('sync-library').addEventListener('click',async()=>{$('library-sync-panel').hidden=false;$('library-sync-panel').scrollIntoView({block:'start',behavior:'smooth'});try{await loadLibrarySyncHistory();}catch(error){$('library-sync-status').textContent=error.message;}});
 $('close-library-sync').addEventListener('click',()=>{$('library-sync-panel').hidden=true;});

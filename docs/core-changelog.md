@@ -794,3 +794,12 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 新增 `docs/desktop-release.md`，记录版本号、打包、上传、`.env`、验证和回滚步骤；
 - 0.1.12 安装包重新构建：`111,449,410` 字节，SHA256 `bba55ce75de3648133d9b75f3e76c3195c7f23f0b9450b5dd05254a510b229d4`；此前记录的 `A23B...` 为未包含版本号显示的旧包，以本条为准。
 - 验证：`node --check desktop/main.cjs/preload.cjs/ui/app.js` 通过；包内已确认包含 `app.getVersion()` 和 `data-app-version`。
+
+## 2026-11-10：管理端同步所有库
+
+- 「同步更新 Library」新增「同步所有库」按钮；
+- 后端 `POST /api/library/sync-all` 依次同步主库和所有已存在的个人库，返回批次 ID；
+- `GET /api/library/sync-all/:id` 返回每个库的进度、计数和错误，供前端轮询；
+- 前端按库显示「等待 / 同步中 / 完成 / 失败」，不影响单库同步按钮；
+- 顺序执行，避免多个库同时调用模型和图片评分把服务器压满；
+- 验证：`npm run typecheck`、`npm run build`、`node --check resources/ckd-ui/app.js` 通过；多库真实同步待服务器验证。

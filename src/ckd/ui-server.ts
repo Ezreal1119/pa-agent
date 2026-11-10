@@ -5,6 +5,7 @@ import { HttpLibraryModel } from "./library-model.js";
 import { operationSteps, suggestProcessName } from "./editor-naming.js";
 import path from "node:path";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { CkdWorkflow, downloadableResult, type CkdOptions } from "./service.js";
 import { isInside } from "./store.js";
@@ -145,6 +146,24 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
   // 工序名总结复用同一个文字模型（BASE_URL/API_KEY/MODEL_ID），不引入新的供应商。
   const namingModel = new HttpLibraryModel({ timeoutMs: 60000, retries: 1 });
   const maintenanceJobs = new Map<string, Promise<unknown>>();
+  type SyncAllItem = { name: string; path: string; master: boolean; status: string; jobId?: string; counts?: unknown; error?: string };
+  type SyncAllBatch = { id: string; status: string; createdAt: string; items: SyncAllItem[] };
+  const syncAllBatches = new Map<string, SyncAllBatch>();
+  function refreshSyncAllBatch(batch: SyncAllBatch) {
+    for (const item of batch.items) {
+      if (!item.jobId) continue;
+      try {
+        const instance = item.master ? maintenance : maintenanceFor(item.path);
+        const job = instance.getProgress(item.jobId);
+        item.status = job.status;
+        item.counts = job.counts;
+      } catch { /* keep last known status */ }
+    }
+    if (batch.items.every(item => !["pending", "running"].includes(item.status))) {
+      batch.status = batch.items.every(item => item.status === "completed") ? "completed" : "partial_failed";
+    }
+    return batch;
+  }
   // 保存后由用户在页面上选择是否同步：每个库一个实例，防抖排队，后台执行。
   const projectMaintenance = new Map<string, LibraryMaintenance>();
   function maintenanceFor(libraryPath: string): LibraryMaintenance {
@@ -474,6 +493,43 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           if (/busy|Vision model requires|Timeout|timed out/iu.test(errorText(error)) || controller.signal.aborted) throw error;
           throw new HttpError(502, errorText(error));
         } finally { response.off("close", close); }
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/library/sync-all") {
+        const input = await body(request);
+        const libraries = librarySummaries().filter(item => item.exists);
+        const batch: SyncAllBatch = {
+          id: randomUUID(),
+          status: "running",
+          createdAt: new Date().toISOString(),
+          items: libraries.map(item => ({ name: item.name, path: item.path, master: item.master, status: "pending" })),
+        };
+        syncAllBatches.set(batch.id, batch);
+        void (async () => {
+          for (const item of batch.items) {
+            item.status = "running";
+            try {
+              const instance = item.master ? maintenance : maintenanceFor(item.path);
+              const job = instance.create("sync", { dryRun: Boolean(input.dryRun) });
+              item.jobId = job.id;
+              const result = await instance.resume(job.id);
+              item.status = result.status;
+              item.counts = result.counts;
+            } catch (error) {
+              item.status = "failed";
+              item.error = error instanceof Error ? error.message : String(error);
+            }
+          }
+          batch.status = batch.items.every(item => item.status === "completed") ? "completed" : "partial_failed";
+        })().catch(() => { batch.status = "partial_failed"; });
+        json(202, { batch });
+        return;
+      }
+      const syncAll = /^\/api\/library\/sync-all\/([0-9a-f-]{36})$/u.exec(url.pathname);
+      if (request.method === "GET" && syncAll) {
+        const batch = syncAllBatches.get(syncAll[1]!);
+        if (!batch) throw new HttpError(404, "同步任务不存在。");
+        json(200, { batch: refreshSyncAllBatch(batch) });
         return;
       }
       if (request.method === "POST" && ["/api/library/translate", "/api/library/summaries", "/api/library/sync"].includes(url.pathname)) {
