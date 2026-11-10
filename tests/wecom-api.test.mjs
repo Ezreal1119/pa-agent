@@ -57,6 +57,32 @@ test('Web and WeCom share bounded Agent capacity; stop cancels queued work befor
 });
 function modelReplyAfterHeaders(res){res.write(`data: ${JSON.stringify({id:'mock',model:'mock',object:'chat.completion.chunk',created:1,choices:[{index:0,delta:{content:'完成'},finish_reason:'stop'}]})}\n\n`);res.end('data: [DONE]\n\n');}
 
+test('default Agent capacity runs four Web/WeCom questions, queues eight and rejects overflow without starting it', {timeout:30000},async t=>{
+ const f=await setup(t);const browser=await f.browser();
+ assert.deepEqual((await f.api.json('/status')).queue,{active:0,waiting:0,limit:4,queueLimit:8});
+ const ids=await Promise.all(Array.from({length:13},async()=> (await f.api.json('/sessions','POST',{})).id));
+ const held=[];const runs=[];
+ f.setHandler((_body,res)=>{res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(': waiting\n\n');held.push(res);});
+ const release=()=>{f.setHandler(undefined);for(const res of held.splice(0))if(!res.writableEnded)modelReplyAfterHeaders(res);};
+ f.beforeCleanup(release);
+ const start=i=>{
+  const run=i%2 ? f.api.run(ids[i],`Question ${i}`,[],()=>{}) : browser(`/api/sessions/${ids[i]}/run`,'POST',{text:`Question ${i}`}).then(async res=>{assert.equal(res.status,200);assert.match(await res.text(),/event: done/);});
+  runs.push(run.catch(error=>error));
+ };
+ for(let i=0;i<4;i++)start(i);
+ await waitFor(()=>f.requestCount===4);
+ await assert.rejects(f.api.run(ids[1],'Same conversation cannot overlap',[],()=>{}),e=>e.status===409);
+ for(let i=4;i<12;i++)start(i);
+ await waitFor(async()=>(await f.api.json('/status')).queue.waiting===8);
+ assert.deepEqual((await f.api.json('/status')).queue,{active:4,waiting:8,limit:4,queueLimit:8});
+ await assert.rejects(f.api.run(ids[12],'Overflow',[],()=>{}),e=>e.status===429);
+ assert.equal(f.requestCount,4);
+ release();
+ for(const result of await Promise.all(runs)){assert.ok(!(result instanceof Error),result?.message);if(result)assert.equal(result.failed,false);}
+ assert.equal(f.requestCount,12);
+ assert.deepEqual((await f.api.json('/status')).queue,{active:0,waiting:0,limit:4,queueLimit:8});
+});
+
 test('disabled WeCom credential does not grant machine API access or create bridge data',async t=>{
  const f=await setup(t,{bridgeToken:''});assert.equal((await fetch(f.base+'/api/wecom/status',{headers:{Authorization:`Bearer ${TOKEN}`}})).status,401);assert.equal(await fs.stat(path.join(f.dataDir,'wecom')).catch(()=>null),null);
 });

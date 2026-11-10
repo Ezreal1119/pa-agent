@@ -133,7 +133,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const bridge = new BridgeAccess(dataDir, bridgeToken);
   await bridge.load();
   const runGate = new RunGate(
-    boundedSetting(options.maxConcurrentRuns ?? process.env.AGENT_MAX_CONCURRENT_RUNS ?? diskEnv.AGENT_MAX_CONCURRENT_RUNS, 2, 1, 8, "AGENT_MAX_CONCURRENT_RUNS"),
+    boundedSetting(options.maxConcurrentRuns ?? process.env.AGENT_MAX_CONCURRENT_RUNS ?? diskEnv.AGENT_MAX_CONCURRENT_RUNS, 4, 1, 8, "AGENT_MAX_CONCURRENT_RUNS"),
     boundedSetting(options.runQueueLimit ?? process.env.AGENT_RUN_QUEUE_LIMIT ?? diskEnv.AGENT_RUN_QUEUE_LIMIT, 8, 0, 100, "AGENT_RUN_QUEUE_LIMIT")
   );
   const commandGate = new RunGate(2, 8);

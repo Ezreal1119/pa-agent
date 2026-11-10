@@ -86,10 +86,10 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```ini
 MCP_WAIT_MS=10000
 MCP_TASK_TIMEOUT_MS=900000
-MCP_PENDING_LIMIT=10
+MCP_PENDING_LIMIT=12
 ```
 
-等待窗口0～25000毫秒；任务期限包含排队时间，默认15分钟；MCP待处理数默认10，另外受共享Agent队列约束。默认最多保留5000个任务，达到容量明确拒绝新任务，防止持续堆积。
+等待窗口0～25000毫秒；任务期限包含排队时间，默认15分钟；MCP待处理数默认12，另外受共享Agent队列约束（默认4个运行、8个等待）。默认最多保留5000个任务，达到容量明确拒绝新任务，防止持续堆积。已有 `.env` 或服务环境中的显式值仍优先；升级时如需采用新容量，设置 `AGENT_MAX_CONCURRENT_RUNS=4`、`AGENT_RUN_QUEUE_LIMIT=8`、`MCP_PENDING_LIMIT=12` 后重启主服务。
 
 ## 验证范围
 

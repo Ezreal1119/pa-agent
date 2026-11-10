@@ -124,6 +124,18 @@ test('timeout and pending capacity are bounded; distinct MCP conversations run i
  f.setHandler((_body,res)=>reply(res));const b=(await call(client,'ask_product_expert',{question:'Next task'})).structuredContent;assert.notEqual(b.conversation_id,a.conversation_id);assert.equal((await finished(client,b.task_id)).status,'completed');
 });
 
+test('default MCP admission accepts twelve unfinished tasks and rejects a thirteenth without losing existing tasks',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'mcp-default-capacity-'));
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const store=new McpStore(root);await store.load();const config=mcpConfig({},{});
+ for(let i=0;i<12;i++)await store.submit(hash(`Question ${i}`),undefined,undefined,config.pendingLimit);
+ await assert.rejects(store.submit(hash('Overflow'),undefined,undefined,config.pendingLimit),/queue is full/);
+ assert.equal(store.tasks().length,12);
+ const first=store.tasks()[0];await store.update(first.id,{status:'cancelled',finished:Date.now()},{answer:''});
+ const next=await store.submit(hash('Replacement'),undefined,undefined,config.pendingLimit);
+ assert.equal(next.task.status,'queued');assert.equal(store.tasks().filter(t=>['queued','running'].includes(t.status)).length,12);
+});
+
 test('startup replays JSONL usage snapshots exactly once and recovers answer publication after a simulated metadata crash',{timeout:20000},async t=>{
  const f=await fixture(t);const client=await f.client();const a=(await call(client,'ask_product_expert',{question:'Recover my totals'})).structuredContent;
  const file=path.join(f.dataDir,'mcp/state.json');const state=JSON.parse(await fs.readFile(file,'utf8'));const task=state.tasks[a.task_id];task.status='running';task.usage=emptyUsage();state.totals.inputTokens=0;state.totals.outputTokens=0;state.totals.requests=0;state.totals.reportedRequests=0;state.totals.completed=0;state.conversations[a.conversation_id].usage=emptyUsage();await fs.writeFile(file,JSON.stringify(state));

@@ -28,7 +28,7 @@ WECOM_ENABLED=true
 WECOM_BOT_ID=你的机器人ID
 WECOM_BOT_SECRET=你的机器人Secret
 WECOM_API_TOKEN=随机生成的本机API凭据
-AGENT_MAX_CONCURRENT_RUNS=2
+AGENT_MAX_CONCURRENT_RUNS=4
 AGENT_RUN_QUEUE_LIMIT=8
 WECOM_MAX_CONCURRENT_RUNS=2
 WECOM_QUEUE_LIMIT=8
@@ -100,7 +100,7 @@ journalctl -u wecom-bridge.service -f
 - 支持 PDF、DOCX、PPTX、XLSX、PNG/JPEG/WebP，以及TXT/MD/LOG/JAVA/JSON/CSV/HTML/XML/YAML/PY/JS/TS等UTF-8纯文本。纯文本复用read/grep，不调用文档转换或视觉模型。旧版 DOC/PPT/XLS、视频暂不支持；语音仅使用企微已经提供的转写文本。
 - Excel 标书填写输出新 XLSX，原件不变。后端 `output` 事件及本轮结构化输出记录决定回传哪些文件，不解析模型回答中的路径、文件名或 fileId。多个已发布的产物都会发送。
 
-HTTP Agent 全局默认最多 2 个运行，等待队列最多 8 个，**Web 和企微共用该上限**；同会话排队期间也不允许重复运行。Bridge 自己最多 2 个处理任务、另有最多 8 个等待位置；队列满会明确回复稍后重试。文件工具维持原有全局串行队列。HTTP 运行耗时记录从取得运行名额开始计算，排队时间不计入模型运行指标。
+HTTP Agent 全局默认最多 4 个运行，等待队列最多 8 个，**Web、企微和 MCP 共用该上限**；MCP 默认最多 12 个未完成任务，可用 `MCP_PENDING_LIMIT` 调整。同会话排队期间也不允许重复运行。Bridge 自己最多 2 个处理任务、另有最多 8 个等待位置；队列满会明确回复稍后重试。文件工具维持原有全局串行队列。HTTP 运行耗时记录从取得运行名额开始计算，排队时间不计入模型运行指标。
 
 附件单文件上限为 `FILE_MAX_BYTES` 与 30 MiB 的较小值，单条消息最多 20 个、合计最多 60 MiB。Bridge 全局一次只下载一个附件批次，以有界流读取加密内容，再使用官方 SDK 解密；不同时保存多份大文件到内存。附件先暂存在 inbox，再顺序上传到现有会话文件目录。处理完成后删除暂存件。已绑定到会话的文件仍遵循原有会话手动删除和闲置三十天清理规则。
 

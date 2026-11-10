@@ -70,7 +70,7 @@ export class McpStore {
     });
     this.queue = task.then(() => {}, () => {}); return task;
   }
-  async submit(questionHash: string, conversationId?: string, requestId?: string, pendingLimit = 10) {
+  async submit(questionHash: string, conversationId?: string, requestId?: string, pendingLimit = 12) {
     return this.work(async data => {
       if (requestId) {
         const previous = Object.values(data.tasks).find(task => task.requestId === requestId);
