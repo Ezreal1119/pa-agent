@@ -126,18 +126,27 @@
 
   /* ------------------------------------------------------------ 项目与语言 */
 
-  function renderProjects() {
+  function renderProjects(query = ($("project-search")?.value || "").trim().toLowerCase()) {
     const select = $("project");
     if (!state.projects.length) {
       select.innerHTML = `<option value="">（还没有项目）</option>`;
       select.disabled = true;
       return;
     }
+    const matches = query
+      ? state.projects.filter(project => `${project.projectId} ${project.displayName}`.toLowerCase().includes(query))
+      : state.projects;
+    if (!matches.length) {
+      select.innerHTML = `<option value="">（没有匹配的项目）</option>`;
+      select.disabled = true;
+      return;
+    }
     select.disabled = false;
-    select.innerHTML = state.projects
+    select.innerHTML = matches
       .map(project => `<option value="${escapeHtml(project.projectId)}">${escapeHtml(project.displayName)}（${project.processCount} 道工序）</option>`)
       .join("");
-    select.value = state.projectId;
+    select.value = matches.some(project => project.projectId === state.projectId) ? state.projectId : "";
+    if (!select.value && matches.length === 1) select.value = matches[0].projectId;
     renderWriteGuard();
   }
 
@@ -177,6 +186,8 @@
     if (state.projectId && !state.projects.some(project => project.projectId === state.projectId)) {
       state.projectId = state.projects[0] ? state.projects[0].projectId : "";
     }
+    const search = $("project-search");
+    if (search) search.value = "";
     renderProjects();
     renderSopInfo();
     void loadBom();
@@ -844,6 +855,7 @@
   /* ---------------------------------------------------------------- 事件 */
 
   function bind() {
+    let projectSearchTimer = null;
     bindSopInfo();
     // 项目类型：目前只有 assemble 支持 BOM 导入，后续接入其他类型时在这里扩展。
     $("project-type").addEventListener("change", event => {
@@ -870,6 +882,22 @@
       else url.searchParams.set("library", value);
       location.href = url.toString();
     });
+    $("project-search").addEventListener("input", () => {
+      clearTimeout(projectSearchTimer);
+      projectSearchTimer = setTimeout(() => {
+        renderProjects();
+        const select = $("project");
+        if (!select.disabled && select.options.length === 1 && select.value && select.value !== state.projectId) {
+          select.dispatchEvent(new Event("change"));
+        }
+      }, 250);
+    });
+    $("project-search").addEventListener("keydown", event => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const select = $("project");
+      if (!select.disabled && select.value && select.value !== state.projectId) select.dispatchEvent(new Event("change"));
+    });
     $("project").addEventListener("change", async event => {
       if (state.dirty && !confirm("当前工序有未保存的改动，确定切换项目吗？")) {
         event.target.value = state.projectId;
@@ -878,6 +906,9 @@
       // 先把上一个项目的基本信息落盘，避免防抖还没触发就切走了。
       storeSopInfo();
       state.projectId = event.target.value;
+      const search = $("project-search");
+      if (search) search.value = "";
+      renderProjects();
       state.current = null;
       state.dirty = false;
       showForm(false);
