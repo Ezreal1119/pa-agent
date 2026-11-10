@@ -46,10 +46,12 @@ const statusLabel = (value) =>
     converted: "Converted · waiting",
     waiting_to_publish: "Publishing",
     awaiting_confirmation: "Awaiting confirmation",
+    unchanged: "Completed · no changes",
   })[value] ||
   (value.charAt(0).toUpperCase() + value.slice(1)).replaceAll("_", " ");
 const statusHint = (status, kind) =>
   ({
+    unchanged: "The existing knowledge was retained as instructed. No source, product coverage or index was changed.",
     needs_review:
       "The agent needs a business decision from you, such as product identity, version order or a new product. Answer below, then Re-Sync.",
     failed:

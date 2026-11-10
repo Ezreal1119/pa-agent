@@ -15,6 +15,7 @@ import {
 } from "./office-embeddings.js";
 import { tileOffsets } from "./visual-tiles.js";
 import { docxFonts } from "./docx-fonts.js";
+import type { NativeSpan } from "./pdf-native-text.js";
 const request = JSON.parse(
   await new Promise<string>((resolve) => {
     let s = "";
@@ -57,7 +58,7 @@ function command(bin: string, args: string[]) {
   );
 }
 const coverage: string[] = [];
-const images: { file: string; label: string; context: string }[] = [];
+const images: { file: string; label: string; context: string; nativeText?: string }[] = [];
 let markdown = "";
 const ext = path.extname(input).toLowerCase();
 try {
@@ -219,8 +220,27 @@ try {
             viewport,
             canvas: canvas as any,
           }).promise;
+          const spans: NativeSpan[] = [];
+          if (ext === ".pdf") {
+            // Preserve source order and page geometry. Only PDF input uses this
+            // evidence; Office conversion and scanned-image gates are unchanged.
+            try {
+              const content = await page.getTextContent();
+              for (const item of content.items) {
+                if (!("str" in item) || !item.str.trim()) continue;
+                const matrix = pdfjs.Util.transform(viewport.transform, item.transform);
+                if (Math.abs(matrix[1]!) > 0.1 || Math.abs(matrix[2]!) > 0.1) continue;
+                const height = Math.abs(item.height * scale);
+                spans.push({ text: item.str, x: matrix[4]!, y: matrix[5]! - height,
+                  width: item.width * scale, height });
+              }
+            } catch {
+              spans.length = 0;
+              coverage.push(`Page ${pageNo}: native text unavailable; full visual inspection retained`);
+            }
+          }
           page.cleanup();
-          await tiles(canvas, canvas.width, canvas.height, `Page ${pageNo}`);
+          await tiles(canvas, canvas.width, canvas.height, `Page ${pageNo}`, spans);
           coverage.push(`Page ${pageNo}/${doc.numPages}: rendered`);
           // Canvas pixels live outside the V8 heap, so collect before the next page.
           (globalThis as { gc?: () => void }).gc?.();
@@ -280,6 +300,7 @@ async function tiles(
   width: number,
   height: number,
   label: string,
+  nativeSpans: NativeSpan[] = [],
 ) {
   // Bounded overlapping tiles keep dense source text legible without downsampling.
   const size = 1800;
@@ -308,8 +329,15 @@ async function tiles(
       const outer = ["left", "right", "top", "bottom"].filter(
         (edge) => !shared.includes(edge),
       );
+      const spans = nativeSpans.filter(s => s.x >= x && s.y >= y &&
+        s.x + s.width <= x + w && s.y + s.height <= y + h)
+        .map(s => ({ ...s, x: s.x - x, y: s.y - y }));
+      const nativeText = spans.length && JSON.stringify(spans).length <= 120000
+        ? `${file}.native.json` : undefined;
+      if (nativeText) await fs.writeFile(path.join(dir, nativeText), JSON.stringify({ spans }), { mode: 0o600 });
       images.push({
         file,
+        ...(nativeText ? { nativeText } : {}),
         label: `${label}, region x=${x} y=${y} width=${w} height=${h}`,
         context:
           `Full ${label.toLowerCase()} is ${width}×${height} px. ` +

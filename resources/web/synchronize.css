@@ -538,6 +538,7 @@
   white-space: nowrap;
 }
 .sync-badge[data-status="published"],
+.sync-badge[data-status="unchanged"],
 .sync-badge[data-status="deleted"],
 .sync-badge[data-status="completed"] {
   color: #54794f;

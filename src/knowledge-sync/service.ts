@@ -146,11 +146,13 @@ export class SyncService {
       if (!job) continue;
       for (const item of job.items) {
         if (await this.publisher.committed(item.id)) {
-          item.status = job.kind === "delete" ? "deleted" : "published";
-          item.stage = "Published";
+          item.status = job.kind === "delete" ? "deleted" : item.plan?.decision.action === "no_change" ? "unchanged" : "published";
+          item.stage = item.status === "unchanged" ? "Completed · no changes" : "Published";
           if (job.kind === "delete") job.confirmed = true;
           else if (!item.sourceDeleted)
-            item.cleanupError = "Publication recovered. Retry input cleanup.";
+            item.cleanupError = item.status === "unchanged"
+              ? "No-change completion recovered. Retry input cleanup."
+              : "Publication recovered. Retry input cleanup.";
         } else if (!terminal(item.status)) {
           item.status = "interrupted";
           item.reason = "Service restarted. Re-Sync to continue.";
@@ -574,7 +576,7 @@ export class SyncService {
       );
       const old = job.items[index];
       if (!old) throw new SyncError("Item not found.", 404);
-      if (["published", "deleted"].includes(old.status))
+      if (["published", "deleted", "unchanged"].includes(old.status))
         throw new SyncError(
           "This item is already committed. Use cleanup retry, or upload a new revision.",
           409,
@@ -645,6 +647,7 @@ export class SyncService {
         for (const decision of submitted.decisions.filter(d => d.action === "retry")) {
           const issue = old.visualReview!.issues.find(i => i.id === decision.issueId)!;
           await fs.rm(await safePath(dir, `${issue.file}.partial.json`), { force: true });
+          await fs.rm(await safePath(dir, `${issue.file}.native-review.json`), { force: true });
         }
       }
       // Preserve the legacy cumulative audit text; current instructions are
@@ -788,7 +791,7 @@ export class SyncService {
     try {
       job = await this.get(id);
       const item = job.items.find((i) => i.id === itemId);
-      if (!item || !["published", "duplicate"].includes(item.status))
+      if (!item || !["published", "duplicate", "unchanged"].includes(item.status))
         throw new SyncError("Only committed inputs can be cleaned.");
       await this.clean(job, item);
       return structuredClone(job);
@@ -1065,6 +1068,7 @@ export class SyncService {
         if (
           job.kind === "sync" &&
           result.decision.action !== "review" &&
+          result.decision.action !== "no_change" &&
           !item.feedback.trim() &&
           deletions.some((d) => d.hashes.includes(hash(markdown)))
         )
@@ -1087,11 +1091,24 @@ export class SyncService {
           association,
           wecom,
         );
-        if (result.decision.action !== "review" && item.visualResolutions?.length)
+        if (!["review", "no_change"].includes(result.decision.action) && item.visualResolutions?.length)
           item.plan.confirmationReason = `Review the accepted visual omissions and administrator supplements before publishing (${item.visualResolutions.length} region(s)).`;
         if (result.decision.action === "review") {
           item.status = "needs_review";
           item.stage = "Needs your decision";
+        } else if (result.decision.action === "no_change") {
+          // Empty transaction supplies the same baseline check and durable
+          // restart recovery as publication, without touching any library page.
+          // Persist the decision BEFORE the transaction so recovery can tell
+          // no-change completion apart from an ordinary publication.
+          item.status = "waiting_to_publish";
+          item.stage = "Completing · no changes";
+          await this.event(job, item);
+          await this.publisher.publish(item.id, item.plan, abort);
+          item.status = "unchanged";
+          item.stage = "Completed · no changes";
+          await this.event(job, item);
+          await this.clean(job, item);
         } else if (result.decision.action==="associate" && !item.plan.changes.length && !item.feedback.trim()){
           item.status="duplicate";item.stage="Duplicate";
           item.reason=`已核对，要求覆盖的型号均已关联：${result.decision.products.join(", ")}。\n匹配正文：${association!.path}`;
@@ -1128,10 +1145,12 @@ export class SyncService {
               : "Failed · nothing published";
         item.reason = this.options.redact(e);
         if (job.kind === "sync" && (await this.publisher.committed(item.id))) {
-          item.status = "published";
-          item.stage = "Published";
+          item.status = item.plan?.decision.action === "no_change" ? "unchanged" : "published";
+          item.stage = item.status === "unchanged" ? "Completed · no changes" : "Published";
           item.cleanupError =
-            "Publication succeeded; retry cleanup after resolving storage errors.";
+            item.status === "unchanged"
+              ? "No-change completion succeeded; retry cleanup after resolving storage errors."
+              : "Publication succeeded; retry cleanup after resolving storage errors.";
         }
       } finally {
         item.finished = new Date().toISOString();

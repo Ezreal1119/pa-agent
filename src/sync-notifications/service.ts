@@ -27,7 +27,7 @@ type Notice = { id: string; text: string; destination: string; claim?: string; u
 type State = { version: 1; destination: string; boundary: string; seen: string[]; notices: Notice[] };
 const beijing = (value: string) => new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(value));
 const plain = (value: string) => value.replace(/[\u0000-\u001f\u007f<>\[\]*`@]/g, " ").replace(/\s+/g, " ").trim().slice(0, 255);
-const labels: Record<string, string> = { published: "已入库", duplicate: "重复/跳过", needs_review: "待人工处理", awaiting_confirmation: "待确认", failed: "失败", stopped: "已停止", interrupted: "已中断", completed: "已结束" };
+const labels: Record<string, string> = { published: "已入库", unchanged: "已完成，无需变更", duplicate: "重复/跳过", needs_review: "待人工处理", awaiting_confirmation: "待确认", failed: "失败", stopped: "已停止", interrupted: "已中断", completed: "已结束" };
 export function costText(cost?: CostSummary) {
   if (!cost) return "费用记录暂不可用，不能视为零消费。";
   const incomplete = cost.unpriced || cost.missingUsage || cost.pending || cost.historyMissing;
@@ -48,6 +48,7 @@ export function formatSyncSummary(event: SyncCompletion) {
   if (failed) overview.push(`失败/中断 ${failed}`);
   if (review) overview.push(`待处理 ${review}`);
   if (counts.duplicate) overview.push(`重复/跳过 ${counts.duplicate}`);
+  if (counts.unchanged) overview.push(`无需变更 ${counts.unchanged}`);
   if (unprocessed) overview.push(`未处理 ${unprocessed}`);
   if (event.status === "completed" && !failed && !review && !unprocessed) overview.push("无失败");
   const rows = event.items.slice(0, 8).map(item => {

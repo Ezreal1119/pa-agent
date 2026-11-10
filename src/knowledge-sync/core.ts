@@ -265,7 +265,8 @@ export type Decision = {
   suggestedFeedback?: string;
   productHubs?: { product: string; path: string }[];
   logEntry?: string;
-  action: "add" | "update" | "review" | "delete" | "associate";
+  action: "add" | "update" | "review" | "delete" | "associate" | "no_change";
+  noChangeEvidence?: { existingHash: string; administratorInstruction: string };
   existingSource?: string;
   reason: string;
   summary: string;

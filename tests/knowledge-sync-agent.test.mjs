@@ -37,6 +37,35 @@ function reply(res, tool, usage = { prompt_tokens: 10, completion_tokens: 5 }) {
   );
   res.end("data: [DONE]\n\n");
 }
+test("no-change finish requires full original reading and exposes a bounded explicit action", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-agent-no-change-"));
+  const source = "RFG91/accessories/guide_202611041234/guide.md";
+  const original = "# Current accessories\nVerified cable and battery specifications.";
+  const feedback = "保留现有指南，不替换，不更新索引。";
+  const decision = { action: "no_change", existingSource: source,
+    noChangeEvidence: { existingHash: hash(original), administratorInstruction: feedback },
+    reason: "重复上传，管理员明确要求保留现有版本。", summary: "附件指南无需更新。",
+    products: ["RFG91"], slot: "accessories", oldPaths: [], reviewedPaths: [],
+    versionEvidence: "Same edition", authorizedException: false };
+  const payloads = [];
+  const server = createServer(async (req, res) => {
+    let raw = ""; for await (const c of req) raw += c;
+    payloads.push(JSON.parse(raw));
+    reply(res, { name: "finish_sync", args: decision });
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); await fs.rm(root, { recursive: true, force: true }); });
+  const result = await createPlanner({
+    model: { apiKey: "fixture", modelId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, contextWindow: 128000, maxTokens: 16384 },
+    effort: "low", resourcesDir: path.resolve("resources"), workDir: root, maxCalls: 10, acquire: async () => () => {},
+  })({ base: new Map([[source, original]]), markdown: "# Reuploaded accessories\nDifferent formatting, same specifications.",
+    prompt: "SYNC repeat.pdf", feedback, batch: [], deletions: [], timestamp: "202611100000",
+    signal: new AbortController().signal, usage: emptyUsage(), update: async () => {} });
+  assert.equal(result.decision.action, "no_change"); assert.equal(result.staged.size, 0);
+  assert(payloads.length > 1, "initial finish must be deferred until originals are supplied");
+  assert.match(JSON.stringify(payloads.at(-1).messages), /Verified cable and battery specifications/);
+  assert.match(JSON.stringify(payloads[0].tools), /no_change/);
+});
 test("real Pi maintenance session exposes only candidate tools, guards exhaustive reads, has independent context and budget", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "sync-agent-"));
   let server;

@@ -541,7 +541,7 @@ export function createPlanner(options: {
           "Submit the candidate decision. No further tools after this call. Publication is performed by backend checks.",
           Type.Object({
             action: Type.Union(
-              ["add", "update", "review", "delete", "associate"].map((v) => Type.Literal(v)),
+              ["add", "update", "review", "delete", "associate", "no_change"].map((v) => Type.Literal(v)),
             ),
             reason: Type.String(),
             summary: Type.String({ description: "A concise Chinese reader-facing summary, at most two complete sentences (about 100 Chinese characters each): actual product/document changes and any remaining business uncertainty. State unchanged specifications or unresolved differences honestly. Exclude paths, internal keys, conversion/cleanup logs and administrator-decision boilerplate. Put technical details and the complete rationale in reason; never invent an update or claim backend publication has already succeeded." }),
@@ -551,6 +551,10 @@ export function createPlanner(options: {
             oldPaths: Type.Array(Type.String()),
             newPath: Type.Optional(Type.String()),
             existingSource: Type.Optional(Type.String()),
+            noChangeEvidence: Type.Optional(Type.Object({
+              existingHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+              administratorInstruction: Type.String({ minLength: 1, maxLength: 16000 }),
+            })),
             versionEvidence: Type.String(),
             authorizedException: Type.Boolean(),
             reviewedPaths: Type.Array(Type.String()),
@@ -581,6 +585,7 @@ export function createPlanner(options: {
                   ...a.oldPaths,
                   ...a.reviewedPaths,
                   ...staged.keys(),
+                  ...(a.action === "no_change" && a.existingSource ? [a.existingSource] : []),
                   ...(input.association ? [input.association.path,...a.products.map((p:string)=>resolveHub(input.base,p))] : []),
                 ]);
                 if (deletion) {

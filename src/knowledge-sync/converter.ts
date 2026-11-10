@@ -8,6 +8,7 @@ import { fileQueue } from "../file-tools/runner.js";
 import { visionTokens } from "../web/run-metrics.js";
 import { SYNC_MAX_SHEETS } from "./config.js";
 import { visionHttpError } from "./vision-http.js";
+import { recoverPdfNativeText } from "./pdf-native-recovery.js";
 import {
   CONTINUATION_REVIEW_PROMPT,
   matchesContinuationHead,
@@ -32,7 +33,7 @@ export type Converter = (
   update: () => Promise<void>,
   resolutions?: VisualResolution[],
 ) => Promise<Conversion>;
-export const CONVERSION_VERSION = 4;
+export const CONVERSION_VERSION = 5;
 interface ContinuationRecord {
   version: 1;
   sourceHash: string;
@@ -82,7 +83,7 @@ export function createConverter(
       () =>
         new Promise<{
           coverage: string[];
-          images: { file: string; label: string; context?: string }[];
+          images: { file: string; label: string; context?: string; nativeText?: string }[];
           text: string;
         }>((resolve, reject) => {
           const child = spawn(
@@ -199,10 +200,12 @@ export function createConverter(
         text: string;
         complete: boolean;
         continuationSourceHash?: string;
+        nativeSourceHash?: string;
       } | null>(path.join(dir, `${image.file}.json`), null);
       let text =
         previous?.hash === key && previous.complete &&
-        (!previous.continuationSourceHash || previous.continuationSourceHash === sourceHash)
+        (!previous.continuationSourceHash || previous.continuationSourceHash === sourceHash) &&
+        (!previous.nativeSourceHash || previous.nativeSourceHash === sourceHash)
           ? previous.text : undefined;
       let partial = await readJson<PartialVisualEvidence | null>(path.join(dir, `${image.file}.partial.json`), null);
       if (partial?.sourceHash !== sourceHash || partial.imageHash !== key || partial.file !== image.file ||
@@ -391,6 +394,21 @@ export function createConverter(
           }
         } finally {
           release?.();
+        }
+      }
+      if (partial && image.nativeText && /\.pdf$/i.test(source) &&
+          !resolutions.some(r => r.issueId === partial!.id && r.sourceHash === sourceHash)) {
+        const recovered = await recoverPdfNativeText({ config, dir, nativeFile: image.nativeText,
+          bytes, partial, signal, usage, maxVision, acquire, update });
+        if (recovered !== undefined) {
+          text = recovered;
+          partial = null;
+          // Source-bound cache; an interrupted cache write can also recover
+          // deterministically from the verified audit without another request.
+          await atomic(path.join(dir, `${image.file}.json`), JSON.stringify({
+            hash: key, text, complete: true, nativeSourceHash: sourceHash,
+          }));
+          manifest.coverage.push(`${image.label}: clipped text recovered from same-region PDF native text; visible prefixes and exact local quotes verified`);
         }
       }
       const pending = pendingContinuations.get(image.file);

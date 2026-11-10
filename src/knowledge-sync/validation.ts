@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   excluded,
   fingerprint,
+  hash,
   timestamp,
   relative,
   PlanError,
@@ -188,6 +189,28 @@ export function buildPlan(
   }
   if (d.action === "review")
     return { decision: d, changes: [], baseline: fingerprint(base) };
+  if (d.action === "no_change") {
+    const source = d.existingSource;
+    const evidence = d.noChangeEvidence;
+    if (deletion || association || wecom || d.sourceScope)
+      throw new PlanError(["No-change completion is only available for ordinary synced inputs."]);
+    if (!source || excluded(source) || !base.has(source) ||
+        !/^[^/]+\/(?:brochure|specs|user_guide|presentation|accessories|others)\/[^/]+\/[^/]+\.md$/.test(source))
+      throw new PlanError(["No-change completion requires an existing source Markdown path."]);
+    relative(source);
+    if (!evidence || evidence.existingHash !== hash(base.get(source)!) ||
+        typeof evidence.administratorInstruction !== "string" ||
+        !evidence.administratorInstruction.trim() ||
+        !feedback.trim() || !feedback.includes(evidence.administratorInstruction))
+      throw new PlanError(["No-change completion requires the current source hash and an exact quotation of the administrator's keep-current/no-update instruction."]);
+    if (staged.size || d.oldPaths.length || d.newPath || d.productHubs?.length || d.authorizedException)
+      throw new PlanError(["No-change completion cannot stage edits, replace sources, change coverage or authorize exceptions."]);
+    if (!d.reason.trim() || !d.summary.trim())
+      throw new PlanError(["No-change completion requires a reason and summary."]);
+    return { decision: d, changes: [], baseline: fingerprint(base) };
+  }
+  if (d.noChangeEvidence !== undefined)
+    throw new PlanError(["No-change evidence is only valid for action=no_change."]);
   if (d.sourceScope !== undefined && d.sourceScope !== "organization")
     throw new PlanError(["Unsupported source scope."]);
   if (d.action === "associate") {
