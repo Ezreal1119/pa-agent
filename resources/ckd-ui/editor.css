@@ -65,11 +65,8 @@
 .editor-layout #sop-info-panel .hint{margin-bottom:12px}
 .editor-layout input[readonly]{color:var(--muted);background:transparent;cursor:default}
 
-/* 顶栏右侧：待审核区切换（只有管理员会看到） */
+/* 顶栏右侧 */
 .topbar-actions{display:flex;align-items:center;gap:20px}
-.scope-switch{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
-.scope-switch input{width:auto;margin:0;accent-color:#a2c292}
-.scope-switch:hover{color:var(--text)}
 
 /* 新建项目弹窗：Electron 的渲染进程不支持 window.prompt()，两端统一用页面内 dialog */
 .editor-dialog{border:1px solid var(--border);border-radius:16px;background:var(--panel);color:var(--text);padding:0;width:min(92vw,440px);box-shadow:0 24px 60px #0009}
@@ -111,3 +108,7 @@
 
 /* ????:????????? */
 .dialog-warning{display:block;margin-top:4px;color:#e06666;font-size:12px;line-height:1.5}
+
+/* ??? + ?????? */
+.field-inline{display:flex;gap:8px;align-items:center}
+.field-inline input{flex:1;min-width:0}

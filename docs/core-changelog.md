@@ -698,3 +698,11 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 复用分支遇到 CN/EN 照片 Hash 不一致会重新同步，旧基线也会被覆盖为 CN 内容。
 - 管理员主库保持原有双语独立照片规则，避免影响现有主库数据。
 - 验证：`tests/ckd-library-sync.test.ts` 的 JPEG 同步、CN 照片流向英文、独立照片用例通过；全套 24/25（唯一失败为 Windows registry 路径分隔符的既有测试）；`npm run typecheck` 通过。
+
+## 2026-11-10：移除待审核区（public）
+
+- 背景：早期是统一主库，员工提交需先放 public 审核；改为一人一库后，员工直接写自己的库，public 没有提交/批准/驳回流程，只是多一个目录，容易误解。
+- 前端：删除录入页「待审核区（public）」开关和相关状态；所有请求不再带 `scope=public`。
+- 后端：删除 `publicEditorRoot` 和 `scope` 分支；旧请求即使带 `scope=public` 也会忽略并读写当前账号库。
+- 已有 `<库根>/public` 目录不自动删除，避免误删历史数据；确认不需要后由管理员手动清理。
+- 验证：`tests/ckd-users.test.ts` 5/5 通过（员工写自己的库，旧 scope 参数被忽略）；`node --check editor.js`、`npm run typecheck` 通过。

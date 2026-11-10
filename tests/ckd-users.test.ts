@@ -127,8 +127,7 @@ test('administrator-only user APIs, ordinary desktop isolation and legacy tasks 
   assert.equal((await editor('/api/editor/projects', a2.token, { projectId: 'EDITOR' })).status, 200);
   const saved = await editor('/api/editor/process', a2.token, { projectId: 'EDITOR', language: '中文', order: 1, metadata: '录入工序', paragraphs: ['安装连接器'], photos: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }] });
   assert.equal(saved.status, 200, await saved.text());
-  const scope = await (await editor('/api/editor?scope=public', a2.token)).json();
-  assert.equal(scope.scope, 'library'); assert.equal(scope.canSwitch, false);
+  assert.equal((await editor('/api/editor?scope=public', a2.token)).status, 200, '旧的 scope 参数被忽略，仍读自己的库');
   const editorProcess = await (await editor('/api/editor/process?project=EDITOR&language=中文&order=1', a2.token)).json();
   assert.equal(editorProcess.process.metadata, '录入工序');
   assert.ok(fs.existsSync(path.join(accountLibraryPath(dataDir, 'Alice'), 'product_lib/EDITOR/assemble/CN_process/process_01/metadata.txt')), '普通用户的工序落在自己的库里');

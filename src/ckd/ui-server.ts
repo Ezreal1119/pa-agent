@@ -1,6 +1,8 @@
 import "dotenv/config";
 import fs from "node:fs";
 import { LibraryMaintenance, type LibraryMaintenanceOptions } from "./library-maintenance.js";
+import { HttpLibraryModel } from "./library-model.js";
+import { operationSteps, suggestProcessName } from "./editor-naming.js";
 import path from "node:path";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
@@ -114,12 +116,6 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
       return { ...item, projects };
     });
   }
-  /**
-   * 待审核区：<库根>/public，内部结构与库根一致（public/product_lib/<项目>/assemble/...）。
-   * catalog 只扫 <库根>/product_lib，所以这里的草稿不会被生成流程读到；
-   * 管理员确认后把整个项目目录挪进 product_lib 即可，sops.json 跟着走。
-   */
-  const publicEditorRoot = (libraryPath: string) => { const root = path.join(libraryPath, "public"); fs.mkdirSync(root, { recursive: true }); return root; };
   const fixedPixel=service.imageQuality instanceof PixelImageChecker;
   const imageCalibration = new AssessmentCalibrationJobs(service.dataDir, service.imageQuality instanceof PixelImageChecker?service.imageQuality.legacy():service.imageQuality);
   const calibrationJobs = new Map<string, Promise<unknown>>();
@@ -133,6 +129,8 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
     return imageCalibration.get(id);
   }
   const maintenance = new LibraryMaintenance({ dataDir: service.dataDir, libraryPath: service.libraryPath, model: options.maintenanceModel, modelTimeoutMs: options.maintenanceModelTimeoutMs, imageChecker:service.imageQuality, onEvent: message => options.onEvent?.({runId:"library",type:"status",message}) });
+  // 工序名总结复用同一个文字模型（BASE_URL/API_KEY/MODEL_ID），不引入新的供应商。
+  const namingModel = new HttpLibraryModel({ timeoutMs: 60000, retries: 1 });
   const maintenanceJobs = new Map<string, Promise<unknown>>();
   // 保存后由用户在页面上选择是否同步：每个库一个实例，防抖排队，后台执行。
   const projectMaintenance = new Map<string, LibraryMaintenance>();
@@ -304,11 +302,9 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
         // DELETE 不在上面的 POST 来源校验覆盖范围内，单独补一次，避免跨站删除工序。
         if (request.method === "DELETE" && !validPostOrigin) throw new HttpError(403, "请求来源无效，请从 CKD 页面操作。");
         // 员工固定写自己的库；管理员可以 ?library=<账号> 打开某个用户的库，默认主库。
-        // 待审核区只给管理员用，员工始终落在自己的 product_lib。
         const viewerUser = editorUserId ? clientAccess.users.get(editorUserId) : undefined;
         const viewerLib = viewerUser ? accountLibrary(viewerUser.account) : adminLibrary(url.searchParams.get("library"));
-        const wantsPublic = !editorClient && url.searchParams.get("scope") === "public";
-        const editorLibrary = wantsPublic ? publicEditorRoot(viewerLib) : viewerLib;
+        const editorLibrary = viewerLib;
         const libraryId = editorUserId ? (viewerUser?.account ?? "") : (viewerLib === service.libraryPath ? "master" : (url.searchParams.get("library") ?? "master"));
         try {
           if (url.pathname === "/api/editor" && request.method === "GET") {
@@ -316,7 +312,6 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
             const libraryName = summaries?.find(item => item.path === editorLibrary)?.name ?? (viewerUser?.account || "主库（管理员）");
             json(200, {
               sopType: EDITOR_SOP_TYPE, languages: EDITOR_LANGUAGES, projects: listProjects(editorLibrary),
-              scope: wantsPublic ? "public" : "library", canSwitch: !editorClient,
               library: { id: libraryId, path: editorLibrary, master: viewerLib === service.libraryPath, name: libraryName },
               libraries: summaries,
             });
@@ -342,6 +337,14 @@ export function createCkdUiServer(options: CkdOptions & { maintenanceModel?: Lib
           if (url.pathname === "/api/editor/publish" && request.method === "POST") {
             const input = await editorBody(request);
             json(200, publishDrafts(editorLibrary, { projectId: input.projectId as string, language: input.language }));
+            return;
+          }
+          if (url.pathname === "/api/editor/name-suggestion" && request.method === "POST") {
+            const input = await editorBody(request);
+            // 只取操作步骤；工序检查、自检不会传给模型。
+            const steps = operationSteps(Array.isArray(input.paragraphs) ? input.paragraphs : []);
+            if (!steps) throw new HttpError(400, "先填写操作步骤，再生成工序名。");
+            json(200, await suggestProcessName(namingModel, steps, AbortSignal.timeout(60000)));
             return;
           }
           if (url.pathname === "/api/editor/sync" && request.method === "POST") {

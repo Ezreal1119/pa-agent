@@ -16,9 +16,6 @@
         <span>资料库</span>
         <select id="library"></select>
       </label>
-      <label class="scope-switch" id="scope-toggle" hidden title="桌面客户端提交的工序先落在这里，确认后再迁到正式库">
-        <input type="checkbox" id="scope-public"><span>待审核区（public）</span>
-      </label>
       <a class="text-button" id="back-to-workbench" href="./">返回工作台</a>
     </div>
   </header>
@@ -92,7 +89,10 @@
           </div>
           <label class="field">
             <span>工序名 <small>写入 metadata.txt，Excel 里显示的工序名</small></span>
-            <input id="metadata" maxlength="200" placeholder="例如：前加工1-上料" autocomplete="off">
+            <div class="field-inline">
+              <input id="metadata" maxlength="200" placeholder="例如：前加工1-上料" autocomplete="off">
+              <button type="button" class="button secondary" id="suggest-name" title="只根据操作步骤总结，不含工序检查和自检">根据步骤生成</button>
+            </div>
           </label>
         </section>
 

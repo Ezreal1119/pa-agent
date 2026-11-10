@@ -32,10 +32,6 @@
     /** 当前项目不是自己负责的：只读，保存与增删都被拦住 */
     readOnly: false,
     dragFolder: null,
-    /** library = 正式库；public = 待审核区（只有管理员能切） */
-    scope: "library",
-    /** 管理员（cookie）才给切换开关；桌面客户端固定锁在自己的库 */
-    canSwitch: false,
     /** 当前资料库 {id, name, master, path} 与可选列表（仅管理员） */
     library: null,
     libraries: null,
@@ -50,12 +46,6 @@
 
   /* ---------------------------------------------------------------- 基础 */
 
-  /** 待审核区的请求统一带 scope=public；正式库保持原路径不动。 */
-  function scoped(path) {
-    if (state.scope !== "public") return path;
-    return `${path}${path.includes("?") ? "&" : "?"}scope=public`;
-  }
-
   /** 管理员打开的库：所有读写在 URL 上带 library=<账号>，服务端据此选库。 */
   function withLibrary(path) {
     if (!libraryParam) return path;
@@ -69,7 +59,7 @@
     const { method = "GET", body } = options;
     const headers = { "X-CKD-UI": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const response = await fetch(adminBase + scoped(withLibrary(path)), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await fetch(adminBase + withLibrary(path), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await response.text();
     let value = null;
     try {
@@ -175,11 +165,8 @@
   async function loadProjects() {
     const value = await api("/api/editor");
     state.projects = value.projects || [];
-    if (value.scope === "public" || value.scope === "library") state.scope = value.scope;
-    state.canSwitch = value.canSwitch === true;
     state.library = value.library || null;
     state.libraries = value.libraries || null;
-    renderScope();
     renderLibrary();
     if (!state.projectId && state.projects.length) state.projectId = state.projects[0].projectId;
     if (state.projectId && !state.projects.some(project => project.projectId === state.projectId)) {
@@ -242,13 +229,6 @@
     notice(`已导入 BOM：${value.bom.fileName}（${value.bom.rows.length} 行）。输入料号会自动带出名称，用量 1 会自动填数量。`);
   }
 
-  /** 待审核区开关：只有管理员（cookie 登录）能看到，桌面客户端固定锁在正式库。 */
-  function renderScope() {
-    if (!state.canSwitch) state.scope = "library";
-    $("scope-toggle").hidden = !state.canSwitch;
-    $("scope-public").checked = state.scope === "public";
-  }
-
   /* ---------------------------------------------------------------- 工序列表 */
 
   function renderProcessList() {
@@ -299,7 +279,7 @@
   /* ---------------------------------------------------------------- 表单填充 */
 
   function photoUrl(name) {
-    return scoped(`${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}${libraryParam ? `&library=${encodeURIComponent(libraryParam)}` : ""}`);
+    return `${adminBase}/api/editor/photo?project=${encodeURIComponent(state.projectId)}&language=${encodeURIComponent(state.language)}&order=${state.current}&name=${encodeURIComponent(name)}${libraryParam ? `&library=${encodeURIComponent(libraryParam)}` : ""}`;
   }
 
   function emptySlot(steps = "") {
@@ -716,12 +696,6 @@
     if (!input) return;
     try {
       await api("/api/editor/projects", { method: "POST", body: input });
-      // 项目统一建在正式库 product_lib，停在待审核区时切回来，否则新建完看不到。
-      if (state.scope === "public") {
-        state.scope = "library";
-        $("scope-public").checked = false;
-        renderScope();
-      }
       state.projectId = input.projectId;
       state.current = null;
       state.processes = [];
@@ -891,23 +865,6 @@
       else url.searchParams.set("library", value);
       location.href = url.toString();
     });
-    $("scope-public").addEventListener("change", async event => {
-      if (state.dirty && !confirm("当前工序有未保存的改动，确定切换区域吗？")) {
-        event.target.checked = !event.target.checked;
-        return;
-      }
-      storeSopInfo();
-      state.scope = event.target.checked ? "public" : "library";
-      state.projectId = "";
-      state.current = null;
-      state.dirty = false;
-      state.processes = [];
-      showForm(false);
-      renderProcessList();
-      notice(state.scope === "public" ? "当前为待审核区（public）：这里的工序不会进入正式库。" : "");
-      await loadProjects();
-      await loadProcesses();
-    });
     $("project").addEventListener("change", async event => {
       if (state.dirty && !confirm("当前工序有未保存的改动，确定切换项目吗？")) {
         event.target.value = state.projectId;
@@ -1029,6 +986,29 @@
       if (!files.length) return;
       event.preventDefault();
       void addFiles(files);
+    });
+
+    $("suggest-name").addEventListener("click", async () => {
+      if (state.readOnly) { notice("这个项目不是你负责的，只能查看。"); return; }
+      const paragraphs = state.photos.map(photo => (photo.steps || "").trim()).filter(Boolean);
+      if (!paragraphs.length) { notice("先填写操作步骤，再生成工序名。"); return; }
+      const button = $("suggest-name");
+      button.disabled = true;
+      try {
+        const value = await api("/api/editor/name-suggestion", {
+          method: "POST",
+          body: { projectId: state.projectId, paragraphs }
+        });
+        if (value.name) {
+          $("metadata").value = value.name;
+          markDirty();
+          notice(`已根据操作步骤生成：${value.name}（可手动修改）`);
+        }
+      } catch (error) {
+        notice(`生成工序名失败：${error.message}`);
+      } finally {
+        button.disabled = false;
+      }
     });
 
     $("add-bom").addEventListener("click", () => {
