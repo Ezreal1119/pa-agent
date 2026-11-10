@@ -114,9 +114,14 @@
 /* ????:????????? */
 .dialog-warning{display:block;margin-top:4px;color:#e06666;font-size:12px;line-height:1.5}
 
-/* ??? + ?????? */
+/* 工序名 + 根据步骤生成 */
 .field-inline{display:flex;gap:8px;align-items:center}
 .field-inline input{flex:1;min-width:0}
 
-/* ????:?????,??????? */
-#project-search{margin-bottom:8px;font-size:12px}
+/* 项目：可输入下拉 */
+.project-picker{position:relative}
+#project-search{font-size:13px}
+.project-options{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:40;background:#141d19;border:1px solid var(--border);border-radius:10px;padding:4px;max-height:280px;overflow:auto;box-shadow:0 12px 30px rgba(0,0,0,.35)}
+.project-option{display:block;width:100%;text-align:left;background:transparent;border:0;border-radius:6px;color:var(--text);padding:8px 10px;font-size:13px;cursor:pointer}
+.project-option:hover,.project-option.active{background:#233227;color:var(--accent)}
+.project-option.empty{color:var(--muted);cursor:default}

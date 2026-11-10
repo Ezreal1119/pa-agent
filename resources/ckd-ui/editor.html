@@ -23,7 +23,13 @@
   <main class="layout editor-layout">
     <div id="readonly-banner" class="notice" hidden role="status"></div>
     <aside class="sidebar">
-      <label class="field"><span>项目</span><input id="project-search" type="search" placeholder="搜索项目名或编号" autocomplete="off"><select id="project"></select></label>
+      <label class="field"><span>项目</span>
+        <div class="project-picker">
+          <input id="project-search" type="text" placeholder="搜索或选择项目" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="project-options">
+          <select id="project" hidden></select>
+          <div id="project-options" class="project-options" role="listbox" hidden></div>
+        </div>
+      </label>
       <label class="field"><span>项目类型</span><select id="project-type">
         <option value="assemble" selected>装配（assemble）</option>
         <option value="assembly_test" disabled>组装测试（暂未开放）</option>

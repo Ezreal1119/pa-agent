@@ -126,27 +126,82 @@
 
   /* ------------------------------------------------------------ 项目与语言 */
 
-  function renderProjects(query = ($("project-search")?.value || "").trim().toLowerCase()) {
+  function selectedProject() {
+    return state.projects.find(project => project.projectId === state.projectId);
+  }
+
+  function syncProjectInput() {
+    const input = $("project-search");
+    if (!input) return;
+    input.value = selectedProject()?.displayName || "";
+  }
+
+  function projectMatches(query) {
+    const text = query.trim().toLowerCase();
+    return text
+      ? state.projects.filter(project => `${project.projectId} ${project.displayName}`.toLowerCase().includes(text))
+      : state.projects;
+  }
+
+  let projectMenuIndex = -1;
+
+  function closeProjectMenu() {
+    const menu = $("project-options"), input = $("project-search");
+    if (menu) menu.hidden = true;
+    if (input) input.setAttribute("aria-expanded", "false");
+    projectMenuIndex = -1;
+  }
+
+  function renderProjectMenu(query = "") {
+    const menu = $("project-options"), input = $("project-search");
+    if (!menu || !input) return;
+    const matches = projectMatches(query);
+    projectMenuIndex = -1;
+    menu.replaceChildren(...matches.map(project => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "project-option";
+      item.dataset.projectId = project.projectId;
+      item.setAttribute("role", "option");
+      item.textContent = `${project.displayName}（${project.processCount} 道工序）`;
+      item.addEventListener("mousedown", event => event.preventDefault());
+      item.addEventListener("click", () => chooseProject(project.projectId));
+      return item;
+    }));
+    if (!matches.length) {
+      const empty = document.createElement("div");
+      empty.className = "project-option empty";
+      empty.textContent = "没有匹配的项目";
+      menu.append(empty);
+    }
+    menu.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+  }
+
+  function chooseProject(projectId) {
     const select = $("project");
+    if (!select) return;
+    select.value = projectId;
+    if (select.value !== state.projectId) select.dispatchEvent(new Event("change"));
+    syncProjectInput();
+    closeProjectMenu();
+  }
+
+  function renderProjects() {
+    const select = $("project");
+    if (!select) return;
     if (!state.projects.length) {
       select.innerHTML = `<option value="">（还没有项目）</option>`;
       select.disabled = true;
-      return;
-    }
-    const matches = query
-      ? state.projects.filter(project => `${project.projectId} ${project.displayName}`.toLowerCase().includes(query))
-      : state.projects;
-    if (!matches.length) {
-      select.innerHTML = `<option value="">（没有匹配的项目）</option>`;
-      select.disabled = true;
+      syncProjectInput();
       return;
     }
     select.disabled = false;
-    select.innerHTML = matches
+    select.innerHTML = state.projects
       .map(project => `<option value="${escapeHtml(project.projectId)}">${escapeHtml(project.displayName)}（${project.processCount} 道工序）</option>`)
       .join("");
-    select.value = matches.some(project => project.projectId === state.projectId) ? state.projectId : "";
-    if (!select.value && matches.length === 1) select.value = matches[0].projectId;
+    select.value = state.projectId;
+    syncProjectInput();
     renderWriteGuard();
   }
 
@@ -186,8 +241,6 @@
     if (state.projectId && !state.projects.some(project => project.projectId === state.projectId)) {
       state.projectId = state.projects[0] ? state.projects[0].projectId : "";
     }
-    const search = $("project-search");
-    if (search) search.value = "";
     renderProjects();
     renderSopInfo();
     void loadBom();
@@ -855,7 +908,6 @@
   /* ---------------------------------------------------------------- 事件 */
 
   function bind() {
-    let projectSearchTimer = null;
     bindSopInfo();
     // 项目类型：目前只有 assemble 支持 BOM 导入，后续接入其他类型时在这里扩展。
     $("project-type").addEventListener("change", event => {
@@ -882,21 +934,44 @@
       else url.searchParams.set("library", value);
       location.href = url.toString();
     });
-    $("project-search").addEventListener("input", () => {
-      clearTimeout(projectSearchTimer);
-      projectSearchTimer = setTimeout(() => {
-        renderProjects();
-        const select = $("project");
-        if (!select.disabled && select.options.length === 1 && select.value && select.value !== state.projectId) {
-          select.dispatchEvent(new Event("change"));
-        }
-      }, 250);
+    $("project-search").addEventListener("focus", () => {
+      const input = $("project-search");
+      input.select();
+      renderProjectMenu("");
+    });
+    $("project-search").addEventListener("click", () => {
+      if ($("project-options").hidden) renderProjectMenu("");
+    });
+    $("project-search").addEventListener("input", () => renderProjectMenu($("project-search").value));
+    $("project-search").addEventListener("blur", () => {
+      setTimeout(() => { closeProjectMenu(); syncProjectInput(); }, 120);
     });
     $("project-search").addEventListener("keydown", event => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      const select = $("project");
-      if (!select.disabled && select.value && select.value !== state.projectId) select.dispatchEvent(new Event("change"));
+      const menu = $("project-options");
+      const options = () => [...menu.querySelectorAll(".project-option:not(.empty)")];
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (menu.hidden) renderProjectMenu($("project-search").value);
+        const items = options();
+        if (!items.length) return;
+        projectMenuIndex = (projectMenuIndex + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items.forEach((item, index) => item.classList.toggle("active", index === projectMenuIndex));
+        items[projectMenuIndex].scrollIntoView({ block: "nearest" });
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const items = options();
+        const target = projectMenuIndex >= 0 ? items[projectMenuIndex] : items[0];
+        if (target) target.click();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeProjectMenu();
+        syncProjectInput();
+        $("project-search").blur();
+      }
     });
     $("project").addEventListener("change", async event => {
       if (state.dirty && !confirm("当前工序有未保存的改动，确定切换项目吗？")) {
@@ -906,9 +981,8 @@
       // 先把上一个项目的基本信息落盘，避免防抖还没触发就切走了。
       storeSopInfo();
       state.projectId = event.target.value;
-      const search = $("project-search");
-      if (search) search.value = "";
-      renderProjects();
+      syncProjectInput();
+      closeProjectMenu();
       state.current = null;
       state.dirty = false;
       showForm(false);
