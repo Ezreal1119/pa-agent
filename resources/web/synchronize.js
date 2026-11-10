@@ -578,6 +578,9 @@ async function renderJob(job) {
     }
     if (item.visualResolutions?.length)
       content.append(el("p", `${item.visualResolutions.length} visual region(s) have administrator decisions. Review the source diff for recorded omissions and supplements.`, "sync-request"));
+    const automaticCount = item.automaticOmissionCount ?? item.automaticOmissions?.length ?? 0;
+    if (automaticCount)
+      content.append(el("p", `${automaticCount} minor visual omission(s) accepted automatically. Details are recorded in conversion coverage and the source; no action is needed for these omissions.`, "sync-subtle"));
     if (item.feedback)
       content.append(
         el("p", `Your instructions: ${item.feedback}`, "sync-request"),

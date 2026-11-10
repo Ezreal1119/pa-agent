@@ -39,9 +39,10 @@ export class ReportViews {
       status: running ? "running" : job.status,
       items: job.items.map((item) => {
         this.record(item);
-        const { wecom, coverage, plan, visualResolutions, attempts, ...rest } = item;
+        const { wecom, coverage, plan, visualResolutions, automaticOmissions, attempts, ...rest } = item;
         return {
           ...rest,
+          automaticOmissionCount: automaticOmissions?.length ?? 0,
           ...(visualResolutions ? { visualResolutions: compactVisualResolutions(visualResolutions) } : {}),
           ...(attempts ? { attempts: attempts.map(a => ({ ...a, visualResolutions: compactVisualResolutions(a.visualResolutions) })) } : {}),
           coverageCount: this.coverage.get(item.id) ?? 0,

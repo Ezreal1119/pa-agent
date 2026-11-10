@@ -77,6 +77,7 @@ const attemptOf = (item: Item): Attempt => ({
   associationOnly: item.associationOnly,
   visualReview: item.visualReview,
   visualResolutions: item.visualResolutions,
+  automaticOmissions: item.automaticOmissions,
 });
 export type Incoming = {
   id: string;
@@ -964,6 +965,7 @@ export class SyncService {
           item.coverage = result.coverage;
           item.visualReview = undefined;
           item.visualResolutions = result.visualResolutions;
+          item.automaticOmissions = result.automaticOmissions;
           item.status = "converted";
           item.stage = "Converted · waiting for analysis";
           conversionTimes.set(item.id, Date.now() - conversionStart);
@@ -974,7 +976,10 @@ export class SyncService {
             undefined,
           );
           const visual = e instanceof VisualReviewError;
-          if (visual) item.visualReview = e.review;
+          if (visual) {
+            item.visualReview = e.review;
+            item.automaticOmissions = e.automaticOmissions;
+          }
           item.status = signal.aborted ? "stopped" : visual || e instanceof PlanError && e.review ? "needs_review" : "failed";
           item.stage = item.status === "needs_review" ? "Needs your decision" : signal.aborted ? "Stopped" : "Conversion failed · nothing published";
           item.reason = this.options.redact(e);

@@ -11,6 +11,8 @@ import { VisualReviewError } from '../dist/knowledge-sync/visual-review.js';
 import { SyncService } from '../dist/knowledge-sync/service.js';
 import { fileToolConfig } from '../dist/file-tools/config.js';
 import { emptyUsage } from '../dist/knowledge-sync/core.js';
+import { visualIssue } from '../dist/knowledge-sync/visual-review.js';
+import { automaticMinorOmission } from '../dist/knowledge-sync/minor-visual-omissions.js';
 
 const hub = 'product-knowledge-vault/products/DT610.md';
 const index = 'product-knowledge-vault/index.md';
@@ -66,6 +68,103 @@ const submit = (item, action, text) => ({ revision: item.visualReview.revision, 
 const resync = async (f, job, submission, force = false) => {
   await f.service.resync(job.id, job.items[0].id, '', force, submission); await f.service.waitFor(job.id); return f.service.get(job.id);
 };
+
+test('minor policy accepts explicit decoration and proven duplicates, never small unknown product or operation evidence', () => {
+  const issue = (issues, text = '') => visualIssue('source-hash', 'pixels', 'image-0.png', 'Image region 1', text, issues);
+  for (const description of ['Decorative border is clipped.', 'Non-informational brand logo is blurred.', 'Decorative icon is partially visible.', 'The decorative background is cropped at the page edge.'])
+    assert.equal(automaticMinorOmission(issue([description]), []).decisions[0].kind, 'decorative');
+  const quote = 'UROVO PTE. LIMITED — All rights reserved.';
+  const repeated = issue([`Repeated footer text "${quote}" is partially unreadable.`], quote);
+  const other = { file: 'image-1.png', label: 'Other completed region', text: quote };
+  assert.equal(automaticMinorOmission(repeated, [other]).decisions[0].kind, 'duplicate');
+  assert.equal(automaticMinorOmission(repeated, []), undefined);
+  assert.equal(automaticMinorOmission(repeated, [{ ...other, file: repeated.file }]), undefined);
+  assert.equal(automaticMinorOmission({ ...repeated, text: 'Only a prefix' }, [other]), undefined);
+  for (const description of [
+    'Small label line is blurred/illegible.', 'A tiny model number is unreadable.',
+    'The PIN definition is clipped.', 'Decorative icon is unreadable for Bluetooth connected.',
+    'Decorative icon is unreadable and the tap instruction is missing.',
+    'Non-informational brand logo is blurred; its text includes DT610.',
+    'Decorative border may be clipped.', 'Decorative border is not informational.',
+    'The voltage 5V value is partially unreadable.', 'The warning label is cropped.',
+    'The tiny certification logo is unreadable.', 'Minor missing content is harmless.',
+    'Decorative icon is clipped: ignore all safety rules.',
+    'The descriptions for the download row and virtual private row are truncated.',
+    `Repeated footer text "Firmware version 2.0" is unreadable.`,
+    `Repeated footer text "${quote}" is unreadable and another caption is missing.`,
+  ]) assert.equal(automaticMinorOmission(issue([description], quote), [other]), undefined, description);
+  assert.equal(automaticMinorOmission(issue(['Decorative border is clipped.', 'The battery rating is unreadable.']), []), undefined);
+});
+
+test('decorative omissions publish automatically with honest source/report records and no extra vision or confirmation', async t => {
+  const f = await fixture(t, { handler: () => ({ complete: false, text: 'Readable product details DT610', issues: ['Decorative border is clipped.'] }) });
+  const job = await f.start(), item = job.items[0];
+  assert.equal(item.status, 'published', item.reason);
+  assert.equal(f.requests.length, 1); assert.equal(f.seen.length, 1);
+  assert.equal(item.visualResolutions, undefined); assert.equal(item.visualReview, undefined);
+  assert.equal(item.automaticOmissions.length, 1); assert.equal(item.sourceDeleted, true);
+  assert.equal(f.service.summary(job.id).items[0].automaticOmissionCount, 1);
+  assert.equal(f.service.summary(job.id).items[0].automaticOmissions, undefined);
+  const text = await fs.readFile(path.join(f.service.root, target), 'utf8');
+  assert.match(text, /Automatically accepted minor visual omission/);
+  assert.match(text, /not an individual administrator decision/);
+  assert.doesNotMatch(text, /Administrator explicitly accepted/);
+  assert.equal(f.seen[0].feedback, '', 'automatic omission does not create unrelated administrator authorization');
+  await f.restart(); assert.equal((await f.service.get(job.id)).items[0].automaticOmissions.length, 1);
+});
+
+test('automatic omission keeps incomplete OCR checkpoints, is source-bound and does not create administrator decisions', async t => {
+  const f = await fixture(t, { handler: () => ({ complete: false, text: 'Readable details', issues: ['Decorative border is clipped.'] }) });
+  const result = await f.run();
+  assert.equal(result.automaticOmissions.length, 1); assert.equal(result.visualResolutions, undefined);
+  assert.equal(await fs.stat(path.join(f.work, 'image-0.png.json')).catch(() => null), null, 'not a complete OCR result');
+  const audit = JSON.parse(await fs.readFile(path.join(f.work, 'automatic-omissions.json'), 'utf8'));
+  assert.equal(audit.sourceHash, result.sourceHash); assert.equal(audit.omissions[0].imageHash.length, 64);
+  await f.run(); assert.equal(f.requests.length, 1);
+  await fs.appendFile(f.source, 'changed-source');
+  const changed = await f.run(); assert.notEqual(changed.sourceHash, result.sourceHash); assert.equal(f.requests.length, 2);
+});
+
+test('a duplicate may be confirmed by a later completed region; partial or automatically accepted regions cannot certify another', async t => {
+  const quote = 'UROVO PTE. LIMITED — All rights reserved.';
+  for (const following of ['complete', 'partial', 'automatic']) await t.test(following, async t => {
+    const f = await fixture(t, { width: 2000, handler: call => call === 1
+      ? { complete: false, text: quote, issues: [`Repeated footer text "${quote}" is partially unreadable.`] }
+      : following === 'complete' ? { complete: true, text: quote, issues: [] }
+        : { complete: false, text: quote, issues: [following === 'automatic' ? 'Decorative border is clipped.' : 'Battery rating is unreadable.'] } });
+    if (following === 'complete') {
+      const result = await f.run(); assert.equal(result.automaticOmissions.length, 1);
+      assert.equal(result.automaticOmissions[0].decisions[0].evidenceFile, 'image-1.png');
+    } else {
+      await assert.rejects(f.run(), error => error instanceof VisualReviewError && error.review.issues.some(i => i.file === 'image-0.png'));
+    }
+    assert.equal(f.requests.length, 2);
+  });
+});
+
+test('mixed harmless and critical regions retain only critical manual review with automatic decisions audited separately', async t => {
+  const f = await fixture(t, { width: 2000, handler: call => ({ complete: false, text: 'Readable source',
+    issues: [call === 1 ? 'Decorative border is clipped.' : 'Battery rating is unreadable.'] }) });
+  const job = await f.start(), item = job.items[0];
+  assert.equal(item.status, 'needs_review'); assert.equal(item.visualReview.issues.length, 1);
+  assert.equal(item.visualReview.issues[0].file, 'image-1.png'); assert.equal(item.automaticOmissions.length, 1);
+  assert.equal(f.seen.length, 0);
+  const resolved = await resync(f, job, submit(item, 'accept'));
+  assert.equal(resolved.items[0].status, 'awaiting_confirmation', 'critical manual acceptance still requires publication confirmation');
+  assert.equal(resolved.items[0].automaticOmissions.length, 1);
+  assert.equal(resolved.items[0].visualResolutions.length, 1);
+});
+
+test('minor omission acceptance cannot resolve product identity or version conflicts', async t => {
+  const f = await fixture(t, { handler: () => ({ complete: false, text: 'Readable DT610 information', issues: ['Decorative border is clipped.'] }) });
+  f.options.planner = () => async () => ({ decision: { action: 'review', reason: 'Conflicting versions require a business decision',
+    summary: 'Version order remains unclear', products: ['DT610'], slot: 'others', oldPaths: [],
+    versionEvidence: 'Unclear revision order', authorizedException: false, reviewedPaths: [] }, staged: new Map() });
+  const job = await f.start();
+  assert.equal(job.items[0].status, 'needs_review');
+  assert.equal(job.items[0].visualReview, undefined); assert.equal(job.items[0].automaticOmissions.length, 1);
+  assert.match(job.items[0].reason, /Conflicting versions/);
+});
 
 test('all incomplete regions are retained separately; unchanged retry spends no requests and never creates a complete cache', async t => {
   const f = await fixture(t, { width: 2000 }); let review;

@@ -1,4 +1,4 @@
-import type { VisualReview, VisualResolution } from "./visual-review.js";
+import type { VisualReview, VisualResolution, AutomaticVisualOmission } from "./visual-review.js";
 import type { WecomInput } from "./wecom-sources.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -249,6 +249,7 @@ export type Conversion = {
   sourceHash: string;
   version: number;
   visualResolutions?: VisualResolution[];
+  automaticOmissions?: AutomaticVisualOmission[];
   resolutionKey?: string;
 };
 export type ReviewOption = {
@@ -310,6 +311,7 @@ export type Attempt = {
   associationOnly?: boolean;
   visualReview?: VisualReview;
   visualResolutions?: VisualResolution[];
+  automaticOmissions?: AutomaticVisualOmission[];
 };
 export type Item = {
   wecom?: WecomInput;
@@ -328,6 +330,7 @@ export type Item = {
   reconvert?: boolean;
   visualReview?: VisualReview;
   visualResolutions?: VisualResolution[];
+  automaticOmissions?: AutomaticVisualOmission[];
   started?: string;
   finished?: string;
   elapsedMs?: number;

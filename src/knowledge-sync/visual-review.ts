@@ -22,6 +22,16 @@ export type PartialVisualEvidence = VisualIssue & {
   sourceHash: string;
   text: string;
 };
+export type AutomaticVisualOmission = {
+  policyVersion: 1;
+  issueId: string;
+  sourceHash: string;
+  imageHash: string;
+  file: string;
+  label: string;
+  issues: string[];
+  decisions: { kind: "decorative" | "duplicate"; reason: string; evidenceFile?: string; quote?: string }[];
+};
 export type VisualReviewSubmission = {
   revision: string;
   decisions: { issueId: string; action: "accept" | "supplement" | "retry"; text?: string }[];
@@ -36,7 +46,7 @@ export function resolutionKey(resolutions: VisualResolution[] = []) {
   return hash(JSON.stringify([...resolutions].sort((a, b) => a.issueId.localeCompare(b.issueId))));
 }
 export class VisualReviewError extends Error {
-  constructor(readonly review: VisualReview) {
+  constructor(readonly review: VisualReview, readonly automaticOmissions: AutomaticVisualOmission[] = []) {
     super(`Unresolved visual evidence: ${review.issues.length} region(s) need your decision. Readable content and completed regions are retained.`);
   }
 }
