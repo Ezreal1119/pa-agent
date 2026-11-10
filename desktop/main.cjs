@@ -127,8 +127,18 @@ function createWindow() {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.on('will-prevent-unload', event => event.preventDefault());
   window.on('closed', () => { sessionGeneration++; window = undefined; saved.clear(); closeEditor(); void backend.logout().catch(() => {}); });
-  // 优先用服务器下发的页面，断网/服务未启动时回退到本地打包版本。
-  window.loadURL(remoteUiUrl).catch(() => { void window.loadURL('ckd://ui/index.html'); });
+  // 优先用服务器下发的页面；HTTP 错误（如 502）也回退到本地打包版本。
+  void (async () => {
+    const win = window;
+    if (!win) return;
+    try {
+      const response = await net.fetch(remoteUiUrl, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await win.loadURL(remoteUiUrl);
+    } catch {
+      if (!win.isDestroyed()) await win.loadURL('ckd://ui/index.html').catch(() => {});
+    }
+  })();
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

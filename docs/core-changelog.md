@@ -822,3 +822,11 @@ pa-agent 的「新建 SOP」只做项目匹配与出表，不创建文件夹，�
 - 侧栏当前功能按钮高亮；
 - 只改 `resources/ckd-ui/app.js` / `style.css`，无需后端。
 - 验证：`node --check resources/ckd-ui/app.js` 通过；实际切换需刷新页面确认。
+
+## 2026-11-10：0.1.13 修复 502 时未回退本地页面
+
+- 原因：`loadURL(remoteUiUrl)` 把 nginx 502 的 HTML 当成“加载成功”，不会触发 `.catch`，所以断网/后端不可用时显示 502 页面。
+- 修复：加载前先用 `net.fetch` 检查 `/client/` 的 HTTP 状态，非 2xx、超时（5 秒）或网络错误时加载本地 `ckd://ui/index.html`。
+- 本地兜底页面仍会提示“无法连接服务器”，不会卡在 502。
+- 0.1.13 安装包：`111,449,575` 字节，SHA256 `29b25a83921e36becdcccca09e7c8c8c3099c3ca42905b066803c5b125a8f6dd`。
+- 验证：`node --check desktop/main.cjs` 通过；包内已确认包含状态检查和本地回退逻辑。
