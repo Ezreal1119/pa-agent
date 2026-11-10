@@ -145,11 +145,13 @@ test('cancellation or a later upload failure keeps successful pending files and 
   }
 });
 
-test('a late session navigation response cannot move dropped files to another conversation', async () => {
+test('file drops are blocked while navigating, then attach only to the successfully opened conversation', async () => {
   const f = await fixture(); f.patch({ current: 'session-a' }); let resolveNavigation;
-  f.setHook(url => { if (url === '/api/sessions/session-b') return new Promise(resolve => { resolveNavigation = resolve; }); });
+  f.setHook(url => { if (url === '/api/sessions/session-b/history?limit=30') return new Promise(resolve => { resolveNavigation = resolve; }); });
   const opening = f.call("openSession('session-b')"); await until(() => resolveNavigation);
+  await f.get('composer-area').emit('drop', { dataTransfer: transfer([pdf('too-early.pdf')]) });
+  assert.equal(f.uploads().length, 0);
+  resolveNavigation(Response.json({ title: 'Session B', messages: [], files: [], rounds: 0, runs: [], page: { hasMore: false, nextCursor: null } })); await opening;
   await f.get('composer-area').emit('drop', { dataTransfer: transfer([pdf('right-session.pdf')]) });
-  resolveNavigation(Response.json({ title: 'Wrong session', messages: [], files: [], rounds: 0, runs: [] })); await opening;
-  assert.equal(f.state().current, 'session-a'); assert.match(f.uploads()[0].url, /sessions\/session-a\/files/); assert.equal(f.state().pendingIds.length, 1);
+  assert.equal(f.state().current, 'session-b'); assert.match(f.uploads()[0].url, /sessions\/session-b\/files/); assert.equal(f.state().pendingIds.length, 1);
 });

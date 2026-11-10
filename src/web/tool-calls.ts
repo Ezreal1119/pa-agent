@@ -57,8 +57,7 @@ export function getToolRuns(session: AgentSession, activeId?: string) {
   return rounds;
 }
 
-export function publicRunMetrics(session: AgentSession, activeId?: string) {
-  const rounds = getToolRuns(session, activeId);
+export function publicRunMetrics(session: AgentSession, activeId?: string, rounds = getToolRuns(session, activeId)) {
   return getRunMetrics(session, activeId).map(metric => {
     const run = [...rounds.values()].find(r => r.id === metric.id);
     return { ...metric, toolCallCount: run?.calls.length ?? 0 };

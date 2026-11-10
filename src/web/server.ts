@@ -27,6 +27,7 @@ import { DEFAULT_SKILLS, ON_DEMAND_SKILLS, loadRunKnowledge } from "../agent/kno
 import { REASONING_MODES, isReasoningMode, isDeepSeekModel, applyDeepSeekReasoning, type ReasoningMode } from "../agent/reasoning.js";
 import { getRunMetrics, readRunMetrics, RUN_METRICS_TYPE, saveRunMetric, sdkTokens, visionTokens, type RunMetric } from "./run-metrics.js";
 import { getToolRuns, publicRunMetrics } from "./tool-calls.js";
+import { chatHistory, ChatHistoryError, CHAT_HISTORY_PAGE_SIZE, historyPageSize } from "./chat-history.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
 import { WebAuth } from "./auth.js";
@@ -39,7 +40,7 @@ import { mainMemoryFile } from "../agent/memory-paths.js";
 import { fileToolConfig, FILE_TOOL_NAMES, FILE_EXTENSIONS, type FileToolOptions } from "../file-tools/config.js";
 import { generatedFiles } from "../file-tools/outputs.js";
 import { FileStore } from "../file-tools/store.js";
-import { captureMessageAttachments, messageAttachments } from "../agent/message-attachments.js";
+import { captureMessageAttachments } from "../agent/message-attachments.js";
 import { SessionRetention } from "../agent/retention.js";
 import { queueState } from "../file-tools/runner.js";
 import { pipeline } from "node:stream/promises";
@@ -356,61 +357,7 @@ export async function createWebServer(options: WebOptions = {}) {
   }
 
   async function publicMessages(session: AgentSession, activeId?: string) {
-    const runs = publicRunMetrics(session, activeId);
-    const tools = getToolRuns(session, activeId);
-    const attached = messageAttachments(session);
-    const knownFiles = new Map((await fileStore.list(session.sessionId)).filter(file => file.direction === "outputs").map(file => [file.id, file]));
-    const outputs = new Map<number, Map<string, import("../file-tools/store.js").ManagedFile>>();
-    const addOutput = (round: number, id: string) => {
-      const file = knownFiles.get(id); if (!file) return;
-      if (!outputs.has(round)) outputs.set(round, new Map());
-      outputs.get(round)!.set(id, file);
-    };
-    const userEntries = session.sessionManager.getBranch().filter(entry => entry.type === "message" && entry.message.role === "user");
-    for (const record of generatedFiles(session)) {
-      const index = userEntries.findIndex(entry => entry.id === record.userMessageId);
-      if (index >= 0) addOutput(index + 1, record.file.id);
-    }
-    // Legacy results already contain backend-generated metadata: recover their
-    // association without asking the model or parsing its answer/path text.
-    for (const run of tools.values()) for (const call of run.calls) {
-      const result = call.result as { details?: { ok?: boolean; file?: { id?: string } } } | null;
-      if (["excel_patch_template", "excel_create", "text_file_create"].includes(call.name) && call.status === "completed" && result?.details?.ok === true && result.details.file?.id) addOutput(run.round, result.details.file.id);
-    }
-    const view = (role: string, text: string, timestamp: number, round: number) => {
-      const toolRun = tools.get(round);
-      return { role, text, timestamp, outputs: [] as import("../file-tools/store.js").ManagedFile[], outputNotice: "",
-        ...(role === "user" ? { attachments: attached.find(record => record.round === round && record.timestamp === timestamp)?.files ?? [] } : {}),
-        run: runs.findLast(run => run.id === toolRun?.id),
-        ...(role === "assistant" ? { toolRunId: toolRun?.id, toolCallCount: toolRun?.calls.length ?? 0 } : {}),
-      };
-    };
-    const output: ReturnType<typeof view>[] = [];
-    const lastAnswer = new Map<number, ReturnType<typeof view>>();
-    let round = 0; let hasAnswer = false;
-    const flush = () => {
-      const toolRun = tools.get(round);
-      if (!hasAnswer && (toolRun?.calls.length || outputs.has(round))) {
-        const placeholder = view("assistant", outputs.has(round) ? "Files are ready to download below." : "No text answer yet. You can inspect the tool calls.", toolRun?.calls.at(-1)?.requestedAt ?? Date.now(), round);
-        output.push(placeholder); lastAnswer.set(round, placeholder);
-      }
-    };
-    for (const message of session.messages) {
-      if (message.role !== "user" && message.role !== "assistant") continue;
-      if (message.role === "user") { flush(); round++; hasAnswer = false; }
-      const text = typeof message.content === "string" ? message.content : message.content.filter(c => c.type === "text").map(c => c.text).join("");
-      if (!text) continue;
-      if (message.role === "assistant") hasAnswer = true;
-      const item = view(message.role, text, message.timestamp, round);
-      output.push(item); if (message.role === "assistant") lastAnswer.set(round, item);
-    }
-    flush();
-    for (const [round, files] of outputs) {
-      const answer = lastAnswer.get(round); if (!answer) continue;
-      answer.outputs = [...files.values()];
-      if (answer.run && answer.run.status !== "completed") answer.outputNotice = answer.run?.status === "running" ? "File ready; the run is still in progress." : "Files are ready to download, although the run did not finish successfully.";
-    }
-    return output;
+    return chatHistory(session, await fileStore.list(session.sessionId), activeId).messages;
   }
   async function listSessions() {
     await retention.cleanup();
@@ -898,6 +845,18 @@ export async function createWebServer(options: WebOptions = {}) {
         }
         throw new HttpError(405, "The attachment API does not support this operation.");
       }
+      const historyMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/history$/);
+      if (historyMatch && method === "GET") {
+        if ([...url.searchParams.keys()].some(key => !["limit", "before"].includes(key) || url.searchParams.getAll(key).length !== 1)) throw new ChatHistoryError("Invalid history query parameters.");
+        const limit = historyPageSize(url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : CHAT_HISTORY_PAGE_SIZE);
+        const before = url.searchParams.get("before") ?? undefined;
+        const item = await findRecord(historyMatch[1]!);
+        if (item.mutating) throw new HttpError(409, "This conversation is being updated. Please wait.");
+        const session = await getSession(item);
+        const files = await fileStore.list(item.id);
+        const history = chatHistory(session, files, item.activeRunId, { limit, before });
+        return json(res, 200, { ...history, id: item.id, title: item.title, contextRounds: Math.min(history.rounds, 5), running: item.running, context: item.context, runs: history.runs.slice(-5), files });
+      }
       const toolsMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/runs\/([\w-]+)\/tools$/);
       if (method === "GET" && toolsMatch) {
         const item = await findRecord(toolsMatch[1]!);
@@ -962,6 +921,7 @@ export async function createWebServer(options: WebOptions = {}) {
           res.once("close", cancelWaiting);
           try {
             const body = await readBody(req);
+            const historyLimit = body.historyPageSize === undefined ? undefined : historyPageSize(body.historyPageSize);
             if (body.userRoleStyle !== undefined || body.role !== undefined) throw new HttpError(403, "Roles are configured only through the WeCom role API.");
             if (typeof body.text !== "string" || body.text.length > 12000) throw new HttpError(400, "Enter a question with at most 12000 characters.");
             let sender;
@@ -1109,8 +1069,9 @@ export async function createWebServer(options: WebOptions = {}) {
                 if (session.sessionFile && await fs.stat(session.sessionFile).catch(() => undefined)) item.persistedFile = session.sessionFile;
                 persistStatistics();
                 await statistics;
-                const runs = publicRunMetrics(session);
-                send("done", { messages: await publicMessages(session), rounds: session.messages.filter(m => m.role === "user").length, context: item.context, failed: metric.status !== "completed", run: runs.find(r => r.id === metric.id), runs, files: await fileStore.list(item.id) });
+                const files = await fileStore.list(item.id);
+                const history = chatHistory(session, files, undefined, historyLimit === undefined ? undefined : { limit: historyLimit });
+                send("done", { ...history, context: item.context, failed: metric.status !== "completed", run: history.runs.find(r => r.id === metric.id), runs: historyLimit === undefined ? history.runs : history.runs.slice(-5), files });
               } finally {
                 finished = true; item.activeRunId = undefined; clearInterval(heartbeat); res.off("close", disconnect); unsubscribe(); session.agent.onPayload = priorPayload;
                 if (!res.destroyed) res.end();
@@ -1159,7 +1120,7 @@ export async function createWebServer(options: WebOptions = {}) {
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
       if (res.headersSent) { if (!res.destroyed) res.end(); return; }
-      json(res, error instanceof HttpError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError || error instanceof ReviewError || error instanceof ExportError ? error.status : 500, { error: redact(error) });
+      json(res, error instanceof HttpError || error instanceof ChatHistoryError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError || error instanceof ReviewError || error instanceof ExportError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;

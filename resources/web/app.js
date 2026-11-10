@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = { token: '', status: null, current: null, busy: false, rounds: 0, activities: [], toastTimer: null, cancelBeforeRun: false, effort: 'low', run: null, clock: null, clockStart: 0, files: [], pendingIds: [], sessionEpoch: 0 };
+const state = { token: '', status: null, current: null, busy: false, rounds: 0, activities: [], toastTimer: null, cancelBeforeRun: false, effort: 'low', run: null, clock: null, clockStart: 0, files: [], pendingIds: [], sessionEpoch: 0, sessionAbort: null, history: { messages: [], page: null, ready: true, loading: false, error: '', controller: null } };
 const dialog = $('settings-dialog');
 const sessionDialog = $('session-dialog');
 let sessionAction = null;
@@ -57,17 +57,17 @@ async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), 'X-Local-Token': state.token, ...options.headers } });
   const data = await response.json();
   if (response.status === 401) { window.location.replace('/login'); throw new Error('Your sign-in has expired. Please sign in again.'); }
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) throw Object.assign(new Error(data.error || `Request failed (${response.status})`), { status: response.status });
   return data;
 }
 function setBusy(busy) {
   if (busy) { state.sessionEpoch++; clearFileDrag(); }
-  state.busy = busy; $('send').hidden = busy; $('stop').hidden = !busy; $('send').disabled = !state.status;
-  $('question').disabled = busy; $('new-chat').disabled = busy;
+  state.busy = busy; $('send').hidden = busy; $('stop').hidden = !busy; $('send').disabled = !state.status || !state.history.ready;
+  $('question').disabled = busy || !state.history.ready; $('new-chat').disabled = busy;
   $('logout').disabled = busy; $('logout-top').disabled = busy;
   document.querySelectorAll('.session-button').forEach(button => button.disabled = busy); refreshEffort();
   document.querySelectorAll('.session-operation').forEach(button => button.disabled = busy || button.dataset.running === 'true');
-  $('upload-file').disabled = busy;
+  $('upload-file').disabled = busy || !state.history.ready;
   document.querySelectorAll('.remove-attachment').forEach(button => button.disabled = busy);
 }
 function updateRounds(rounds, actual) {
@@ -134,7 +134,7 @@ async function refreshStatus() {
     }
     $('skill-cards').append(card);
   }
-  $('send').disabled = false; refreshEffort();
+  $('send').disabled = state.busy || !state.history.ready; refreshEffort();
 }
 async function refreshSessions() {
   const { sessions } = await api('/api/sessions'); $('sessions').replaceChildren(); $('session-count').textContent = sessions.length;
@@ -143,9 +143,10 @@ async function refreshSessions() {
     const displayTitle = session.displayTitle || session.title || 'New conversation';
     const row = document.createElement('div'); row.className = `session-row${session.id === state.current ? ' active' : ''}`;
     const button = document.createElement('button'); button.className = `session-button${session.id === state.current ? ' active' : ''}`; button.disabled = state.busy;
+    row.dataset.sessionId = session.id; button.dataset.sessionId = session.id;
     const title = document.createElement('strong'); title.textContent = displayTitle;
     const time = document.createElement('small'); time.textContent = session.running ? 'Running' : new Date(session.updated).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    button.append(title, time); button.addEventListener('click', () => openSession(session.id).then(() => setSidebar(false)).catch(error => toast(error.message)));
+    button.append(title, time); button.addEventListener('click', () => openSession(session.id).then(() => setSidebar(false)).catch(error => { if (error.name !== 'AbortError') toast(error.message); }));
     const menu = document.createElement('details'); menu.className = 'session-menu';
     const summary = document.createElement('summary'); summary.textContent = '⋯'; summary.setAttribute('aria-label', `Manage conversation: ${displayTitle}`);
     const actions = document.createElement('div'); actions.className = 'session-menu-actions';
@@ -294,27 +295,126 @@ function renderMessages(messages) {
   for (const message of messages) addMessage(message.role, message.text, message.timestamp, false, message.run, message.toolRunId, message.toolCallCount, message.attachments || [], message.outputs || [], message.outputNotice || '');
 }
 function scrollBottom() { const node = $('chat-scroll'); node.scrollTop = node.scrollHeight; }
+function resetHistory(ready = true) {
+  state.sessionAbort?.abort(); state.sessionAbort = null;
+  state.history.controller?.abort();
+  state.history = { messages: [], page: null, ready, loading: false, error: '', controller: null };
+  updateHistoryStatus();
+}
+function updateHistoryStatus() {
+  const history = state.history;
+  $('history-status').hidden = !state.current || history.ready && !history.messages.length;
+  $('history-label').textContent = history.error || (!history.ready ? 'Loading conversation…' : history.loading ? 'Loading earlier messages…' : history.page?.hasMore ? 'Scroll up to load earlier messages' : 'Beginning of conversation');
+  $('history-retry').hidden = !history.error && (!history.ready || history.loading || !history.page?.hasMore);
+  $('history-retry').textContent = history.reload ? 'Reopen conversation' : history.error ? 'Retry' : 'Load earlier messages';
+}
+function messageRow(message) {
+  const body = addMessage(message.role, message.text, message.timestamp, false, message.run, message.toolRunId, message.toolCallCount, message.attachments || [], message.outputs || [], message.outputNotice || '');
+  const row = body.closest('.message'); row.dataset.messageId = message.id; row._historyMessage = message;
+  return row;
+}
+function scrollAnchor() {
+  const scroll = $('chat-scroll'), top = scroll.getBoundingClientRect().top;
+  const row = [...$('messages').children].find(row => row.dataset.messageId && row.getBoundingClientRect().bottom > top);
+  return { row, id: row?.dataset.messageId, top: row?.getBoundingClientRect().top, height: scroll.scrollHeight, scrollTop: scroll.scrollTop };
+}
+function restoreAnchor(anchor, prepend = false) {
+  const scroll = $('chat-scroll');
+  const row = anchor.row?.isConnected ? anchor.row : [...$('messages').children].find(row => row.dataset.messageId === anchor.id);
+  if (row) scroll.scrollTop += row.getBoundingClientRect().top - anchor.top;
+  else scroll.scrollTop = anchor.scrollTop + (prepend ? scroll.scrollHeight - anchor.height : 0);
+}
+function syncHistory(messages) {
+  const container = $('messages');
+  const existing = new Map([...container.children].filter(row => row.dataset.messageId).map(row => [row.dataset.messageId, row]));
+  const ids = new Set(messages.map(message => message.id));
+  for (const row of [...container.children]) if (!ids.has(row.dataset.messageId)) row.remove();
+  let next = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]; let row = existing.get(message.id);
+    if (!row || row._historyMessage !== message && JSON.stringify(row._historyMessage) !== JSON.stringify(message)) {
+      const old = row; row = messageRow(message); old?.remove();
+    }
+    row._historyMessage = message;
+    if (row.parentNode !== container || row.nextSibling !== next) container.insertBefore(row, next);
+    next = row;
+  }
+  state.history.messages = messages;
+  $('welcome').hidden = messages.length > 0;
+}
+async function mergeLatestHistory(data) {
+  const old = state.history.messages, ids = new Set(old.map(message => message.id));
+  let messages = data.messages, page = data.page;
+  // A tool-heavy run can add more than one page. Bridge the gap before merging,
+  // so retaining the old DOM never silently skips intermediate messages.
+  while (old.length && messages.length && !messages.some(message => ids.has(message.id)) && page?.hasMore) {
+    const earlier = await api(`/api/sessions/${state.current}/history?limit=30&before=${encodeURIComponent(page.nextCursor)}`);
+    messages = [...earlier.messages, ...messages]; page = earlier.page;
+  }
+  const overlap = messages.length ? old.findIndex(message => message.id === messages[0].id) : -1;
+  const combined = overlap >= 0 ? [...old.slice(0, overlap), ...messages] : messages;
+  const nearBottom = $('chat-scroll').scrollHeight - $('chat-scroll').scrollTop - $('chat-scroll').clientHeight < 150;
+  const anchor = scrollAnchor();
+  if (overlap < 0 || !state.history.page) state.history.page = page;
+  state.history.error = ''; syncHistory(combined); updateHistoryStatus();
+  if (nearBottom) scrollBottom(); else restoreAnchor(anchor);
+}
+async function loadOlderHistory() {
+  const history = state.history;
+  if (state.busy || !history.ready || history.loading || !history.page?.hasMore) return;
+  const id = state.current, epoch = state.sessionEpoch;
+  const controller = new AbortController(); history.controller = controller;
+  history.loading = true; history.error = ''; history.reload = false; updateHistoryStatus();
+  try {
+    const data = await api(`/api/sessions/${id}/history?limit=30&before=${encodeURIComponent(history.page.nextCursor)}`, { signal: controller.signal });
+    if (epoch !== state.sessionEpoch || id !== state.current || history !== state.history) return;
+    const anchor = scrollAnchor();
+    const ids = new Set(history.messages.map(message => message.id));
+    syncHistory([...data.messages.filter(message => !ids.has(message.id)), ...history.messages]);
+    history.page = data.page; updateHistoryStatus(); restoreAnchor(anchor, true);
+  } catch (error) {
+    if (error.name !== 'AbortError' && history === state.history) { history.error = error.message; history.reload = error.status === 409; }
+  } finally {
+    if (history === state.history) { history.loading = false; history.controller = null; updateHistoryStatus(); }
+  }
+}
 async function openSession(id) {
   if (state.busy) return;
   if (!state.status?.configured) return note('Configure the model connection in .env, then restart the service.', true);
+  resetHistory(false);
+  const controller = new AbortController(); state.sessionAbort = controller;
   const epoch = ++state.sessionEpoch;
-  const data = await api(`/api/sessions/${id}`);
-  if (epoch !== state.sessionEpoch || state.busy) return;
-  state.current = id; localStorage.setItem('product-expert-session', id); $('chat-title').textContent = data.title || 'New conversation';
-  renderMessages(data.messages); updateRounds(data.rounds); resetContext(); showContext(data.context); showRuns(data.runs); note();
-  restorePending(data); renderFiles(data.files || []);
-  const latest = data.runs?.at(-1); if (data.running && latest?.status === 'running') startClock(latest); else stopClock(latest);
-  $('tool-count').textContent = countLabel(latest?.toolCallCount ?? 0, 'call');
-  if (data.running) note('This conversation is running in another window. Reopen it after the run finishes.');
-  await refreshSessions(); scrollBottom();
+  state.current = id; state.pendingIds = []; renderFiles([]);
+  $('chat-title').textContent = 'Loading conversation…'; renderMessages([]); $('welcome').hidden = true;
+  resetContext(); showRuns(); stopClock(); note(); setBusy(false); updateHistoryStatus();
+  document.querySelectorAll('.session-row, .session-button').forEach(node => node.classList.toggle('active', node.dataset.sessionId === id));
+  try {
+    const data = await api(`/api/sessions/${id}/history?limit=30`, { signal: controller.signal });
+    if (epoch !== state.sessionEpoch || state.busy) return;
+    localStorage.setItem('product-expert-session', id); $('chat-title').textContent = data.title || 'New conversation';
+    state.history.ready = true; state.history.page = data.page; syncHistory(data.messages);
+    updateRounds(data.rounds); showContext(data.context); showRuns(data.runs);
+    restorePending(data); renderFiles(data.files || []);
+    const latest = data.runs?.at(-1); if (data.running && latest?.status === 'running') startClock(latest); else stopClock(latest);
+    $('tool-count').textContent = countLabel(latest?.toolCallCount ?? 0, 'call');
+    if (data.running) note('This conversation is running in another window. Reopen it after the run finishes.');
+    updateHistoryStatus(); setBusy(false); scrollBottom();
+  } catch (error) {
+    if (epoch === state.sessionEpoch && error.name !== 'AbortError') {
+      state.history.error = error.message; $('chat-title').textContent = 'Conversation unavailable'; updateHistoryStatus();
+    }
+  }
 }
 function newChat() {
   if (state.busy) return;
-  state.sessionEpoch++;
+  resetHistory(); state.sessionEpoch++;
   state.current = null; localStorage.removeItem('product-expert-session'); $('chat-title').textContent = 'New conversation';
-  renderMessages([]); updateRounds(0); resetContext(); showRuns(); stopClock(); note(); void refreshSessions().catch(error => toast(error.message)); $('question').focus();
+  renderMessages([]); updateRounds(0); resetContext(); showRuns(); stopClock(); note(); updateHistoryStatus(); setBusy(false);
+  document.querySelectorAll('.session-row, .session-button').forEach(node => node.classList.remove('active')); $('question').focus();
   state.pendingIds = []; renderFiles([]);
 }
+$('history-retry').addEventListener('click', () => state.history.ready && !state.history.reload ? loadOlderHistory() : openSession(state.current));
+$('chat-scroll').addEventListener('scroll', () => { if ($('chat-scroll').scrollTop < 300 && !state.history.error) void loadOlderHistory(); }, { passive: true });
 function renderMcpSettings(data) {
   mcpEnabled = data.enabled; $('mcp-enabled').checked = mcpEnabled;
   $('mcp-settings-error').hidden = true;
@@ -355,9 +455,10 @@ async function openSettings() {
   } catch (error) { toast(error.message); }
 }
 async function sendQuestion(event) {
-  event.preventDefault(); if (state.busy) return;
+  event.preventDefault(); if (state.busy || !state.history.ready) return;
   const text = $('question').value.trim(); if (!text && !state.pendingIds.length) return $('question').focus();
   if (!state.status?.configured) return note('Configure the model connection in .env, then restart the service.', true);
+  state.history.controller?.abort(); state.history.loading = false;
   state.cancelBeforeRun = false; setBusy(true); note('Preparing skills and memory for this run…'); resetContext(); startClock();
   const submittedIds = [...state.pendingIds];
   const submittedFiles = state.files.filter(file => submittedIds.includes(file.id));
@@ -368,10 +469,10 @@ async function sendQuestion(event) {
     if (state.cancelBeforeRun) throw new Error('This run was stopped.');
     addMessage('user', text || 'Please analyze the files attached to this message.', Date.now(), false, undefined, undefined, 0, submittedFiles); replyBody = addMessage('assistant', '', Date.now(), true); $('question').value = ''; $('question').style.height = '';
     updateRounds(state.rounds + 1); scrollBottom();
-    const response = await fetch(`/api/sessions/${state.current}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Local-Token': state.token }, body: JSON.stringify({ text, attachmentIds: submittedIds }) });
+    const response = await fetch(`/api/sessions/${state.current}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Local-Token': state.token }, body: JSON.stringify({ text, attachmentIds: submittedIds, historyPageSize: 30 }) });
     if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'Run failed.'); }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
-    function handleFrame(frame) {
+    async function handleFrame(frame) {
       if (!frame || frame.startsWith(':')) return;
       const name = frame.split('\n').find(line => line.startsWith('event: '))?.slice(7);
       const raw = frame.split('\n').filter(line => line.startsWith('data: ')).map(line => line.slice(6)).join('\n');
@@ -399,11 +500,11 @@ async function sendQuestion(event) {
       }
       if (name === 'notice') note(data.text);
       if (name === 'error') { failed = true; note(data.message, true); if (!reply) replyBody.textContent = data.message; }
-      if (name === 'done') { completed = true; restorePending(data); if (!accepted && !data.messages.some(message => message.role === 'user' && message.attachments?.some(file => submittedIds.includes(file.id)))) $('question').value = text; stopClock(data.run); $('tool-count').textContent = countLabel(data.run?.toolCallCount ?? 0, 'call'); showRuns(data.runs); renderMessages(data.messages); renderFiles(data.files || []); updateRounds(data.rounds); showContext(data.context); if (!failed) note('Run complete. Skills and memories will be reloaded for your next question.'); scrollBottom(); }
+      if (name === 'done') { completed = true; restorePending(data); if (!accepted && !data.messages.some(message => message.role === 'user' && message.attachments?.some(file => submittedIds.includes(file.id)))) $('question').value = text; stopClock(data.run); $('tool-count').textContent = countLabel(data.run?.toolCallCount ?? 0, 'call'); showRuns(data.runs); await mergeLatestHistory(data); renderFiles(data.files || []); updateRounds(data.rounds); showContext(data.context); if (!failed) note('Run complete. Skills and memories will be reloaded for your next question.'); }
     }
     while (true) {
       const { done, value } = await reader.read(); buffer += decoder.decode(value, { stream: !done });
-      let boundary; while ((boundary = buffer.indexOf('\n\n')) !== -1) { handleFrame(buffer.slice(0, boundary)); buffer = buffer.slice(boundary + 2); }
+      let boundary; while ((boundary = buffer.indexOf('\n\n')) !== -1) { await handleFrame(buffer.slice(0, boundary)); buffer = buffer.slice(boundary + 2); }
       if (done) break;
     }
     if (!completed && !failed) throw new Error('The connection closed before the run finished. Check the conversation before retrying.');
@@ -412,7 +513,7 @@ async function sendQuestion(event) {
     if (!replyBody) toast(error.message);
   } finally {
     if (failed && state.current) {
-      try { const saved = await api(`/api/sessions/${state.current}`); renderMessages(saved.messages); restorePending(saved); renderFiles(saved.files || []); updateRounds(saved.rounds); showRuns(saved.runs); const latest = saved.runs?.at(-1); if (latest) stopClock(latest); } catch {}
+      try { const saved = await api(`/api/sessions/${state.current}/history?limit=30`); await mergeLatestHistory(saved); restorePending(saved); renderFiles(saved.files || []); updateRounds(saved.rounds); showRuns(saved.runs); const latest = saved.runs?.at(-1); if (latest) stopClock(latest); } catch {}
     }
     if (!accepted && failed) $('question').value = text;
     if (state.clock) { clearInterval(state.clock); state.clock = null; $('run-clock').classList.remove('running'); if (!completed) $('run-clock').textContent = 'Run incomplete · Check run history'; }
@@ -500,11 +601,11 @@ function renderFiles(files) {
   $('attachment-hint').hidden = !pending.length;
   $('attachment-hint').textContent = `${pending.length} pending attachments will be sent with your next message.`;
 }
-function uploadsEnabled() { return Boolean(state.status?.fileTools?.enabled && state.status.fileTools.tools?.length); }
+function uploadsEnabled() { return state.history.ready && Boolean(state.status?.fileTools?.enabled && state.status.fileTools.tools?.length); }
 async function uploadAttachments(input) {
   const files = Array.from(input || []);
   if (!files.length) return;
-  if (state.busy) return toast('Wait for the current upload or answer to finish.');
+  if (state.busy || !state.history.ready) return toast('Wait for the current upload, conversation or answer to finish loading.');
   if (!uploadsEnabled()) return toast('File uploads are currently unavailable.');
   if (state.pendingIds.length + files.length > 20) return toast('Attach up to 20 files per message. Send additional files in another message.');
   if (!state.status.configured) return note('Configure the model connection in .env, then restart the service.', true);
