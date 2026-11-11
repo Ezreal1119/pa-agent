@@ -1,0 +1,167 @@
+{
+  "note": "Minimal source snippets and exact reported issues from the investigated RT30 run; no full document or full OCR transcript.",
+  "cases": [
+    {
+      "page": 8,
+      "issues": [
+        "The small warning text on the yellow label at the top of the rear-view device is illegible, so its safety/warning wording cannot be transcribed."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 15,
+      "issues": [
+        "The text on the yellow warning/safety label on the device is too small and blurred to read."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 16,
+      "issues": [
+        "The microtext on the yellow safety/warning labels in both device illustrations is too small to read, so the safety-label wording cannot be transcribed."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 17,
+      "issues": [
+        "The small print on the yellow warning label on the device in both illustrations is illegible; its safety warning text and any product/certification details cannot be transcribed."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 18,
+      "issues": [
+        "The small text on the yellow warning label on the device is unreadable, so its safety/warning wording cannot be transcribed."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 27,
+      "issues": [
+        "The table description for the down-arrow icon is incomplete: 'Device is downloading data when animated and download is' stops inside the cell without a visible continuation.",
+        "The table description for the key icon is incomplete: 'Device is connected to or disconnected from virtual private' stops inside the cell without a visible continuation."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 36,
+      "issues": [
+        "In the embedded USB Preferences screenshot, the bottom-edge text is clipped after 'data trans'; the remaining characters and full wording are not legible."
+      ],
+      "nativeText": "Pull down the status bar to open the notification panel and select PTP in USB Preferences to transfer pictures to computer;",
+      "text": "Pull down the status bar to open the notification panel and select PTP in USB Preferences to transfer pictures to computer;\n◉ PTP (selected; outlined by a red rectangle)",
+      "incidental": true
+    },
+    {
+      "page": 46,
+      "issues": [
+        "At the bottom of the second phone screenshot, a further \"Available devices\" list entry is almost entirely obscured by the Android navigation bar overlay; only faint, illegible fragments of its text (appearing to begin with \"May Ndatxqhir...\") are visible, so that device name cannot be transcribed."
+      ],
+      "nativeText": "Select the Bluetooth device you want to connect to.",
+      "text": "Select the Bluetooth device you want to connect to.",
+      "incidental": true
+    },
+    {
+      "page": 56,
+      "issues": [
+        "The bottom of the embedded phone screenshot fades out; additional settings text below the location-use paragraph is only partially legible and cannot be read reliably."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 60,
+      "issues": [
+        "The tiny status-bar icons in the first screenshot (beside 14:03 and at the upper right) are not identifiable at this resolution; the time 14:03 is legible."
+      ],
+      "nativeText": "Data & time\nTouch to set Time.",
+      "text": "Data & time\nTouch to set Time.",
+      "incidental": true
+    },
+    {
+      "page": 68,
+      "issues": [
+        "In the bottom-right app-selection list, the label for the final red app icon below \"com.google.android.apps.tachyon\" is cut off/not legible at the bottom of the list."
+      ],
+      "nativeText": "Select the app you want to associate with.",
+      "text": "Select the app you want to associate with.",
+      "incidental": true
+    },
+    {
+      "page": 69,
+      "issues": [
+        "Cross-page continuation could not be independently verified because the following page contains unreadable evidence."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    },
+    {
+      "page": 70,
+      "issues": [
+        "The first body line begins mid-sentence at the real top page boundary: \"scanning, press the scanning key again to end scanning.\"; the preceding wording is missing from this page."
+      ],
+      "nativeText": "",
+      "text": "",
+      "incidental": false
+    }
+  ],
+  "native": {
+    "text": "Device is downloading data when animated and download is\nDevice is connected to or disconnected from virtual private",
+    "issues": [
+      "The table description for the down-arrow icon is incomplete: 'Device is downloading data when animated and download is' stops inside the cell without a visible continuation.",
+      "The table description for the key icon is incomplete: 'Device is connected to or disconnected from virtual private' stops inside the cell without a visible continuation."
+    ],
+    "spans": [
+      {
+        "text": "Device is downloading data when animated and download is",
+        "x": 255.36,
+        "y": 875.64,
+        "width": 581.3534999999998,
+        "height": 19.900000000000002
+      },
+      {
+        "text": "complete when static.",
+        "x": 255.36,
+        "y": 938.038,
+        "width": 208.2915,
+        "height": 19.900000000000002
+      },
+      {
+        "text": "Device is connected to or disconnected from virtual private",
+        "x": 255.36,
+        "y": 945,
+        "width": 565.1994000000001,
+        "height": 19.900000000000002
+      },
+      {
+        "text": "network (VPN).",
+        "x": 255.36,
+        "y": 1007.4,
+        "width": 143.97149999999985,
+        "height": 19.900000000000002
+      }
+    ]
+  },
+  "continuation": {
+    "tail": "can be used when scanning multiple barcodes, when you need to stop",
+    "head": "scanning, press the scanning key again to end scanning.",
+    "issues": [
+      "The first body line begins mid-sentence at the real top page boundary: \"scanning, press the scanning key again to end scanning.\"; the preceding wording is missing from this page."
+    ]
+  }
+}

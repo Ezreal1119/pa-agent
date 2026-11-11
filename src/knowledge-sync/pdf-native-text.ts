@@ -4,10 +4,14 @@ export type NativeRegion = { spans: NativeSpan[] };
 const normalized = (text: string) => text.replace(/\s+/g, " ").trim();
 
 export function nativeRecoveryEligible(issues: string[]): boolean {
-  return issues.length > 0 && issues.length <= 10 && issues.every(issue =>
-    /truncat|clipp|cut[\s-]*off/i.test(issue) &&
-    /text|sentence|description|row|line/i.test(issue) &&
-    !/blur|illegible|unreadable|icon|diagram|label|obscur|corrupt/i.test(issue));
+  return issues.length > 0 && issues.length <= 10 && issues.every(issue => {
+    // An icon's textual description is recoverable text; an unreadable icon
+    // itself is not. Remove only that grammatical reference, not other issues.
+    const textIssue = issue.replace(/\bdescription\s+(?:for|of)\s+(?:the\s+)?(?:[\w-]+\s+){0,5}icon\b/gi, "description");
+    return /truncat|clipp|cut[\s-]*off|incomplete|stops?\b.{0,80}(?:mid|without)|ends?\b.{0,80}mid/i.test(textIssue) &&
+      /text|sentence|description|row|line|cell|wording/i.test(textIssue) &&
+      !/blur|illegible|unreadable|icon|diagram|label|obscur|corrupt/i.test(textIssue);
+  });
 }
 
 /** Do not spend another model call when the text layer has no possible ending. */

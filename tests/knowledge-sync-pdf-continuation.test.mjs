@@ -10,7 +10,7 @@ import JSZip from "jszip";
 import { createConverter } from "../dist/knowledge-sync/converter.js";
 import { fileToolConfig } from "../dist/file-tools/config.js";
 import { emptyUsage } from "../dist/knowledge-sync/core.js";
-import { nextContinuationPage, continuationQuotes, containsContinuationQuote, matchesContinuationHead } from "../dist/knowledge-sync/pdf-continuation.js";
+import { nextContinuationPage, continuationQuotes, containsContinuationQuote, matchesContinuationHead, onlyMissingPrecedingContext } from "../dist/knowledge-sync/pdf-continuation.js";
 
 const tail = "10. Supports flexible anti-metal labels with a";
 const head = "thickness not exceeding 1.5 mm.";
@@ -18,6 +18,19 @@ const boundaryIssue = "The 'Other Attributes' cell text is cut off at the bottom
 const screenshotIssue = 'The specifications table sentence is cut off at the page boundary after "POS terminal and the".';
 const incomplete = { complete: false, text: tail, issues: [boundaryIssue] };
 const reviewed = { complete: true, text: tail, issues: [], continuation: { confirmed: true, tail, head } };
+const topIssue = `The first body line begins mid-sentence at the real top page boundary: "${head}"; the preceding wording is missing from this page.`;
+
+test('missing preceding context is resolved only for the independently read exact opening, with no other unreadable evidence', () => {
+  assert.equal(onlyMissingPrecedingContext(`Applications\n\n${head}`, [topIssue], head), true);
+  assert.equal(onlyMissingPrecedingContext(head, [topIssue], head), true);
+  for (const [text, issues, quote] of [
+    [head, [topIssue, 'Unreadable safety warning'], head],
+    [head, [topIssue + ' Additional values are missing.'], head],
+    [head, [topIssue], 'Invented continuation'],
+    ['Unrelated opening sentence.\n' + head, [topIssue], head],
+    [head, ['The top line is actually clipped and unreadable.'], head],
+  ]) assert.equal(onlyMissingPrecedingContext(text, issues, quote), false);
+});
 const whole = (page, file = `image-${page - 1}.png`) => ({
   file,
   label: `Page ${page}, region x=0 y=0 width=800 height=600`,
@@ -363,6 +376,52 @@ test("following-page failure cannot publish or cache the provisional TARGET evid
   assert.equal(await fs.stat(path.join(f.work, "conversion.json")).catch(() => null), null);
   const audit = JSON.parse(await fs.readFile(path.join(f.work, "image-0.png.continuation.json"), "utf8"));
   assert.equal(audit.verification.status, "following_incomplete");
+  await assert.rejects(f.run(), /Unresolved visual evidence/);
+  assert.equal(f.requests.length, 3, 'a cached contextual review cannot waive unreadable next-page content or spend again');
+});
+
+test('normal top-page continuation is verified without omitting content; old pending contextual evidence retries without model calls', { timeout: 30000 }, async t => {
+  const f = await fixture(t, (_req, res, body, call) => {
+    assert.equal(body.messages[0].content.includes('Missing preceding context on this page alone'), call === 3,
+      'context guidance requires a verified preceding-page review, not merely a page break');
+    respond(res, call === 1 ? incomplete : call === 2 ? reviewed : { complete: false, text: `Applications\n\n${head}`, issues: [topIssue] });
+  });
+  let converted = await f.run();
+  assert.equal(f.requests.length, 3);
+  assert.equal(converted.visualResolutions, undefined); assert.equal(converted.automaticOmissions, undefined);
+  assert.match(converted.coverage.join('\n'), /opening sentence independently verified/);
+  assert.match(converted.markdown, /thickness not exceeding 1.5 mm/);
+  let audit = JSON.parse(await fs.readFile(path.join(f.work, 'image-0.png.continuation.json'), 'utf8'));
+  assert.equal(audit.verification.status, 'verified');
+  assert.deepEqual(audit.verification.resolvedPrecedingContextIssues, [topIssue]);
+  // Restore the pre-fix on-disk state: a valid contextual quote pair, a generic
+  // pending TARGET and an independently transcribed head flagged only for its
+  // preceding-page context. No new vision result may be needed on Re-Sync.
+  const { visualIssue } = await import('../dist/knowledge-sync/visual-review.js');
+  const first = JSON.parse(await fs.readFile(path.join(f.work, 'image-0.png.json'), 'utf8'));
+  const second = JSON.parse(await fs.readFile(path.join(f.work, 'image-1.png.json'), 'utf8'));
+  await fs.writeFile(path.join(f.work, 'image-0.png.partial.json'), JSON.stringify(visualIssue(converted.sourceHash, first.hash,
+    'image-0.png', audit.target.label, tail, ['Cross-page continuation could not be independently verified because the following page contains unreadable evidence.'])));
+  await fs.writeFile(path.join(f.work, 'image-1.png.partial.json'), JSON.stringify(visualIssue(converted.sourceHash, second.hash,
+    'image-1.png', audit.following.label, `Applications\n\n${head}`, [topIssue])));
+  audit.verification = { status: 'following_incomplete' };
+  await fs.writeFile(path.join(f.work, 'image-0.png.continuation.json'), JSON.stringify(audit));
+  for (const file of ['conversion.json', 'image-0.png.json', 'image-1.png.json']) await fs.rm(path.join(f.work, file));
+  converted = await f.run();
+  assert.equal(f.requests.length, 3, 'reuse evidence without another contextual/model review');
+  assert.match(converted.coverage.join('\n'), /reused source\/pixel-bound continuation review/);
+  assert.equal(JSON.parse(await fs.readFile(path.join(f.work, 'image-0.png.continuation.json'), 'utf8')).verification.status, 'verified');
+  const validAudit = JSON.parse(await fs.readFile(path.join(f.work, 'image-0.png.continuation.json'), 'utf8'));
+  for (const field of ['sourceHash', 'target', 'following']) {
+    const tampered = structuredClone(validAudit);
+    if (field === 'sourceHash') tampered.sourceHash = '0'.repeat(64);
+    else tampered[field].imageHash = '0'.repeat(64);
+    await fs.writeFile(path.join(f.work, 'image-0.png.continuation.json'), JSON.stringify(tampered));
+    for (const file of ['conversion.json', 'image-0.png.json', 'image-1.png.json']) await fs.rm(path.join(f.work, file), { force: true });
+    await assert.rejects(f.run(), /Unresolved visual evidence/);
+    assert.equal(f.requests.length, 3, 'mismatched cached proof must not be accepted or silently resubmitted');
+    assert.equal(await fs.stat(path.join(f.work, 'image-0.png.json')).catch(() => null), null);
+  }
 });
 
 test("review and following-page verification remain within the original request budget", { timeout: 30000 }, async t => {

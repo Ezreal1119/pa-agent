@@ -23,6 +23,21 @@ const native = { spans: [
 const repair = { issueIndex: 0, visibleQuote: prefix, nativeQuote: quote, spanIds: [0, 1] };
 const result = { complete: true, repairs: [repair] };
 
+test('native text recovery recognizes incomplete icon descriptions without admitting missing icon shapes or mixed failures', () => {
+  for (const issue of [
+    "The table description for the down-arrow icon is incomplete: 'Device is downloading data when animated and download is' stops inside the cell without a visible continuation.",
+    "The table description for the key icon is incomplete: 'Device is connected to or disconnected from virtual private' stops inside the cell without a visible continuation.",
+    'The sentence stops without its continuation.',
+  ]) assert.equal(nativeRecoveryEligible([issue]), true, issue);
+  for (const issue of [
+    'The icon is incomplete.', 'The text is incomplete and an icon is missing.',
+    'The description for the key icon is incomplete and another icon is unreadable.',
+    'The diagram is incomplete.', 'The warning label text is incomplete.',
+  ]) assert.equal(nativeRecoveryEligible([issue]), false, issue);
+  assert.equal(verifyNativeRepairs(prefix,
+    ["The table description for the down-arrow icon is incomplete; the sentence stops without a visible continuation."], native, result), quote);
+});
+
 test('native recovery accepts only exact, local, prefix-preserving repairs for all issues', () => {
   assert.equal(verifyNativeRepairs(`Download | ${prefix} |`, [issue], native, result), `Download | ${quote} |`);
   for (const value of [

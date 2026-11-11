@@ -23,14 +23,14 @@ export type PartialVisualEvidence = VisualIssue & {
   text: string;
 };
 export type AutomaticVisualOmission = {
-  policyVersion: 1;
+  policyVersion: 1 | 2;
   issueId: string;
   sourceHash: string;
   imageHash: string;
   file: string;
   label: string;
   issues: string[];
-  decisions: { kind: "decorative" | "duplicate"; reason: string; evidenceFile?: string; quote?: string }[];
+  decisions: { kind: "decorative" | "duplicate" | "incidental"; reason: string; evidenceFile?: string; quote?: string }[];
 };
 export type VisualReviewSubmission = {
   revision: string;

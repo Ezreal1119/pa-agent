@@ -1,4 +1,5 @@
 import type { AutomaticVisualOmission, PartialVisualEvidence } from "./visual-review.js";
+import { incidentalScreenshot } from "./incidental-screenshots.js";
 
 export type CompleteVisualEvidence = { file: string; label: string; text: string };
 const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -12,11 +13,13 @@ const visualLoss = /\b(?:blurred|clipped|cropped|truncated|cut\s+off|missing|unr
 
 /** Every issue in a region must be harmless; never partially waive a mixed issue. */
 export function automaticMinorOmission(
-  partial: PartialVisualEvidence, complete: CompleteVisualEvidence[],
+  partial: PartialVisualEvidence, complete: CompleteVisualEvidence[], nativeText = "",
 ): AutomaticVisualOmission | undefined {
   if (!partial.issues.length) return;
   const decisions: AutomaticVisualOmission["decisions"] = [];
   for (const issue of partial.issues) {
+    const incidental = incidentalScreenshot(issue, partial.text, nativeText);
+    if (incidental) { decisions.push(incidental); continue; }
     if (protectedContent.test(issue) || uncertain.test(issue) || !visualLoss.test(issue)) return;
     if (decorative.test(issue)) {
       // A decorative object containing unreadable text/numbers is not proven
@@ -38,7 +41,7 @@ export function automaticMinorOmission(
       decisions.push({ kind: "duplicate", reason: "The exact repeated text is retained here and in another independently completed visual region.", evidenceFile: evidence.file, quote });
     } else return;
   }
-  return { policyVersion: 1, issueId: partial.id, sourceHash: partial.sourceHash, imageHash: partial.imageHash,
+  return { policyVersion: 2, issueId: partial.id, sourceHash: partial.sourceHash, imageHash: partial.imageHash,
     file: partial.file, label: partial.label, issues: partial.issues, decisions };
 }
 
