@@ -414,6 +414,18 @@ function visualReviewPanel(job, item) {
     const chosen = controls.filter(c => c.draft.action);
     next.disabled = busy || !chosen.length || chosen.some(c => c.draft.action === "supplement" && !c.draft.text.trim());
   };
+  const acceptAll = button("Accept all omissions", () => {
+    for (const control of controls) {
+      control.draft.action = "accept";
+      for (const radio of control.radios) radio.checked = radio.value === "accept";
+      control.input.disabled = true;
+    }
+    update();
+  });
+  acceptAll.disabled = busy;
+  const bulkActions = el("div", undefined, "sync-feedback-actions");
+  bulkActions.append(acceptAll);
+  panel.append(bulkActions);
   for (const issue of review.issues) {
     const box = el("section", undefined, "sync-visual-issue");
     box.append(el("strong", issue.label));
@@ -432,8 +444,8 @@ function visualReviewPanel(job, item) {
     const draftKey = `${item.id}/${issue.id}`;
     const draft = visualDrafts.get(draftKey) || { action: "", text: "" };
     visualDrafts.set(draftKey, draft);
-    controls.push({ issue, draft });
     const options = el("fieldset"), input = el("textarea"), radios = [];
+    controls.push({ issue, draft, input, radios });
     options.append(el("legend", "How should this region be handled?"));
     for (const [value, title] of [["accept", "Accept this specific omission"], ["supplement", "Supply the missing text"]]) {
       const label = el("label"), radio = el("input");
