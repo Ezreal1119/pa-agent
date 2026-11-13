@@ -1,4 +1,5 @@
 import { DEFAULT_BOT_NAME } from './config.mjs';
+import { QUESTION_UUID, questionDetail } from './question-details.mjs';
 
 export const WELCOME = `Hi，我是 AI Patrick 🤖
 
@@ -74,6 +75,10 @@ export function commandInput(body, scope, userId, botName = DEFAULT_BOT_NAME) {
   };
   collect(body);
   const text = parts.join('\n').trim();
+  if (/^\/patrick_detail(?:\s|$)/u.test(text)) {
+    const id = raw !== undefined && !body.quote ? text.split(/\s+/) : [];
+    return { kind: 'detail', ...(id.length === 2 && QUESTION_UUID.test(id[1]) ? { id: id[1].toLowerCase() } : {}) };
+  }
   const firmwareText = firmwareInputText(body, text, botName);
   // Check the cleaned firmware body, not line breaks used to place @bot on its
   // own line. Keep raw length/NUL checks and never merge substantive text lines.
@@ -119,6 +124,7 @@ export async function processControl(bridge, job) {
     const route = `/role?scope=${encodeURIComponent(job.key)}`;
     let text;
     switch (job.control.kind) {
+      case 'detail': text = await questionDetail(bridge, job, job.control.id, signal); break;
       case 'firmware': {
         let result;
         try {
@@ -190,7 +196,7 @@ export async function processControl(bridge, job) {
     if (bridge.closing || !bridge.isCurrent(job)) return;
     // Idempotent role writes and persisted reset progress can safely retry. Do
     // not report success or allow later questions past a failed control.
-    if (job.state !== 'delivering' && ['filesQuery', 'balance'].includes(job.control?.kind)) {
+    if (job.state !== 'delivering' && ['filesQuery', 'balance', 'detail'].includes(job.control?.kind)) {
       job.result = { text: '查询未完成或已超时，请重新发送命令重试。', files: [] }; job.state = 'delivering';
     }
     if (error.status >= 400 && error.status < 500 && ![409, 429].includes(error.status)) {

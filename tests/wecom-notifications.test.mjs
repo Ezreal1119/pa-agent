@@ -79,6 +79,15 @@ test('unsent cached notification text is rebuilt with the current display name a
  assert.equal(f.messages.length,1);assert.match(f.messages[0].text,/对话人：胡涵/);assert.ok(!f.messages[0].text.includes('raw-user-id'));
 });
 
+test('question UUID remains unchanged through notification retry/restart and duplicates',async t=>{
+ const f=await setup(t);f.connect(false);
+ const sender={...who('customer'),questionId:randomUUID()};
+ await f.observer.enqueue(sender,{text:'Question',attachments:[]});await f.restart();
+ await f.observer.enqueue({...sender,questionId:randomUUID()},{text:'Duplicate',attachments:[]});
+ f.connect(true);f.observer.pump();await f.observer.idle();
+ assert.equal(f.messages.length,1);assert.ok(f.messages[0].text.includes(`问题 UUID：${sender.questionId}`));assert.ok(f.messages[0].text.includes(`/patrick_detail ${sender.questionId}`));
+});
+
 test('names saved through the real administrator API reach private/group Bridge notifications without User IDs',async t=>{
  const {createWebServer}=await import('../dist/web/server.js');const {AgentApi}=await import('../integrations/wecom-bridge/api.mjs');const {once}=await import('node:events');
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'wecom-named-http-'));const token='fixture-bridge-token-'.repeat(3);

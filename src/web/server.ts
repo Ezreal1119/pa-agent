@@ -30,6 +30,7 @@ import { DEFAULT_SKILLS, ON_DEMAND_SKILLS, loadRunKnowledge } from "../agent/kno
 import { REASONING_MODES, isReasoningMode, isDeepSeekModel, applyDeepSeekReasoning, type ReasoningMode } from "../agent/reasoning.js";
 import { getRunMetrics, readRunMetrics, RUN_METRICS_TYPE, saveRunMetric, sdkTokens, visionTokens, type RunMetric } from "./run-metrics.js";
 import { getToolRuns, publicRunMetrics } from "./tool-calls.js";
+import { wecomRunDetail } from "./run-detail.js";
 import { chatHistory, ChatHistoryError, CHAT_HISTORY_PAGE_SIZE, historyPageSize } from "./chat-history.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
@@ -87,7 +88,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
-type RecordState = { userRoleStyle?: string; channel?: "mcp" | "http-api"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; mutating?: boolean; cancelQueued?: () => void };
+type RecordState = { userRoleStyle?: string; channel?: "mcp" | "http-api"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; activeRunText?: string; mutating?: boolean; cancelQueued?: () => void };
 export interface WebOptions { httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
@@ -454,6 +455,17 @@ export async function createWebServer(options: WebOptions = {}) {
       if (machine) {
         if (!bridge.authenticated(req.headers.authorization)) throw new HttpError(401, "WeCom API credentials are invalid or not configured.");
         const route = url.pathname.slice("/api/wecom".length);
+        const detail = route.match(/^\/sessions\/([\w-]+)\/runs\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/detail$/);
+        if (detail) {
+          if (method !== "GET" || url.search) throw new HttpError(400, "Run details require GET without query parameters.");
+          if (!bridge.owns(detail[1]!)) throw new HttpError(404, "WeCom conversation not found.");
+          const item = await findRecord(detail[1]!);
+          const target = await managedFile(item);
+          const manager = item.session?.sessionManager ?? (target?.exists ? SessionManager.open(target.file, sessionsDir, cwd) : undefined);
+          const result = manager && wecomRunDetail(manager, detail[2]!, item.activeRunId, item.activeRunText);
+          if (!result) throw new HttpError(404, "WeCom answer not found.");
+          return json(res, 200, result);
+        }
         if (route.startsWith("/sync-notifications/")) {
           if (method !== "POST" || url.search) throw new HttpError(400, "Sync notifications require POST without query parameters.");
           const input = await readBody(req, 4096);
@@ -999,6 +1011,7 @@ export async function createWebServer(options: WebOptions = {}) {
             res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
             res.flushHeaders();
             item.activeRunId = metric.id;
+            if (machine) item.activeRunText = "";
             saveRunMetric(session, metric);
             if (effort !== "provider-default") session.setThinkingLevel(effort);
             const send = (event: string, data: unknown) => { if (!res.destroyed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
@@ -1035,6 +1048,7 @@ export async function createWebServer(options: WebOptions = {}) {
                 saveRunMetric(session, metric);
               }
               if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+                if (machine) item.activeRunText += event.assistantMessageEvent.delta;
                 metric.firstTextMs ??= Math.round(performance.now() - started);
                 send("text", { delta: event.assistantMessageEvent.delta });
               }
@@ -1094,7 +1108,7 @@ export async function createWebServer(options: WebOptions = {}) {
                 const history = chatHistory(session, files, undefined, historyLimit === undefined ? undefined : { limit: historyLimit });
                 send("done", { ...history, context: item.context, failed: metric.status !== "completed", run: history.runs.find(r => r.id === metric.id), runs: historyLimit === undefined ? history.runs : history.runs.slice(-5), files });
               } finally {
-                finished = true; item.activeRunId = undefined; clearInterval(heartbeat); res.off("close", disconnect); unsubscribe(); session.agent.onPayload = priorPayload;
+                finished = true; item.activeRunId = undefined; delete item.activeRunText; clearInterval(heartbeat); res.off("close", disconnect); unsubscribe(); session.agent.onPayload = priorPayload;
                 if (!res.destroyed) res.end();
               }
             }

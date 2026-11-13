@@ -261,6 +261,66 @@ test('hidden balance preserves pending modes/uploads and legacy role state; look
  await f.bridge.receive('bot',message('c','/patrick_balance'));await f.bridge.idle();assert.equal(JSON.stringify(f.store.data.conversations[keyOf('c')].pending),pending);
 });
 
+test('question notification UUID retrieves exactly its run, survives restart and never enters the Agent or pending role mode',async t=>{
+ const f=await setup(t,{notifyUserId:'owner'});
+ const original=message('customer','First question');
+ await f.bridge.receive('bot',original);await f.bridge.idle();await f.bridge.observer.idle();
+ const source=f.store.data.jobs.find(job=>job.msgid===original.body.msgid);
+ assert.match(f.client.texts.find(text=>text.includes('/patrick_detail')),new RegExp(`/patrick_detail ${source.id}`));
+ assert.equal(source.detailRecipient,'owner');
+ await f.bridge.receive('bot',message('customer','Later question'));await f.bridge.idle();
+ const json=f.api.json;const calls=[];
+ f.api.json=async(route,...args)=>{if(route.endsWith('/detail')){calls.push(route);return{status:'completed',answer:'Original complete answer 中文😀'.repeat(1500)};}return json(route,...args);};
+ f.store.data.scopes[keyOf('owner')]={generation:0,awaitingUser:'owner',awaitingMode:'role'};
+ await f.store.save();await f.restart();
+ const before=f.client.texts.length;
+ await f.bridge.receive('bot',message('owner',`/patrick_detail ${source.id.toUpperCase()}`));await f.bridge.idle();
+ assert.deepEqual(calls,[`/sessions/${source.sessionId}/runs/${source.runId}/detail`]);
+ const answer=f.client.texts.slice(before).join('');assert.ok(answer.includes('Original complete answer'));assert.ok(answer.endsWith('Original complete answer 中文😀'.repeat(1500)));
+ assert.ok(f.client.texts.slice(before).every(text=>Buffer.byteLength(text)<=18000));
+ assert.equal(f.runs.length,2);assert.equal(f.store.data.scopes[keyOf('owner')].awaitingMode,'role');
+ source.created=Date.now()-8*86400000;
+ const retained=f.store.data.jobs.find(job=>job.id===source.id);retained.created=source.created;retained.finished=source.created;
+ await f.bridge.maintenance();assert.ok(f.store.data.jobs.some(job=>job.id===source.id));
+});
+
+test('question detail rejects other people, groups, bots, changed recipients and invalid UUIDs without querying or inferring',async t=>{
+ const f=await setup(t,{notifyUserId:'owner'});const original=message('customer','Private answer');
+ await f.bridge.receive('bot',original);await f.bridge.idle();
+ const source=f.store.data.jobs.find(job=>job.msgid===original.body.msgid);const json=f.api.json;let calls=0;
+ f.api.json=async(route,...args)=>{if(route.endsWith('/detail')){calls++;return{status:'completed',answer:'SECRET ANSWER'};}return json(route,...args);};
+ for(const [bot,user,chat,id] of [['bot','stranger',undefined,source.id],['bot','owner','group',source.id],['other','owner',undefined,source.id],['bot','owner',undefined,'bad-uuid'],['bot','owner',undefined,randomUUID()]]){
+  await f.bridge.receive(bot,message(user,`/patrick_detail ${id}`,chat));await f.bridge.idle();
+ }
+ f.bridge.config.notifyUserId='new-owner';
+ await f.bridge.receive('bot',message('owner',`/patrick_detail ${source.id}`));await f.bridge.idle();
+ await f.bridge.receive('bot',message('new-owner',`/patrick_detail ${source.id}`));await f.bridge.idle();
+ assert.equal(calls,0);assert.equal(f.runs.length,1);assert.ok(!f.client.texts.some(text=>text.includes('SECRET ANSWER')));
+});
+
+test('queued questions and file-only notifications have readable status; detail commands preserve pending uploads',async t=>{
+ const f=await setup(t,{notifyUserId:'owner'});f.bridge.disconnected('bot');
+ const original=message('customer','Queued question');await f.bridge.receive('bot',original);
+ const source=f.store.data.jobs.find(job=>job.msgid===original.body.msgid);
+ const {questionDetail}=await import('../integrations/wecom-bridge/question-details.mjs');
+ const requester={botId:'bot',userId:'owner',key:keyOf('owner')};
+ assert.match(await questionDetail(f.bridge,requester,source.id,new AbortController().signal),/排队/);
+ f.bridge.authenticated('bot');await f.bridge.idle();
+ const file=message('customer','');file.body.msgtype='file';file.body.file={url:'https://example.invalid/file'};
+ await f.bridge.receive('bot',file);await f.bridge.idle();
+ const attachment=f.store.data.jobs.find(job=>job.msgid===file.body.msgid);
+ const pending=JSON.stringify(f.store.data.conversations[keyOf('customer')].pending);
+ await f.bridge.receive('bot',message('owner',`/patrick_detail ${attachment.id}`));await f.bridge.idle();
+ assert.match(f.client.texts.at(-1),/已收到/);assert.equal(JSON.stringify(f.store.data.conversations[keyOf('customer')].pending),pending);assert.equal(f.runs.length,1);
+});
+
+test('prepared question detail is not delivered to the former recipient after restart',async t=>{
+ const f=await setup(t,{notifyUserId:'owner'});const query=message('owner',`/patrick_detail ${randomUUID()}`);
+ f.store.data.jobs.push({id:randomUUID(),botId:'bot',userId:'owner',target:'owner',key:keyOf('owner'),msgid:query.body.msgid,created:Date.now(),state:'delivering',control:{kind:'detail'},generation:0,frame:{headers:query.headers},streamId:randomUUID(),sentParts:0,sentFiles:[],result:{text:'PRIVATE STORED ANSWER',files:[]}});
+ await f.store.save();f.bridge.config.notifyUserId='new-owner';await f.restart();await f.bridge.idle();
+ assert.ok(!f.client.texts.includes('PRIVATE STORED ANSWER'));assert.match(f.client.texts.at(-1),/通知接收账号/);assert.equal(f.runs.length,0);
+});
+
 test('direct lookup result delivery survives restart without requery and reset cancels late results',async t=>{
  const f=await setup(t);const calls=commandApi(f);await f.bridge.receive('bot',message('a','/files'));await f.bridge.idle();
  const reply=f.client.replyStream;const send=f.client.sendMessage;

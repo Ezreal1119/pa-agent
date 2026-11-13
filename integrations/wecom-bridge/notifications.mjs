@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {splitUtf8, DAY} from './protocol.mjs';
+import {QUESTION_UUID} from './question-details.mjs';
 
 const escape = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replace(/[\\`*_{}\[\]()#!|]/g,'\\$&');
 const clock = new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
@@ -11,6 +12,7 @@ export function notificationText(entry, name) {
   if(entry.chatType==='group')lines.push(`群聊：${escape(entry.chatId)}`);
   lines.push(`时间：${clock.format(new Date(entry.at))}`,'',...(entry.text || '（仅发送附件）').split('\n').map(line=>`> ${escape(line)}`));
   if(entry.attachments?.length)lines.push('',`附件：${entry.attachments.map(escape).join('、')}`);
+  if(typeof entry.questionId==='string' && QUESTION_UUID.test(entry.questionId))lines.push('',`问题 UUID：${entry.questionId}`,`查看回答：/patrick_detail ${entry.questionId}`);
   return lines.join('\n');
 }
 export function notificationInput(body) {
@@ -60,7 +62,7 @@ export class MessageObserver {
     const target=this.recipientFor(who.botId);
     const notifyTo=target && who.userId!==target ? target : undefined;
     const [,chatType,chatId]=JSON.parse(who.key);
-    const entry={botId:who.botId,userId:who.userId,msgid:who.msgid,chatType,...(chatType==='group'?{chatId}:{}),at:this.now(),...(notifyTo?{notifyTo,text:input.text,attachments:input.attachments,ready:!input.attachments.length}:{}),sent:0,attempts:0};
+    const entry={botId:who.botId,userId:who.userId,msgid:who.msgid,chatType,...(chatType==='group'?{chatId}:{}),at:this.now(),...(typeof who.questionId==='string' && QUESTION_UUID.test(who.questionId)?{questionId:who.questionId}:{}),...(notifyTo?{notifyTo,text:input.text,attachments:input.attachments,ready:!input.attachments.length}:{}),sent:0,attempts:0};
     this.entries.push(entry);await this.save();this.pump();
   }
   async attachments(botId,msgid,names){

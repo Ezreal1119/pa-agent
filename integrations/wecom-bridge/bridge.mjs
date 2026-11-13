@@ -9,6 +9,7 @@ import { MessageObserver, notificationInput } from './notifications.mjs';
 import { commandInput, processControl } from './commands.mjs';
 import { BalanceNotifier } from './balance-notifications.mjs';
 import { FirmwareNotifier } from './firmware-notifications.mjs';
+import { canReadDetails, notificationRecipient } from './question-details.mjs';
 
 const live = job => !['done', 'interrupted'].includes(job.state);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,7 +31,7 @@ export class WecomBridge {
   async start() {
     try {
       this.observer = await new MessageObserver({ directory: this.store.directory, api: this.api, clients: this.clients,
-        isConnected: botId => this.connected.has(botId), recipientFor: botId => this.config.bots.find(bot => bot.botId === botId)?.notifyUserId ?? this.config.notifyUserId,
+        isConnected: botId => this.connected.has(botId), recipientFor: botId => notificationRecipient(this.config, botId),
         log: { warn: (...values) => this.log.warn(...values.map(value => this.safeError(value))) } }).open();
     } catch (error) { this.log.warn('WeCom observer unavailable; chat remains enabled:', this.safeError(error)); }
 
@@ -80,10 +81,11 @@ export class WecomBridge {
     const previous = this.store.data.jobs.find(job => job.botId === botId && job.msgid === who.msgid);
     if (previous) return; // Persist before processing, including same-process duplicate callbacks.
     const notice = notificationInput(frame.body);
-    void this.observer?.enqueue(who, notice).catch(error => this.log.warn('WeCom observer:', this.safeError(error)));
+    const observe = questionId => { void this.observer?.enqueue({ ...who, ...(questionId ? { questionId } : {}) }, notice).catch(error => this.log.warn('WeCom observer:', this.safeError(error))); };
     const scope = this.scope(who.key);
     const control = commandInput(frame.body, scope, who.userId, this.config.bots.find(bot => bot.botId === botId)?.name);
     if (control) {
+      observe();
       const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'command', control, generation: scope.generation, sentParts: 0, sentFiles: [] };
       if (control.kind === 'firmware' && (!scope.firmwareUser || scope.firmwareUser === who.userId || scope.firmwareUntil <= Date.now())) {
         scope.firmwareUser = who.userId; scope.firmwareUntil = Date.now() + 5 * 60000;
@@ -100,7 +102,7 @@ export class WecomBridge {
           old.state = 'done'; old.finished = Date.now();
           this.jobControllers.get(old.id)?.abort();
         }
-      } else if (!['notice', 'welcome', 'balance', 'firmware'].includes(control.kind)) {
+      } else if (!['notice', 'welcome', 'balance', 'firmware', 'detail'].includes(control.kind)) {
         if (['open', 'openFiles'].includes(control.kind)) {
           scope.awaitingUser = who.userId;
           scope.awaitingMode = control.kind === 'openFiles' ? 'files' : 'role';
@@ -113,10 +115,12 @@ export class WecomBridge {
       this.store.data.jobs.push(job); await this.store.save(); this.pump(); return;
     }
     let input;
-    try { input = inbound(frame.body); } catch (error) { await this.send(who, error.message); return; }
-    if (this.store.data.jobs.filter(live).length >= this.config.queueLimit + this.config.concurrency) { await this.send(who, '当前排队人数较多，请稍后再发送。'); return; }
-    const job = { ...who, id: randomUUID(), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'receiving', generation: scope.generation, text: input.text, staged: [], attachmentIds: [], sentParts: 0, sentFiles: [] };
+    try { input = inbound(frame.body); } catch (error) { observe(); await this.send(who, error.message); return; }
+    if (this.store.data.jobs.filter(live).length >= this.config.queueLimit + this.config.concurrency) { observe(); await this.send(who, '当前排队人数较多，请稍后再发送。'); return; }
+    const recipient = notificationRecipient(this.config, botId);
+    const job = { ...who, id: randomUUID(), ...(recipient && recipient !== who.userId ? { detailRecipient: recipient } : {}), created: Date.now(), frame: { headers: frame.headers }, streamId: randomUUID(), state: 'receiving', generation: scope.generation, text: input.text, staged: [], attachmentIds: [], sentParts: 0, sentFiles: [] };
     this.store.data.jobs.push(job); await this.store.save();
+    observe(job.detailRecipient ? job.id : undefined);
     const client = this.client(botId);
     // This acknowledgement is best-effort; durable result delivery below is retried.
     if (this.isCurrent(job)) this.trackProgress(job, client.replyStream(job.frame, job.streamId, 'AI Thinking...', false).catch(() => {}));
@@ -282,6 +286,12 @@ export class WecomBridge {
   }
   async deliver(job, signal) {
     this.assertCurrent(job); signal.throwIfAborted();
+    // Recheck even when resuming an already prepared reply after a restart.
+    if (job.control?.kind === 'detail' && !canReadDetails(this.config, job)) {
+      job.result = { text: '此命令仅供当前机器人的消息通知接收账号在私聊中使用。', files: [] };
+      job.sentParts = 0;
+    }
+    if (job.detailRecipient && !job.runId) job.detailNotice = job.result.text;
     const chunks = splitUtf8(job.result.text);
     for (let index = job.sentParts ?? 0; index < chunks.length; index++) {
       this.assertCurrent(job); signal.throwIfAborted();
@@ -327,7 +337,7 @@ export class WecomBridge {
       if (live(job) && job.created < now - 30 * DAY && !this.active.has(job.key)) { job.state = 'done'; delete job.result; delete job.text; delete job.outputs; }
       if (job.state === 'done' && !this.receiving.size) await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true });
     }
-    const completed = new Set(this.store.data.jobs.filter(job => !live(job) && (job.finished ?? job.created) >= now - 7 * DAY).slice(-10000).map(job => job.id));
+    const completed = new Set(this.store.data.jobs.filter(job => !live(job) && (job.finished ?? job.created) >= now - (job.detailRecipient ? 30 : 7) * DAY).slice(-10000).map(job => job.id));
     this.store.data.jobs = this.store.data.jobs.filter(job => live(job) || completed.has(job.id));
     await this.store.save();
   }

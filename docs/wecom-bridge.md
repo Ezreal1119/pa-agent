@@ -216,7 +216,20 @@ WECOM_NOTIFY_USER_ID=你的企微UserID
 > 请按 i9200 资料填写这份标书。
 
 附件：需求表.xlsx
+
+问题 UUID：xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+查看回答：/patrick_detail xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
+
+### 按问题 UUID 查看 Agent 回答
+
+已接收进入问答队列的普通提问会在上述通知中附上问题 UUID 和可复制的 `/patrick_detail <uuid>`。用通知接收账号私聊发送该通知的机器人，即可获取该次提问的 Agent 回答：排队时显示尚未开始，运行时显示当前已输出的正文，完成后显示完整回答，失败、停止或重启中断会标明状态。再次查询仍定位同一次提问，不返回后续追问的答案。长回答使用现有分段投递，不重新推理、不占用 Agent 执行名额。仅发送附件时会显示附件接收及等待要求的状态。
+
+命令只对该机器人当前配置的通知接收账号开放，群聊和其他用户不能查询；多机器人的 `notifyUserId` 覆盖规则保持一致。问题还绑定通知产生时的接收账号，后来更换接收人不会将旧问题开放给新接收人。已经准备好但尚未投递的查询结果在恢复发送前也重新检查接收账号。查询仅包含回答正文和状态，不返回模型思考、工具参数/结果、系统提示词或附件内容，不自动重新发送附件。
+
+UUID 使用现有 Bridge 任务 ID，任务持久保存到 `.data/wecom/bridge-state.json`，并精确关联后端 sessionId/runId；通知重试、服务重启及 `/clear` 新建会话后仍可查询保留中的旧回答。带查询关联的已完成任务保留最多30天，仍受现有最近10000条已完成任务上限约束；其他任务继续保留7天。后端会话过期或被管理员删除后，查询明确返回记录不可用。升级前的通知没有 UUID，不自动回补；队列拒绝或不支持的消息继续通知，但不附没有实际问答任务的查询编号。
+
+部署时构建并重启 `product-expert.service` 和 `wecom-bridge.service`。复用已有 `WECOM_NOTIFY_USER_ID` / `WECOM_BOTS[].notifyUserId`，无新凭据或依赖。后端新增仅供同机 Bridge 使用的 `GET /api/wecom/sessions/:sessionId/runs/:runId/detail`，沿用 Bridge Bearer、loopback Host/Origin 和会话归属校验。
 
 “对话人”取发送者的最新备注，未备注显示 User ID；不再显示“会话”名称，不依赖 Web 对话重命名。时间固定为北京时间。通知只包含用户消息、附件名称/类型和身份，不含助手回答、推理、工具结果或文件内容。一般在收到消息后发送；附件最多等5秒取得文件名，未能及时取得时先显示类型，不等待 Agent 回答。群里仅转发机器人实际收到的回调，不能监听未发给机器人的消息。
 

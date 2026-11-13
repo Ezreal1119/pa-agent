@@ -29,6 +29,50 @@ async function setup(t,limits={}){
 }
 async function waitFor(fn){const end=Date.now()+5000;while(!await fn()){if(Date.now()>end)throw new Error('wait timeout');await new Promise(r=>setTimeout(r,10));}}
 
+test('WeCom run detail shows live text and the exact historical round after followups/restart without model calls', {timeout:30000},async t=>{
+ const f=await setup(t,{maxConcurrentRuns:1});const {id}=await f.api.json('/sessions','POST',{});
+ const sender={botId:'bot',userId:'customer',chatType:'single',at:Date.now()};
+ let firstRun,finish;
+ f.setHandler((_body,res)=>{
+  res.writeHead(200,{'content-type':'text/event-stream'});
+  const chunk=(delta,finish_reason=null)=>res.write(`data: ${JSON.stringify({id:'live',model:'fixture',choices:[{index:0,delta,finish_reason}]})}\n\n`);
+  chunk({role:'assistant'});chunk({content:'实时回答'});
+  finish=()=>{if(res.writableEnded)return;chunk({content:'，第一轮完成'});chunk({},'stop');res.end('data: [DONE]\n\n');};
+ });
+ f.beforeCleanup(()=>finish?.());
+ let sawText=false;
+ const pending=f.api.run(id,'First question',[],async(event,value)=>{if(event==='start')firstRun=value.run.id;if(event==='text')sawText=true;},undefined,sender);
+ await waitFor(()=>firstRun && sawText);
+ const route=`/sessions/${id}/runs/${firstRun}/detail`;
+ assert.deepEqual(await f.api.json(route),{status:'running',answer:'实时回答'});
+ assert.equal(f.requestCount,1);assert.equal((await f.api.json('/status')).queue.active,1);
+ finish();await pending;
+ f.setHandler((_body,res)=>modelReply(res,'第二轮回答'));
+ await f.api.run(id,'Followup',[],()=>{},undefined,sender);
+ assert.deepEqual(await f.api.json(route),{status:'completed',answer:'实时回答，第一轮完成'});
+ assert.equal(f.requestCount,2);
+ await f.restart();
+ // Reading an archived answer does not require available expert resources or create a runtime.
+ await fs.rename(path.join(f.dataDir,'urovo-product-expert/SKILL.md'),path.join(f.dataDir,'urovo-product-expert/SKILL.saved'));
+ assert.deepEqual(await f.api.json(route),{status:'completed',answer:'实时回答，第一轮完成'});assert.equal(f.requestCount,2);
+ await assert.rejects(f.api.json(`/sessions/${id}/runs/${randomUUID()}/detail`),e=>e.status===404);
+ await assert.rejects(f.api.json(route+'?path=secret'),e=>e.status===400);
+ await assert.rejects(f.api.json(route,'POST',{}),e=>e.status===400);
+ assert.equal((await fetch(f.base+'/api/wecom'+route)).status,401);
+ await f.api.json(`/sessions/${id}`,'DELETE');await assert.rejects(f.api.json(route),e=>e.status===404);
+});
+
+test('WeCom run detail refuses browser-owned sessions and browser runs within a Bridge conversation',async t=>{
+ const f=await setup(t);const browser=await f.browser();
+ const webId=(await(await browser('/api/sessions','POST',{})).json()).id;
+ const webRun=await(await browser(`/api/sessions/${webId}/run`,'POST',{text:'Web question'})).text();
+ const runId=JSON.parse(webRun.match(/event: start\ndata: (.*)/)[1]).run.id;
+ await assert.rejects(f.api.json(`/sessions/${webId}/runs/${runId}/detail`),e=>e.status===404);
+ const {id}=await f.api.json('/sessions','POST',{});
+ const done=await f.api.run(id,'Legacy question without WeCom sender',[],()=>{});
+ await assert.rejects(f.api.json(`/sessions/${id}/runs/${done.run.id}/detail`),e=>e.status===404);
+});
+
 test('WeCom token is scoped, cookie independent, redacted, and ownership persists through restart', {timeout:30000},async t=>{
  const f=await setup(t);const status=await f.api.json('/status');assert.equal(status.configured,true);assert.ok(!JSON.stringify(status).includes(TOKEN));assert.equal(status.token,undefined);
  assert.equal((await fetch(f.base+'/api/wecom/status')).status,401);
