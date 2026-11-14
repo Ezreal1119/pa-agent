@@ -77,18 +77,75 @@ test('switch off after preview prevents confirmation; switch off after accepted 
 test('lost submit response reconciles by idempotency key, including service restart', async t => {
   const f = await fixture(t, { loseSubmit: true }); const flow = await f.query();
   await f.service.command(input('确认', false)); await f.service.tick();
-  await until(() => f.submits === 1); await until(async () => (await f.state()).active.offline);
+  await until(() => f.submits === 1); await until(async () => (await f.state()).active.pollFailures === 1);
   await f.restart(); await f.service.tick();
   await until(async () => (await f.state()).active?.jobId);
   assert.equal(f.submits, 1); assert.equal(f.jobs.size, 1);
 });
 
-test('offline active job retains global slot and resumes the same job', async t => {
+test('transient poll failures retry silently and successful queries reset the failure count', async t => {
+  const f = await fixture(t); await f.confirm(await f.query());
+  const before = (await f.state()).notices.length;
+  for (const failures of [1, 2, 1]) {
+    f.ready = false;
+    for (let i = 0; i < failures; i++) await f.service.tick();
+    assert.equal((await f.state()).active.pollFailures, failures);
+    assert.ok(!(await f.state()).active.offline);
+    f.ready = true; await f.service.tick();
+    assert.equal((await f.state()).active.pollFailures, 0);
+    assert.equal((await f.state()).notices.length, before);
+  }
+  assert.equal(f.submits, 1);
+});
+
+test('three consecutive poll failures notify once across restart and resume the same job', async t => {
   const f = await fixture(t); await f.confirm(await f.query()); const id = (await f.state()).active.jobId;
-  f.ready = false; await f.service.tick(); assert.equal((await f.state()).active.jobId, id);
+  const before = (await f.state()).notices.length;
+  f.ready = false; await f.service.tick();
+  await f.restart(); await f.service.tick();
+  assert.equal((await f.state()).active.pollFailures, 2);
+  assert.equal((await f.state()).notices.length, before);
+  await f.service.tick();
+  assert.equal((await f.state()).active.jobId, id);
+  assert.equal((await f.state()).active.offline, true);
+  assert.match((await f.state()).notices.at(-1).text, /暂时无法获取固件任务进度.*任务已保留.*自动重试查询/);
+  assert.doesNotMatch((await f.state()).notices.at(-1).text, /维护中/);
+  await f.service.tick(); assert.equal((await f.state()).notices.length, before + 1);
   f.ready = true; await f.service.tick();
-  assert.match((await f.state()).notices.at(-1).text, /服务已恢复/); assert.equal(f.submits, 1);
+  assert.match((await f.state()).notices.at(-1).text, /进度查询已恢复/);
+  assert.equal((await f.state()).notices.length, before + 2);
+  assert.equal((await f.state()).active.pollFailures, 0);
+  await f.service.tick(); assert.equal((await f.state()).notices.length, before + 2);
+  assert.equal(f.submits, 1);
   assert.match((await f.service.command(input(name, true, owner('bob')))).text, /任务处理中/);
+  const job = [...f.jobs.values()][0]; job.state = 'succeeded';
+  job.result = { uploaded: true, filename: name, size: f.candidates[0].size, download_url: base + name };
+  await f.service.tick();
+  assert.equal((await f.state()).active, undefined);
+  assert.match((await f.state()).notices.at(-1).text, /下载并上传完成/);
+  assert.equal(f.submits, 1);
+});
+
+test('poll failures log task, operation, elapsed time and diagnostic codes without secrets', async t => {
+  const logs = []; t.mock.method(console, 'warn', (...args) => logs.push(args));
+  const f = await fixture(t); await f.confirm(await f.query());
+  const flow = (await f.state()).active;
+  const errors = [
+    Object.assign(new TypeError('fetch failed https://example.test/?token=secret-token'), { cause: Object.assign(new Error('Bearer secret-token'), { code: 'ECONNRESET' }) }),
+    new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    Object.assign(new Error('固件服务 HTTP 502'), { status: 502 }),
+  ];
+  for (const error of errors) { f.client.job = async () => { throw error; }; await f.service.tick(); }
+  assert.equal(logs.length, 3);
+  const diagnostics = logs.map(([, json]) => JSON.parse(json));
+  assert.equal(diagnostics[0].flowId, flow.id); assert.equal(diagnostics[0].jobId, flow.jobId);
+  assert.equal(diagnostics[0].operation, 'job'); assert.equal(diagnostics[0].stage, 'downloading');
+  assert.ok(diagnostics[0].elapsedMs >= 0);
+  assert.equal(diagnostics[0].error.causeCode, 'ECONNRESET');
+  assert.equal(diagnostics[1].error.name, 'TimeoutError');
+  assert.equal(diagnostics[2].error.status, 502); assert.equal(diagnostics[2].error.message, '固件服务 HTTP 502');
+  assert.deepEqual(diagnostics.map(d => d.failures), [1, 2, 3]);
+  assert.doesNotMatch(JSON.stringify(logs), /secret-token|Bearer|example\.test/);
 });
 
 test('fixed progress milestones include both download and upload without duplicates or catch-up spam', async t => {

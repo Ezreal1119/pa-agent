@@ -8,15 +8,24 @@ import { FIRMWARE_MAINTENANCE, validateSearch, type Candidate, type FirmwareClie
 
 export const PROGRESS_MINUTES = [1, 2, 3, 5, 7, 10, 15, 20, 30];
 const INPUT_TTL = 5 * 60000;
+const POLL_FAILURE_NOTICE_THRESHOLD = 3;
 type Owner = { botId: string; userId: string; chatType: "single" | "group"; target: string };
 export type Command = Owner & { msgid: string; text: string; command: boolean };
 export type Reply = { text: string; awaiting: boolean; flowId?: string; expiresAt?: number };
 type Phase = "filename" | "matching" | "choose" | "confirm" | "starting" | "running" | "cancelling";
-type Flow = { id: string; owner: Owner; phase: Phase; expiresAt: number; query?: string; criteria?: FirmwareQuery; matchVersion?: number; candidates: Candidate[]; candidateTotal?: number; selected?: Candidate; confirmedAt?: number; jobId?: string; snapshot?: LocalJob; notified: number[]; offline?: boolean; invalidResult?: boolean };
+type Flow = { id: string; owner: Owner; phase: Phase; expiresAt: number; query?: string; criteria?: FirmwareQuery; matchVersion?: number; candidates: Candidate[]; candidateTotal?: number; selected?: Candidate; confirmedAt?: number; jobId?: string; snapshot?: LocalJob; notified: number[]; offline?: boolean; pollFailures?: number; invalidResult?: boolean };
 export type Notice = { id: string; flowId: string; botId: string; userId: string; chatType: "single" | "group"; target: string; text: string; created: number; prompt?: boolean; expiresAt?: number; claim?: string; claimUntil?: number; sent?: number };
 type Database = { version: 1; active?: Flow; replies: Record<string, { owner: string; at: number; value: Reply }>; notices: Notice[] };
 export interface FirmwareServiceOptions { dataDir: string; client: FirmwareClient; extractor: FirmwareExtractor; enabled: () => boolean; publicBase: string; now?: () => number; pollMs?: number; }
 const ownerKey = (o: Owner) => JSON.stringify([o.botId, o.chatType, o.target, o.userId]);
+// Log diagnostic codes without response bodies, URLs, credentials or user text.
+function pollError(error: unknown) {
+  const value = error as { name?: unknown; code?: unknown; status?: unknown; message?: unknown; cause?: unknown } | null;
+  const cause = value?.cause as { name?: unknown; code?: unknown } | null;
+  const code = (value: unknown) => typeof value === "number" && Number.isFinite(value) || typeof value === "string" && /^[A-Za-z0-9_]{1,64}$/.test(value) ? value : undefined;
+  const message = typeof value?.message === "string" && /^(固件服务 HTTP \d{3}|固件服务响应超过限制。|固件任务格式不正确。|固件服务返回的候选格式不正确。|Local task does not match the confirmed candidate\.|Invalid firmware job ID\.|Firmware state capacity exceeded\.|offline)$/.test(value.message) ? value.message : undefined;
+  return { name: code(value?.name), code: code(value?.code), status: code(value?.status), message, causeName: code(cause?.name), causeCode: code(cause?.code) };
+}
 function identity(input: unknown): Command {
   const value = input as Command;
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !["botId", "userId", "chatType", "target", "msgid", "text", "command"].includes(k)) || !["single", "group"].includes(value.chatType) || [value.botId, value.userId, value.target, value.msgid].some(v => typeof v !== "string" || !v || v.length > 256 || /[\s\u0000-\u001f]/u.test(v)) || value.chatType === "single" && value.target !== value.userId || typeof value.text !== "string" || value.text.length > 500 || /[\u0000\r\n]/u.test(value.text) || typeof value.command !== "boolean") throw new Error("Invalid firmware command identity or text.");
@@ -159,23 +168,31 @@ export class FirmwareService {
     }
     if (!["starting", "running", "cancelling"].includes(flow.phase)) return;
     const controller = new AbortController(); this.controllers.add(controller);
+    const started = performance.now();
+    let operation = flow.jobId ? "job" : "lookup";
     try {
       let job = flow.jobId ? await this.options.client.job(flow.jobId, controller.signal) : await this.options.client.lookup(`firmware:${flow.id}`, controller.signal);
       if (!job) {
         if (flow.phase === "cancelling" || !this.options.enabled()) {
           await this.change(db => { if (db.active?.id === flow.id) { this.notice(db, db.active, "固件任务尚未创建，已取消本次请求。"); delete db.active; } }); return;
         }
+        operation = "health";
         if (!await this.options.client.ready(controller.signal)) throw new Error("offline");
+        operation = "persist";
         const allowed = await this.change(db => db.active?.id === flow.id && db.active.phase === "starting" && this.options.enabled());
         if (!allowed) return;
+        operation = "submit";
         job = await this.options.client.submit(flow.selected!.id, `firmware:${flow.id}`, controller.signal);
       }
+      operation = "validate";
       if (job.candidate.path !== flow.selected?.path || job.candidate.filename !== flow.selected?.filename || job.candidate.size !== flow.selected?.size || job.candidate.modified !== flow.selected?.modified) throw new Error("Local task does not match the confirmed candidate.");
-      if (flow.phase === "cancelling" && !["cancelled", "failed", "succeeded"].includes(job.state)) job = await this.options.client.cancel(job.id, controller.signal);
+      if (flow.phase === "cancelling" && !["cancelled", "failed", "succeeded"].includes(job.state)) { operation = "cancel"; job = await this.options.client.cancel(job.id, controller.signal); }
+      operation = "persist";
       await this.change(db => {
         const current = db.active; if (!current || current.id !== flow.id) return;
         current.jobId = job.id; current.snapshot = job;
-        if (current.offline) { current.offline = false; this.notice(db, current, "本机固件服务已恢复，继续跟踪原任务。\n" + this.progress(current)); }
+        current.pollFailures = 0;
+        if (current.offline) { current.offline = false; this.notice(db, current, "固件任务进度查询已恢复，继续跟踪原任务。\n" + this.progress(current)); }
         if (["succeeded", "failed", "cancelled"].includes(job.state)) {
           let text: string;
           if (job.state === "succeeded") {
@@ -194,8 +211,18 @@ export class FirmwareService {
         if (after30 > 30 && !current.notified.includes(after30)) due.push(after30);
         if (due.length) { current.notified.push(...due); this.notice(db, current, this.progress(current)); }
       });
-    } catch {
-      if (!this.closing) await this.change(db => { const current = db.active; if (current?.id === flow.id && !current.offline) { current.offline = true; this.notice(db, current, "固件功能维护中，当前任务已保留；本机服务恢复后继续反馈。"); } });
+    } catch (error) {
+      if (!this.closing) {
+        console.warn("[firmware] Task poll failed", JSON.stringify({ flowId: flow.id, jobId: flow.jobId, operation, stage: flow.snapshot?.stage.slice(0, 64), failures: (flow.pollFailures ?? 0) + 1, elapsedMs: Math.round(performance.now() - started), error: pollError(error) }));
+        await this.change(db => {
+          const current = db.active; if (current?.id !== flow.id) return;
+          current.pollFailures = (current.pollFailures ?? 0) + 1;
+          if (current.pollFailures >= POLL_FAILURE_NOTICE_THRESHOLD && !current.offline) {
+            current.offline = true;
+            this.notice(db, current, "暂时无法获取固件任务进度，当前任务已保留，正在自动重试查询；恢复后继续反馈。");
+          }
+        });
+      }
     } finally { this.controllers.delete(controller); }
   }
   private async match(flow: Flow) {
