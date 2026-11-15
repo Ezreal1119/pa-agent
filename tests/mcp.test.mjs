@@ -20,7 +20,7 @@ function reply(res,{tool,usage=true,text='Expert answer',prompt=100,completion=7
  for(const [data,end] of [[{role:'assistant'},null],[delta,null],[{},tool?'tool_calls':'stop']])res.write(`data: ${JSON.stringify({id:'fixture',object:'chat.completion.chunk',created:1,model:'fixture',choices:[{index:0,delta:data,finish_reason:end}],...(end&&usage?{usage:{prompt_tokens:prompt,completion_tokens:completion,total_tokens:prompt+completion,prompt_tokens_details:{cached_tokens:30},completion_tokens_details:{reasoning_tokens:3}}}:{})})}\n\n`);
  res.end('data: [DONE]\n\n');
 }
-async function fixture(t,mcp={}){
+async function fixture(t,mcp={},extra={}){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'expert-mcp-'));const dataDir=path.join(root,'.data');await fs.mkdir(path.join(dataDir,'urovo-product-expert'),{recursive:true});
  await fs.writeFile(path.join(dataDir,'urovo-product-expert/SKILL.md'),'PRIVATE_BUSINESS_CONTEXT');await writeMemoryFixture(dataDir,'urovo-product-expert','PRIVATE_BUSINESS_CONTEXT');
  await fs.writeFile(path.join(root,'.env'),'PRIVATE_LOCAL_ENV=DO_NOT_EXPOSE');
@@ -29,7 +29,7 @@ async function fixture(t,mcp={}){
   let text='';for await(const part of req)text+=part;const body=JSON.parse(text);requests.push(body);
   try{if(handler)return handler(body,res);const timer=setTimeout(()=>reply(res),defaultDelay);res.on('close',()=>clearTimeout(timer));}catch(error){res.writeHead(500);res.end(error.message);}
  });model.listen(0,'127.0.0.1');await once(model,'listening');
- const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},fileTools:{enabled:true},mcp:{enabled:true,apiKey:'MCP_ACCESS_SECRET',waitMs:1000,...mcp},model:{apiKey:'MCP_MODEL_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'}};
+ const options={cwd:root,dataDir,resourcesDir:path.resolve('resources'),admin:{account:'test',password:'test-password'},fileTools:{enabled:true},mcp:{enabled:true,apiKey:'MCP_ACCESS_SECRET',waitMs:1000,...mcp},model:{apiKey:'MCP_MODEL_SECRET',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,modelId:'fixture'},...extra};
  let app,base,adminHeaders;const clients=[];
  async function start(){
   app=await createWebServer(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');base=`http://127.0.0.1:${app.server.address().port}`;
@@ -44,6 +44,21 @@ const call=(client,name,args)=>client.callTool({name,arguments:args});
 async function result(client,id){const value=await call(client,'get_task_result',{task_id:id});assert.ok(value.structuredContent,JSON.stringify(value));return value.structuredContent;}
 async function finished(client,id){const deadline=Date.now()+10000;while(Date.now()<deadline){const task=await result(client,id);if(!['queued','running'].includes(task.status))return task;await sleep(10);}throw new Error('Task did not finish');}
 async function until(fn){const deadline=Date.now()+10000;while(Date.now()<deadline){if(await fn())return;await sleep(5);}throw new Error('Condition timed out');}
+
+test('MCP publishes terminal answers before summarization and resumes with native summary without charging it to the answer', {timeout:20000},async t=>{
+ const f=await fixture(t,{}, {compaction:{enabled:true,triggerTokens:100,keepRecentRounds:5}}),client=await f.client();
+ let release;const hold=new Promise(r=>release=r);t.after(()=>release());
+ const summary=b=>b.messages.some(m=>m.role==='system'&&m.content.includes('context summarization assistant'));
+ f.setHandler((body,res)=>{if(summary(body)){void hold.then(()=>reply(res,{text:'MCP SUMMARY'}));return;}reply(res);});
+ let conversation;
+ for(let i=1;i<=6;i++){const value=await call(client,'ask_product_expert',{question:'question-'+i,...(conversation?{conversation_id:conversation}:{})});let task=value.structuredContent;if(task.status!=='completed')task=await finished(client,task.task_id);assert.equal(task.usage.total_tokens,107);conversation=task.conversation_id;}
+ await until(()=>f.requests.some(summary));
+ release();await until(()=>f.requests.filter(summary).length===1);
+ const value=await call(client,'ask_product_expert',{question:'question-7',conversation_id:conversation});let task=value.structuredContent;if(task.status!=='completed')task=await finished(client,task.task_id);
+ assert.equal(task.answer,'Expert answer');assert.equal(task.usage.total_tokens,107);
+ const request=f.requests.filter(b=>!summary(b)).at(-1);assert.ok(JSON.stringify(request.messages).includes('MCP SUMMARY'));
+ assert.equal(request.messages.filter(m=>m.role==='user').length,7);
+});
 
 test('official MCP client works with Bearer authentication; fast text replies include exact usage and private admin APIs stay protected',{timeout:20000},async t=>{
  const f=await fixture(t);const client=await f.client();const list=await client.listTools();assert.deepEqual(list.tools.map(t=>t.name),['ask_product_expert','get_task_result','cancel_task']);

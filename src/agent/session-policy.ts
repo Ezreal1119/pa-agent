@@ -5,6 +5,7 @@ import { loadRunKnowledgeSections } from "./knowledge.js";
 import { PromptInstructionsStore } from "../prompts/instructions.js";
 import { composePrompt, type PromptSection } from "../prompts/composition.js";
 import type { SessionRetention } from "./retention.js";
+import { chatCompaction } from "./chat-compaction.js";
 
 /** Enforce at the SDK boundary rather than depending on optional model tool calls. */
 export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention, promptOptions?: { sections: PromptSection[]; attachments?: () => Promise<PromptSection>; userRoleStyle?: () => string | undefined }): Promise<void> {
@@ -26,8 +27,11 @@ export async function installSessionPolicy(session: AgentSession, dataDir: strin
     }
   });
   const transform = session.agent.transformContext;
-  session.agent.transformContext = async (messages, signal) =>
-    recentRounds(transform ? await transform(messages, signal) : messages);
+  const compactor = chatCompaction(session);
+  session.agent.transformContext = async (messages, signal) => {
+    const context = transform ? await transform(messages, signal) : messages;
+    return compactor ? context : recentRounds(context);
+  };
 
   const stream = session.agent.streamFunction;
   session.agent.streamFunction = async (model, context, options) => {
@@ -36,14 +40,19 @@ export async function installSessionPolicy(session: AgentSession, dataDir: strin
     const state = await (snapshot ??= load());
     const composed = composePrompt(promptOptions?.sections ?? [{id:"base",title:"Base system prompt",content:context.systemPrompt ?? ""}],
       state.instructions, state.knowledge, await promptOptions?.attachments?.());
-    return stream(model, { ...context, systemPrompt: composed.system + (state.userRoleStyle === undefined ? "" : `\n\n# User Role & Style\n${state.userRoleStyle}`) }, options);
+    const systemPrompt = composed.system + (state.userRoleStyle === undefined ? "" : `\n\n# User Role & Style\n${state.userRoleStyle}`);
+    compactor?.observe(systemPrompt, context.tools);
+    compactor?.assertCapacity();
+    return stream(model, { ...context, systemPrompt }, options);
   };
 
   const prompt = session.prompt.bind(session);
   session.prompt = async (text, options) => {
+    await compactor?.wait();
     // Includes asynchronous preflight, before the SDK marks the agent as streaming.
     if (busy || session.isStreaming) throw new Error("This session is already running. Wait for completion before the next prompt.");
     busy = true;
+    try { compactor?.assertCapacity(text); } catch (error) { busy = false; throw error; }
     let release: (() => void) | undefined;
     const file = session.sessionManager.getSessionFile();
     try {

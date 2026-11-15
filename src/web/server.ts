@@ -1,3 +1,6 @@
+import { chatCompaction, contextRounds } from "../agent/chat-compaction.js";
+import { chatCompactionConfig } from "../agent/compaction-config.js";
+import { historyRounds } from "../agent/session-history.js";
 import { httpApiConfig, type HttpApiOptions } from "../http-api/config.js";
 import { ExpertHttpApi, HTTP_API_PREFIX } from "../http-api/http.js";
 import { TaskRequestError } from "../mcp/errors.js";
@@ -89,7 +92,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp" | "http-api"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; activeRunText?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { compaction?: AgentConfigOptions["compaction"]; httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -120,6 +123,7 @@ export async function createWebServer(options: WebOptions = {}) {
     contextWindow: options.model?.contextWindow ?? Number(process.env.CONTEXT_WINDOW ?? diskEnv.CONTEXT_WINDOW ?? 128000),
     maxTokens: options.model?.maxTokens ?? Number(process.env.MAX_TOKENS ?? diskEnv.MAX_TOKENS ?? 16384),
   };
+  const compactionConfig = chatCompactionConfig(options.compaction, { ...diskEnv, ...process.env }, settings);
   const csrf = randomBytes(24).toString("hex");
   const webConfig = webToolConfig(options.webTools, settings, { ...diskEnv, ...process.env });
   const applyAgentSettings = () => {
@@ -217,7 +221,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
-      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
+      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
       initializing = AgentRuntime.create(config).then(value => runtime = value).catch(error => { initializing = undefined; throw error; });
     }
     return initializing;
@@ -275,6 +279,14 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       return { metric, answer: { answer: answer.slice(0, 256000), ...(answer.length > 256000 ? { truncated: true } : {}), ...(metric.status !== "completed" ? { error: "This task did not finish successfully before the service restarted. Recorded usage is preserved." } : {}) } };
     },
+    afterRun: task => {
+      const item = records.get(task.sessionId); const session = item?.session;
+      if (!item || !session) return;
+      if (task.status === "completed") chatCompaction(session)?.afterAnswer();
+      void (chatCompaction(session)?.wait() ?? Promise.resolve()).finally(() => {
+        if (item.session === session && !item.running) { session.dispose(); item.session = undefined; }
+      });
+    },
     run: async (task, question, signal, update) => {
       if (configuring) throw new Error("Agent settings are being updated. Please retry later.");
       const channel = httpApiStore.hasSession(task.sessionId) ? "http-api" : "mcp";
@@ -285,6 +297,7 @@ export async function createWebServer(options: WebOptions = {}) {
       item.cancelQueued = () => local.abort(new Error("This run was stopped."));
       let release: (() => void) | undefined;
       try {
+        await (item.session && chatCompaction(item.session)?.wait(abort));
         try { release = await runGate.acquire(abort); }
         catch (error) { if (error instanceof RunQueueFullError) throw new TaskRequestError(429, error.message); throw error; }
         abort.throwIfAborted();
@@ -294,7 +307,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (abort.aborted) return { answer: "", error: redact(abort.reason ?? error), status: "cancelled" };
         throw error;
       } finally {
-        item.persistedFile = item.session?.sessionFile ?? item.persistedFile; item.session?.dispose(); item.session = undefined; item.activeRunId = undefined; item.cancelQueued = undefined; item.running = false; item.updated = new Date().toISOString(); release?.();
+        item.persistedFile = item.session?.sessionFile ?? item.persistedFile; item.activeRunId = undefined; item.cancelQueued = undefined; item.running = false; item.updated = new Date().toISOString(); release?.();
       }
     },
   };
@@ -774,7 +787,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       if (method === "GET" && url.pathname === "/api/status") {
         const extraMemory = await new ExtraMemoryStore(dataDir).snapshot().then(value => ({ ready: true, bytes: Buffer.byteLength(value.text) })).catch(() => ({ ready: false, bytes: 0 }));
-        return json(res, 200, { token: csrf, configured: configured(), model: { modelId: settings.modelId, baseUrl: settings.baseUrl, hasKey: Boolean(settings.apiKey), contextWindow: settings.contextWindow, maxTokens: settings.maxTokens }, skills: await resources(), ordinarySkills: await ordinarySkills(), extraMemory, historyRounds: 5, retentionDays: 30, reasoning: { supported: isDeepSeekModel(settings), default: agentSettings.effort, modes: REASONING_MODES }, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes, acceptedExtensions: [...FILE_EXTENSIONS], visionConfigured: Boolean(fileConfig.vision.baseUrl && fileConfig.vision.apiKey && fileConfig.vision.model), queue: queueState() } });
+        return json(res, 200, { token: csrf, configured: configured(), model: { modelId: settings.modelId, baseUrl: settings.baseUrl, hasKey: Boolean(settings.apiKey), contextWindow: settings.contextWindow, maxTokens: settings.maxTokens }, skills: await resources(), ordinarySkills: await ordinarySkills(), extraMemory, historyRounds: 5, compaction: compactionConfig, retentionDays: 30, reasoning: { supported: isDeepSeekModel(settings), default: agentSettings.effort, modes: REASONING_MODES }, fileTools: { enabled: fileConfig.enabled, tools: fileConfig.enabled ? fileConfig.tools : [], maxFileBytes: fileConfig.maxFileBytes, acceptedExtensions: [...FILE_EXTENSIONS], visionConfigured: Boolean(fileConfig.vision.baseUrl && fileConfig.vision.apiKey && fileConfig.vision.model), queue: queueState() } });
       }
       const contactMatch = url.pathname.match(/^\/api\/wecom-contacts(?:\/([a-f0-9]{64}))?$/);
       if (contactMatch) {
@@ -829,6 +842,7 @@ export async function createWebServer(options: WebOptions = {}) {
           if (!isDeepSeekModel(settings) && next.effort !== agentSettings.effort) throw new HttpError(400, "This model does not support reasoning-level changes. Tool switches remain available.");
           if (WEB_TOOL_NAMES.some(name => next.webTools.tools[name]) && !webConfig.apiKey) throw new HttpError(400, "Online tools require a DeepSeek key. Direct DeepSeek connections reuse API_KEY; otherwise set DEEPSEEK_API_KEY in .env and restart the service.");
           await agentSettingsStore.save(next);
+          await Promise.all([...records.values()].map(item => item.session && chatCompaction(item.session)?.cancel()));
           for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
           runtime?.dispose(); runtime = undefined; initializing = undefined;
           agentSettings = next; applyAgentSettings(); mcpOptions.enabled = next.mcp?.enabled ?? mcpOptions.enabled;
@@ -887,7 +901,7 @@ export async function createWebServer(options: WebOptions = {}) {
         const session = await getSession(item);
         const files = await fileStore.list(item.id);
         const history = chatHistory(session, files, item.activeRunId, { limit, before });
-        return json(res, 200, { ...history, id: item.id, title: item.title, contextRounds: Math.min(history.rounds, 5), running: item.running, context: item.context, runs: history.runs.slice(-5), files });
+        return json(res, 200, { ...history, id: item.id, title: item.title, contextRounds: contextRounds(session), compacting: chatCompaction(session)?.busy ?? false, running: item.running, context: item.context, runs: history.runs.slice(-5), files });
       }
       const toolsMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/runs\/([\w-]+)\/tools$/);
       if (method === "GET" && toolsMatch) {
@@ -905,6 +919,7 @@ export async function createWebServer(options: WebOptions = {}) {
           if (item.running || item.opening || configuring) throw new HttpError(409, "Wait for this conversation run to finish or stop it before renaming or deleting.");
           item.mutating = true;
           try {
+            await (item.session && chatCompaction(item.session)?.cancel());
             if (method === "PATCH") {
               const body = await readBody(req);
               if (typeof body.title !== "string" || !body.title.trim() || body.title.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(body.title)) throw new HttpError(400, "Conversation names must be 1–80 characters without line breaks or control characters.");
@@ -936,8 +951,8 @@ export async function createWebServer(options: WebOptions = {}) {
         }
         if (method === "GET" && !match[2]) {
           const session = await getSession(item);
-          const rounds = session.messages.filter(m => m.role === "user").length;
-          return json(res, 200, { id: item.id, title: item.title, messages: await publicMessages(session, item.activeRunId), rounds, contextRounds: Math.min(rounds, 5), running: item.running, context: item.context, runs: publicRunMetrics(session, item.activeRunId), files: await fileStore.list(item.id) });
+          const rounds = historyRounds(session);
+          return json(res, 200, { id: item.id, title: item.title, messages: await publicMessages(session, item.activeRunId), rounds, contextRounds: contextRounds(session), compacting: chatCompaction(session)?.busy ?? false, running: item.running, context: item.context, runs: publicRunMetrics(session, item.activeRunId), files: await fileStore.list(item.id) });
         }
         if (method === "POST" && match[2] === "stop") {
           if (item.running) { item.cancelled = true; item.cancelQueued?.(); await item.session?.abort(); }
@@ -948,6 +963,7 @@ export async function createWebServer(options: WebOptions = {}) {
           item.running = true; item.cancelled = false; item.context = undefined;
           let session: AgentSession;
           let releaseRun: (() => void) | undefined;
+          let maintenanceHeartbeat: NodeJS.Timeout | undefined;
           const queuedAbort = new AbortController();
           const cancelWaiting = () => queuedAbort.abort();
           item.cancelQueued = cancelWaiting;
@@ -976,6 +992,13 @@ export async function createWebServer(options: WebOptions = {}) {
             if (body.effort !== undefined && !isReasoningMode(body.effort)) throw new HttpError(400, "Reasoning level must be off, low, high, or max.");
             if (!supportsEffort && body.effort !== undefined) throw new HttpError(400, "Reasoning controls currently support DeepSeek only. Other models use their provider defaults.");
             if (supportsEffort) effort = body.effort ?? agentSettings.effort;
+            const maintenance = item.session && chatCompaction(item.session);
+            if (maintenance?.busy) {
+              res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" }); res.flushHeaders();
+              res.write(`event: notice\ndata: ${JSON.stringify({text: "正在整理上下文，完成后继续回答。"})}\n\n`);
+              maintenanceHeartbeat = setInterval(() => { if (!res.destroyed) res.write(": heartbeat\n\n"); }, 10000);
+              await maintenance.wait(queuedAbort.signal);
+            }
             try { releaseRun = await runGate.acquire(queuedAbort.signal); }
             catch (error) { throw new HttpError(queuedAbort.signal.aborted ? 499 : 429, (error as Error).message); }
             res.off("close", cancelWaiting);
@@ -991,7 +1014,7 @@ export async function createWebServer(options: WebOptions = {}) {
             item.updated = new Date().toISOString();
             let finished = false; let calls = 0;
             const started = acceptedAt;
-            const initialRounds = session.messages.filter(m => m.role === "user").length;
+            const initialRounds = historyRounds(session);
             const metric: RunMetric = {
               id: randomUUID(), sequence: getRunMetrics(session).length + 1, round: null,
               modelId: settings.modelId, effort, startedAt: acceptedAtIso,
@@ -1008,7 +1031,8 @@ export async function createWebServer(options: WebOptions = {}) {
               }
             };
             if (sender) await wecomContacts.recordRun(sender, item.id, metric);
-            res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+            clearInterval(maintenanceHeartbeat);
+            if (!res.headersSent) res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
             res.flushHeaders();
             item.activeRunId = metric.id;
             if (machine) item.activeRunText = "";
@@ -1028,7 +1052,7 @@ export async function createWebServer(options: WebOptions = {}) {
               const request = finalPayload as { thinking?: { type: string }; reasoning_effort?: string; messages?: { role: string; content: unknown }[] };
               const messages = request.messages ?? [];
               const system = messages.filter(m => m.role === "system" || m.role === "developer").map(m => typeof m.content === "string" ? m.content : JSON.stringify(m.content)).join("\n");
-              const context = { effort: request.reasoning_effort ?? null, thinking: request.thinking?.type ?? null, requests: ++calls, userRounds: messages.filter(m => m.role === "user").length, payloadBytes: Buffer.byteLength(JSON.stringify(finalPayload)), extraMemoryCopies: system.split(`${EXTRA_MEMORY_SECTION}\nSource:`).length - 1, skills: DEFAULT_SKILLS.map(name => ({ name, skillCopies: system.split(`## Skill: ${name}\nRoot:`).length - 1, memoryCopies: system.split(`## Business memory: ${name}\nSource:`).length - 1 })) };
+              const context = { effort: request.reasoning_effort ?? null, thinking: request.thinking?.type ?? null, requests: ++calls, userRounds: compactionConfig.enabled ? contextRounds(session) : messages.filter(m => m.role === "user").length, payloadBytes: Buffer.byteLength(JSON.stringify(finalPayload)), extraMemoryCopies: system.split(`${EXTRA_MEMORY_SECTION}\nSource:`).length - 1, skills: DEFAULT_SKILLS.map(name => ({ name, skillCopies: system.split(`## Skill: ${name}\nRoot:`).length - 1, memoryCopies: system.split(`## Business memory: ${name}\nSource:`).length - 1 })) };
               item.context = context;
               send("context", context);
               return finalPayload;
@@ -1098,7 +1122,7 @@ export async function createWebServer(options: WebOptions = {}) {
             } finally {
               metric.elapsedMs = Math.round(performance.now() - started);
               metric.finishedAt = new Date().toISOString();
-              if (session.messages.filter(m => m.role === "user").length > initialRounds) metric.round = initialRounds + 1;
+              if (historyRounds(session) > initialRounds) metric.round = initialRounds + 1;
               try {
                 releaseAttachments();
                 if (session.sessionFile && await fs.stat(session.sessionFile).catch(() => undefined)) item.persistedFile = session.sessionFile;
@@ -1106,14 +1130,15 @@ export async function createWebServer(options: WebOptions = {}) {
                 await statistics;
                 const files = await fileStore.list(item.id);
                 const history = chatHistory(session, files, undefined, historyLimit === undefined ? undefined : { limit: historyLimit });
-                send("done", { ...history, context: item.context, failed: metric.status !== "completed", run: history.runs.find(r => r.id === metric.id), runs: historyLimit === undefined ? history.runs : history.runs.slice(-5), files });
+                send("done", { ...history, contextRounds: contextRounds(session), context: item.context, failed: metric.status !== "completed", run: history.runs.find(r => r.id === metric.id), runs: historyLimit === undefined ? history.runs : history.runs.slice(-5), files });
               } finally {
                 finished = true; item.activeRunId = undefined; delete item.activeRunText; clearInterval(heartbeat); res.off("close", disconnect); unsubscribe(); session.agent.onPayload = priorPayload;
                 if (!res.destroyed) res.end();
+                if (metric.status === "completed") chatCompaction(session)?.afterAnswer();
               }
             }
             return;
-          } finally { res.off("close", cancelWaiting); item.cancelQueued = undefined; delete item.userRoleStyle; releaseRun?.(); item.running = false; item.updated = new Date().toISOString(); }
+          } finally { clearInterval(maintenanceHeartbeat); res.off("close", cancelWaiting); item.cancelQueued = undefined; delete item.userRoleStyle; releaseRun?.(); item.running = false; item.updated = new Date().toISOString(); }
         }
       }
       const assets: Record<string, [string, string]> = {
@@ -1154,12 +1179,13 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       throw new HttpError(404, "Page or endpoint not found.");
     } catch (error) {
-      if (res.headersSent) { if (!res.destroyed) res.end(); return; }
+      if (res.headersSent) { if (!res.destroyed) res.end(`event: error\ndata: ${JSON.stringify({message: redact(error)})}\n\n`); return; }
       json(res, error instanceof HttpError || error instanceof ChatHistoryError || error instanceof ResearchError || error instanceof SyncError || error instanceof ScheduleError || error instanceof ReviewError || error instanceof ExportError ? error.status : 500, { error: redact(error) });
     }
   });
   server.requestTimeout = 60000;
   async function close() {
+    await Promise.all([...records.values()].map(r => r.session && chatCompaction(r.session)?.cancel()));
     await questionReview.close();
     for (const controller of commandControllers) controller.abort();
     await firmware.close();

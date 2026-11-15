@@ -42,6 +42,25 @@ async function fixture(t,apiOptions={},extra={}){
 }
 async function until(fn){for(let i=0;i<500;i++){if(await fn())return;await new Promise(r=>setTimeout(r,10));}throw Error('Condition timed out');}
 
+test('HTTP answers publish before compaction; followups wait outside ordinary capacity and usage excludes summaries',async t=>{
+ const f=await fixture(t,{waitMs:50},{maxConcurrentRuns:1,compaction:{enabled:true,triggerTokens:20,keepRecentRounds:5}});
+ let release;const hold=new Promise(r=>release=r);t.after(()=>release());
+ const summary=body=>body.messages.some(m=>m.role==='system'&&m.content.includes('context summarization assistant'));
+ f.setHandler(async(body,res)=>{if(summary(body))await hold;reply(res,summary(body)?'SUMMARY':'API answer');});
+ let conversation;
+ for(let i=1;i<=6;i++){let result=(await f.ask({question:'round-'+i,...(conversation?{conversation_id:conversation}:{})})).body;if(result.status!=='completed')result=await f.done(result.task_id);assert.equal(result.answer,'API answer');assert.equal(result.usage.total_tokens,24);conversation=result.conversation_id;}
+ await until(()=>f.requests.some(summary));
+ const pending=(await f.ask({question:'round-7',conversation_id:conversation})).body;
+ assert.ok(['queued','running'].includes(pending.status));assert.equal(pending.usage.model_requests,0);
+ let other=(await f.ask({question:'independent'})).body;if(other.status!=='completed')other=await f.done(other.task_id);
+ assert.equal(other.status,'completed');assert.equal(other.answer,'API answer');
+ assert.ok(!f.requests.some(b=>!summary(b)&&JSON.stringify(b.messages.at(-1).content).includes('round-7')));
+ release();const done=await f.done(pending.task_id);assert.equal(done.usage.total_tokens,24);assert.equal(done.answer,'API answer');
+ const request=f.requests.find(b=>!summary(b)&&JSON.stringify(b.messages.at(-1).content).includes('round-7'));
+ assert.ok(JSON.stringify(request.messages).includes('SUMMARY'));assert.equal(request.messages.filter(m=>m.role==='user').length,7);
+ await f.restart();assert.equal((await(await f.api('/tasks/'+done.task_id)).json()).answer,'API answer');
+});
+
 test('plain HTTP authenticates separately and returns an answer and exact usage without Cookie, CSRF or MCP',async t=>{
  const f=await fixture(t);const result=await f.ask({question:'Compare DT66 and DT630'});
  assert.equal(result.http,200);assert.equal(result.body.answer,'API answer');assert.equal(result.body.status,'completed');assert.equal(result.body.usage.total_tokens,24);

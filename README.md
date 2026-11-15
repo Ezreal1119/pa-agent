@@ -333,6 +333,10 @@ Configure `LIBRARY_IMPORT_BASE_URL` and `LIBRARY_IMPORT_ADMIN_PASSWORD` in the i
 
 The Web service template now gives the main Node process a 1024 MiB JS heap while retaining the existing 2200M/2600M cgroup limits. Synchronize polls report summaries and loads individual diffs/coverage on expansion; canonical reports and publication/recovery stay compatible. See [existing-VPS upgrade](docs/vps-native-deploy.md#主进程内存与登录升级) for the heap-only systemd drop-in. No new npm dependencies or environment variables are required.
 
+## Chat context compaction
+
+Opt-in post-answer compaction accumulates conversation context until a configurable token threshold, summarizes older history with Pi, and preserves the latest five complete raw rounds. Same-session follow-ups wait for compaction while other sessions can answer. Existing sessions start from their latest five rounds; stored history and tool details remain available. See [configuration and behavior](docs/chat-compaction.md).
+
 ## OS firmware command
 
 WeCom `/firmware` opens a separate OS firmware workflow: real FTP candidates → AI matching → owner confirmation → local download and R2 upload → scheduled progress and final download link. A single global slot includes input and confirmation. The independent `firmware` tool switch blocks new requests; disabled/offline entry replies with a maintenance message while accepted tasks remain tracked. Local execution code stays in the Git/Docker-ignored `local-download-service/`; cloud-side state and notice outbox live in `.data/firmware/`. Configure the three `FIRMWARE_*` values and enable the tool in Agent Settings. See [setup, tunnel routing, behavior and manual VPS upgrade](docs/firmware.md).

@@ -29,6 +29,26 @@ async function setup(t,limits={}){
 }
 async function waitFor(fn){const end=Date.now()+5000;while(!await fn()){if(Date.now()>end)throw new Error('wait timeout');await new Promise(r=>setTimeout(r,10));}}
 
+test('Web/WeCom deliver answers before compaction, report waiting and retain historical details after it', {timeout:30000},async t=>{
+ const f=await setup(t,{maxConcurrentRuns:1,compaction:{enabled:true,triggerTokens:20,keepRecentRounds:5}});
+ const {id}=await f.api.json('/sessions','POST',{});let release;const hold=new Promise(r=>release=r);f.beforeCleanup(()=>release());
+ const summary=b=>b.messages.some(m=>m.role==='system'&&m.content.includes('context summarization assistant'));
+ f.setHandler(async(body,res)=>{if(summary(body))await hold;modelReply(res,summary(body)?'SUMMARY':'完整回答');});
+ const sender={botId:'bot',userId:'customer',chatType:'single',at:Date.now()};let firstRun;
+ for(let n=1;n<=6;n++){const result=await f.api.run(id,'question-'+n,[],(event,value)=>{if(n===1&&event==='start')firstRun=value.run.id;},undefined,sender);assert.equal(result.failed,false);assert.equal(result.rounds,n);}
+ await waitFor(()=>f.requests.some(summary));
+ assert.equal((await f.api.json('/status')).queue.active,0);
+ const events=[];const next=f.api.run(id,'question-7',[],event=>events.push(event),undefined,sender);
+ await waitFor(()=>events.includes('notice'));assert.ok(!events.includes('start'));
+ const other=await f.api.json('/sessions','POST',{});await f.api.run(other.id,'independent',[],()=>{});
+ release();const done=await next;assert.equal(done.rounds,7);assert.equal(done.contextRounds,6);
+ await waitFor(async()=>!(await f.api.json(`/sessions/${id}`)).compacting);
+ const history=await f.api.json(`/sessions/${id}`);assert.equal(history.messages.length,14);assert.equal(history.contextRounds,5);
+ assert.deepEqual(await f.api.json(`/sessions/${id}/runs/${firstRun}/detail`),{status:'completed',answer:'完整回答'});
+ await f.restart();assert.equal((await f.api.json(`/sessions/${id}`)).messages.length,14);
+ assert.deepEqual(await f.api.json(`/sessions/${id}/runs/${firstRun}/detail`),{status:'completed',answer:'完整回答'});
+});
+
 test('WeCom run detail shows live text and the exact historical round after followups/restart without model calls', {timeout:30000},async t=>{
  const f=await setup(t,{maxConcurrentRuns:1});const {id}=await f.api.json('/sessions','POST',{});
  const sender={botId:'bot',userId:'customer',chatType:'single',at:Date.now()};

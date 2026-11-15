@@ -1,3 +1,4 @@
+import { historyRounds } from "../agent/session-history.js";
 import { performance } from "node:perf_hooks";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { saveRunMetric, getRunMetrics, sdkTokens, type RunMetric } from "../web/run-metrics.js";
@@ -10,7 +11,7 @@ export async function runMcpAgent(session: AgentSession, task: McpTask, question
 }): Promise<TaskAnswer & { status: McpTask["status"] }> {
   const started = performance.now();
   const metric: RunMetric = { id: task.id, mcpTaskId: task.id, sequence: getRunMetrics(session).length + 1, round: null, modelId: options.modelId, effort: options.effort, startedAt: new Date().toISOString(), finishedAt: null, elapsedMs: null, firstTextMs: null, status: "running", toolCalls: [], usage: { input: 0, output: 0, requests: 0, reportedRequests: 0 } };
-  const rounds = session.messages.filter(m => m.role === "user").length;
+  const rounds = historyRounds(session);
   let persistence = Promise.resolve(); let persistenceError: unknown;
   const persist = () => {
     saveRunMetric(session, metric); const snapshot = structuredClone(metric);
@@ -53,7 +54,7 @@ export async function runMcpAgent(session: AgentSession, task: McpTask, question
   } catch (failure) { metric.status = signal.aborted ? "stopped" : "failed"; error = options.redact(signal.aborted ? signal.reason ?? failure : failure); }
   finally {
     metric.finishedAt = new Date().toISOString(); metric.elapsedMs = Math.round(performance.now() - started);
-    if (session.messages.filter(m => m.role === "user").length > rounds) metric.round = rounds + 1;
+    if (historyRounds(session) > rounds) metric.round = rounds + 1;
     try { persist(); await persistence; }
     finally { unsubscribe(); signal.removeEventListener("abort", stop); session.agent.onPayload = prior; }
   }

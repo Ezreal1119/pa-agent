@@ -1,3 +1,4 @@
+import { historyMessages, historyRounds } from "../agent/session-history.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { getRunMetrics } from "./run-metrics.js";
 
@@ -17,10 +18,10 @@ export interface ToolCallView {
 /** Reconstruct a run from original messages, without copying tool bodies into metadata. */
 export function getToolRuns(session: AgentSession, activeId?: string) {
   const metrics = getRunMetrics(session, activeId);
-  const totalRounds = session.messages.filter(m => m.role === "user").length;
+  const totalRounds = historyRounds(session);
   const rounds = new Map<number, { id: string; round: number; calls: ToolCallView[] }>();
   let round = 0;
-  for (const message of session.messages) {
+  for (const message of historyMessages(session)) {
     if (message.role === "user") {
       round++;
       const metric = metrics.findLast(m => m.round === round || (m.id === activeId && m.round === null && round === totalRounds));

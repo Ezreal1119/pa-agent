@@ -1,3 +1,4 @@
+import { historyMessages } from "../agent/session-history.js";
 import { createHash } from "node:crypto";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { messageAttachments } from "../agent/message-attachments.js";
@@ -79,7 +80,7 @@ export function chatHistory(session: AgentSession, files: ManagedFile[], activeI
       lastAnswer.set(round, id);
     }
   };
-  for (const message of session.messages) {
+  for (const message of historyMessages(session)) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     const id = identify(message);
     if (message.role === "user") { flush(); round++; hasAnswer = false; userId = id; userTimestamp = message.timestamp; }

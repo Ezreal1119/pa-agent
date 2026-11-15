@@ -8,6 +8,7 @@ export interface McpHost {
   run(task: McpTask, question: string, signal: AbortSignal, update: (metric: RunMetric) => Promise<void>): Promise<TaskAnswer & { status?: McpTask["status"] }>;
   recover(task: McpTask, needsAnswer: boolean): Promise<{ metric?: RunMetric; answer?: TaskAnswer }>;
   redact(error: unknown): string;
+  afterRun?(task: McpTask): void;
 }
 export class McpService {
   private active = new Map<string, { controller: AbortController; done: Promise<void> }>();
@@ -59,7 +60,7 @@ export class McpService {
         } catch (error) {
           const current = await this.store.get(task.id);
           await this.store.update(task.id, { status: controller.signal.aborted ? "cancelled" : terminal(current.status) ? current.status : "failed", finished: Date.now() }, { answer: "", error: this.host.redact(controller.signal.aborted ? controller.signal.reason ?? error : error), ...(error instanceof TaskRequestError && error.status === 429 ? { error_code: "capacity_exceeded" as const } : {}) });
-        } finally { clearTimeout(timer); this.active.delete(task.id); }
+        } finally { clearTimeout(timer); this.active.delete(task.id); this.host.afterRun?.(await this.store.get(task.id)); }
       })().catch(error => console.error("MCP task persistence:", this.host.redact(error)));
       this.active.set(task.id, { controller, done });
     }

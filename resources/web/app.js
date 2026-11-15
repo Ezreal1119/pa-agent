@@ -71,8 +71,9 @@ function setBusy(busy) {
   document.querySelectorAll('.remove-attachment').forEach(button => button.disabled = busy);
 }
 function updateRounds(rounds, actual) {
-  state.rounds = rounds; const kept = actual ?? Math.min(rounds, 5);
-  $('round-count').textContent = `Context ${kept} / 5 turns`;
+  state.rounds = rounds; const kept = actual ?? (state.status?.compaction?.enabled ? rounds : Math.min(rounds, 5));
+  $('round-count').textContent = state.status?.compaction?.enabled ? `Context ${kept} turns · Keeps ${state.status.compaction.keepRecentRounds} on compact` : `Context ${kept} / 5 turns`;
+  $('round-dots').hidden = Boolean(state.status?.compaction?.enabled);
   [...$('round-dots').children].forEach((dot, index) => dot.classList.toggle('filled', index < kept));
 }
 function resetContext() {
@@ -107,6 +108,10 @@ function renderActivity() {
 }
 async function refreshStatus() {
   const status = await api('/api/status'); state.token = status.token; state.status = status;
+  if (status.compaction?.enabled) {
+    $('window-description').textContent = `Context accumulates until ${status.compaction.triggerTokens.toLocaleString()} tokens. Older history is summarized after an answer; the latest ${status.compaction.keepRecentRounds} turns stay intact.`;
+    updateRounds(state.rounds);
+  }
   state.effort = status.reasoning?.default || 'low';
   $('attachment-area').hidden = !status.fileTools?.enabled || !status.fileTools.tools.length;
   if (status.fileTools?.acceptedExtensions) $('file-input').accept = status.fileTools.acceptedExtensions.join(',');
@@ -393,7 +398,7 @@ async function openSession(id) {
     if (epoch !== state.sessionEpoch || state.busy) return;
     localStorage.setItem('product-expert-session', id); $('chat-title').textContent = data.title || 'New conversation';
     state.history.ready = true; state.history.page = data.page; syncHistory(data.messages);
-    updateRounds(data.rounds); showContext(data.context); showRuns(data.runs);
+    showContext(data.context); updateRounds(data.rounds, data.contextRounds); showRuns(data.runs);
     restorePending(data); renderFiles(data.files || []);
     const latest = data.runs?.at(-1); if (data.running && latest?.status === 'running') startClock(latest); else stopClock(latest);
     $('tool-count').textContent = countLabel(latest?.toolCallCount ?? 0, 'call');
@@ -500,7 +505,7 @@ async function sendQuestion(event) {
       }
       if (name === 'notice') note(data.text);
       if (name === 'error') { failed = true; note(data.message, true); if (!reply) replyBody.textContent = data.message; }
-      if (name === 'done') { completed = true; restorePending(data); if (!accepted && !data.messages.some(message => message.role === 'user' && message.attachments?.some(file => submittedIds.includes(file.id)))) $('question').value = text; stopClock(data.run); $('tool-count').textContent = countLabel(data.run?.toolCallCount ?? 0, 'call'); showRuns(data.runs); await mergeLatestHistory(data); renderFiles(data.files || []); updateRounds(data.rounds); showContext(data.context); if (!failed) note('Run complete. Skills and memories will be reloaded for your next question.'); }
+      if (name === 'done') { completed = true; restorePending(data); if (!accepted && !data.messages.some(message => message.role === 'user' && message.attachments?.some(file => submittedIds.includes(file.id)))) $('question').value = text; stopClock(data.run); $('tool-count').textContent = countLabel(data.run?.toolCallCount ?? 0, 'call'); showRuns(data.runs); await mergeLatestHistory(data); renderFiles(data.files || []); showContext(data.context); updateRounds(data.rounds, data.contextRounds); if (!failed) note('Run complete. Skills and memories will be reloaded for your next question.'); }
     }
     while (true) {
       const { done, value } = await reader.read(); buffer += decoder.decode(value, { stream: !done });
@@ -513,7 +518,7 @@ async function sendQuestion(event) {
     if (!replyBody) toast(error.message);
   } finally {
     if (failed && state.current) {
-      try { const saved = await api(`/api/sessions/${state.current}/history?limit=30`); await mergeLatestHistory(saved); restorePending(saved); renderFiles(saved.files || []); updateRounds(saved.rounds); showRuns(saved.runs); const latest = saved.runs?.at(-1); if (latest) stopClock(latest); } catch {}
+      try { const saved = await api(`/api/sessions/${state.current}/history?limit=30`); await mergeLatestHistory(saved); restorePending(saved); renderFiles(saved.files || []); updateRounds(saved.rounds, saved.contextRounds); showRuns(saved.runs); const latest = saved.runs?.at(-1); if (latest) stopClock(latest); } catch {}
     }
     if (!accepted && failed) $('question').value = text;
     if (state.clock) { clearInterval(state.clock); state.clock = null; $('run-clock').classList.remove('running'); if (!completed) $('run-clock').textContent = 'Run incomplete · Check run history'; }

@@ -1,3 +1,4 @@
+import { historyMessages } from "./session-history.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ManagedFile } from "../file-tools/store.js";
 import path from "node:path";
@@ -34,7 +35,7 @@ export function installMessageAttachments(session: AgentSession, directory?: str
   session.agent.transformContext = async (messages, signal) => {
     const filtered = transform ? await transform(messages, signal) : messages;
     const byMessage = new Map<object, MessageAttachments>();
-    const users = session.messages.filter(message => message.role === "user");
+    const users = historyMessages(session).filter(message => message.role === "user");
     for (const record of messageAttachments(session)) {
       const message = users[record.round - 1];
       if (message?.timestamp === record.timestamp) byMessage.set(message, record);
@@ -53,7 +54,7 @@ export function installMessageAttachments(session: AgentSession, directory?: str
 }
 export function captureMessageAttachments(session: AgentSession, runId: string, files: ManagedFile[]): () => void {
   let record: MessageAttachments | undefined;
-  const round = session.messages.filter(message => message.role === "user").length + 1;
+  const round = historyMessages(session).filter(message => message.role === "user").length + 1;
   const unsubscribe = session.subscribe(event => {
     if (event.type !== "message_start" || event.message.role !== "user" || record) return;
     record = { runId, round, timestamp: event.message.timestamp, files: structuredClone(files) };

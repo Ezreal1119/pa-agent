@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { fileToolConfig, type FileToolConfig, type FileToolOptions } from "./file-tools/config.js";
 
 import { webToolConfig, type WebToolConfig, type WebToolOptions } from "./web-tools/config.js";
+import { chatCompactionConfig, type ChatCompactionConfig } from "./agent/compaction-config.js";
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -30,6 +31,7 @@ export interface AgentConfig {
   libraryLinksEnabled: boolean;
   firmwareEnabled: boolean;
   webTools: WebToolConfig;
+  compaction: ChatCompactionConfig;
 }
 
 export interface AgentConfigOptions {
@@ -42,6 +44,7 @@ export interface AgentConfigOptions {
   libraryLinksEnabled?: boolean;
   firmwareEnabled?: boolean;
   webTools?: WebToolOptions;
+  compaction?: Partial<ChatCompactionConfig>;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -75,6 +78,13 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
     "BASE_URL",
   ).replace(/\/+$/, "");
 
+  const model = {
+    apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY"),
+    baseUrl,
+    modelId: required(options.model?.modelId ?? process.env.MODEL_ID, "MODEL_ID"),
+    contextWindow: positiveInteger(options.model?.contextWindow ?? process.env.CONTEXT_WINDOW, 128_000, "CONTEXT_WINDOW"),
+    maxTokens: positiveInteger(options.model?.maxTokens ?? process.env.MAX_TOKENS, 16_384, "MAX_TOKENS"),
+  };
   return {
     rootDir: packageRoot,
     cwd,
@@ -88,23 +98,7 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
     libraryLinksEnabled: options.libraryLinksEnabled ?? true,
     firmwareEnabled: options.firmwareEnabled ?? false,
     webTools: webToolConfig(options.webTools, { baseUrl, apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY") }),
-    model: {
-      apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY"),
-      baseUrl,
-      modelId: required(
-        options.model?.modelId ?? process.env.MODEL_ID,
-        "MODEL_ID",
-      ),
-      contextWindow: positiveInteger(
-        options.model?.contextWindow ?? process.env.CONTEXT_WINDOW,
-        128_000,
-        "CONTEXT_WINDOW",
-      ),
-      maxTokens: positiveInteger(
-        options.model?.maxTokens ?? process.env.MAX_TOKENS,
-        16_384,
-        "MAX_TOKENS",
-      ),
-    },
+    model,
+    compaction: chatCompactionConfig(options.compaction, process.env, model),
   };
 }

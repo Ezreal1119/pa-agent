@@ -27,6 +27,7 @@ import { installMessageAttachments, messageAttachments, attachmentReadInfo } fro
 import { FileStore } from "../file-tools/store.js";
 import { knowledgeLock } from "../knowledge-sync/core.js";
 import { guardNativeReads } from "../file-tools/read-guard.js";
+import { ChatCompaction } from "./chat-compaction.js";
 
 // ModelRuntime uses this ID to connect the provider, model, and API key.
 const PROVIDER_ID = "openai-compatible";
@@ -164,7 +165,8 @@ export class AgentRuntime {
 
     // Keeps session behavior independent from global or project settings files.
     const settingsManager = SettingsManager.inMemory({
-      // Old rounds must leave context, including their summaries.
+      // The application schedules compaction only after answer delivery, rather
+      // than allowing the SDK to compact in the middle of an answering run.
       compaction: {
         enabled: false,
         // Leaves this many tokens available for the compaction summary and the next response.
@@ -244,6 +246,12 @@ export class AgentRuntime {
       thinkingLevel: "medium",
     });
 
+    const compactor = this.config.compaction.enabled ? new ChatCompaction(session, {
+      config: this.config.compaction, model: this.config.model, dataDir: this.config.dataDir,
+      retention: this.retention, stream: session.agent.streamFunction,
+    }) : undefined;
+    const disposeSession = session.dispose.bind(session);
+    session.dispose = () => { compactor?.dispose(); disposeSession(); };
     meterSession(session, this.config.dataDir, "chat", this.config.model);
     boundSession = session;
     try {
