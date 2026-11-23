@@ -28,6 +28,65 @@ async function fixture(t,settings={},extra={}){
 }
 const parseSse=text=>text.split('\n\n').flatMap(frame=>{const event=frame.split('\n').find(s=>s.startsWith('event: '))?.slice(7),data=frame.split('\n').find(s=>s.startsWith('data: '))?.slice(6);return event&&data?[{event,data:JSON.parse(data)}]:[]});
 
+test('Sub-Agents lists the read-only ONES profile and persists its switch across requests and restarts', async t => {
+ const f = await fixture(t);
+ const onRoute = '/api/sub-agents/ones';
+ await fs.writeFile(path.join(f.root, '.env'), 'ONES_AGENT_ENABLED=true\n');
+ f.options.ones.enabled = undefined;
+ await f.restart();
+ assert.equal((await fetch(f.base+'/sub-agents', {redirect:'manual'})).headers.get('location'), '/login');
+ assert.equal((await fetch(f.base+'/api/sub-agents')).status, 401);
+ assert.match(await (await f.admin('/')).text(), /href="\/sub-agents"/);
+ assert.match(await (await f.admin('/sub-agents')).text(), /Prompt and tools/);
+ const profile = await (await f.admin('/api/sub-agents')).text();
+ assert.doesNotMatch(profile, /ONES_FIXTURE_SECRET|MODEL_FIXTURE_SECRET/);
+ const [ones] = JSON.parse(profile).agents;
+ assert.equal(ones.enabled, false);
+ assert.equal(ones.supervisorTool.name, 'ask_ones_agent');
+ assert.match(ones.prompt, /你是 ONES 售后业务查询专家/);
+ assert.ok(ones.mcpTools.includes('get_issue_details'));
+ assert.equal(ones.internalTools[0].name, 'finish_ones_task');
+ assert.equal(f.mcpRequests.length, 0);
+ assert.equal((await f.admin(onRoute, 'PUT', {enabled:true, prompt:'modified'})).status, 400);
+
+ f.setModel((body, res) => {
+  if (body.tools.some(tool => tool.function.name === 'ask_ones_agent') || isChild(body)) return defaultModel(body, res);
+  return streamReply(res, {text:'Supervisor answered without ONES.'});
+ });
+ const session = await (await f.admin('/api/sessions', 'POST', {})).json();
+ async function run(text) {
+  const response = await f.admin(`/api/sessions/${session.id}/run`, 'POST', {text});
+  assert.equal(response.status, 200);
+  const done = parseSse(await response.text()).find(frame => frame.event === 'done').data;
+  assert.equal(done.failed, false);
+  return done.run;
+ }
+ assert.equal((await run('关闭时查询')).onesTasks?.length ?? 0, 0);
+ assert.equal(f.requests[0].tools.some(tool => tool.function.name === 'ask_ones_agent'), false);
+ assert.equal((await (await f.admin(onRoute, 'PUT', {enabled:true})).json()).agents[0].enabled, true);
+ assert.equal((await run('打开后查询同一个会话')).onesTasks[0].status, 'completed');
+
+ const settings = await (await f.admin('/api/agent-settings')).json();
+ assert.equal((await f.admin('/api/agent-settings', 'PUT', settings.settings)).status, 200);
+ await f.restart();
+ assert.equal((await (await f.admin('/api/sub-agents')).json()).agents[0].enabled, true);
+ assert.equal((await run('重启后继续查询')).onesTasks[0].status, 'completed');
+ assert.equal((await (await f.admin(onRoute, 'PUT', {enabled:false})).json()).agents[0].enabled, false);
+ assert.equal((await run('再次关闭后查询')).onesTasks?.length ?? 0, 0);
+ assert.equal(f.requests.at(-1).tools.some(tool => tool.function.name === 'ask_ones_agent'), false);
+});
+
+test('Sub-Agents keeps ONES inspectable while its MCP token is missing', async t => {
+ const f = await fixture(t, {}, {ones:{token:''}});
+ const list = await (await f.admin('/api/sub-agents')).json();
+ const [ones] = list.agents;
+ assert.equal(ones.enabled, false);
+ assert.match(ones.unavailable, /ONES_MCP_TOKEN/);
+ assert.ok(ones.prompt);
+ assert.equal((await f.admin('/api/sub-agents/ones', 'PUT', {enabled:true})).status, 409);
+ assert.equal((await f.admin('/api/sessions','POST',{})).status, 201);
+});
+
 test('Web delegates with a single main run slot, reports progress/usage, retains details and deletes child history',async t=>{
  const f=await fixture(t);const s=await(await f.admin('/api/sessions','POST',{})).json();
  const response=await f.admin(`/api/sessions/${s.id}/run`,'POST',{text:'查 SQ29M 发布记录'});assert.equal(response.status,200);
@@ -66,6 +125,8 @@ test('stopping a Web question cancels ONES and still records child usage without
  const f=await fixture(t),s=await(await f.admin('/api/sessions','POST',{})).json();let waiting=false;
  f.setModel((b,res)=>{if(isChild(b)&&currentTools(b).length){waiting=true;return;}return defaultModel(b,res);});
  const response=await f.admin(`/api/sessions/${s.id}/run`,'POST',{text:'停止测试'});const body=response.text();await until(()=>waiting);
+ assert.equal((await f.admin('/api/sub-agents/ones','PUT',{enabled:false})).status,409);
+ assert.equal((await (await f.admin('/api/sub-agents')).json()).agents[0].enabled,true);
  assert.equal((await f.admin(`/api/sessions/${s.id}/stop`,'POST',{})).status,200);const events=parseSse(await body);const done=events.find(e=>e.event==='done').data;
  assert.equal(done.run.status,'stopped');assert.equal(done.run.onesTasks.length,1);assert.equal(done.run.onesTasks[0].status,'cancelled');assert.equal(done.run.usage.input,200);assert.equal(done.run.usage.requests,3);
 });

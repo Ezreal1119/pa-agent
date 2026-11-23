@@ -11,6 +11,7 @@ import { ChatCompaction, chatCompaction } from "../agent/chat-compaction.js";
 import type { OnesConfig } from "./config.js";
 import { OnesMcp, OnesError } from "./mcp.js";
 import { finishSchema, type Delegation, type OnesAnswer, type OnesTaskResult } from "./types.js";
+import { ONES_FINISH_TOOL } from "./tool.js";
 
 const MONTH = 30 * 86400000;
 const rootDir = (dataDir: string) => path.join(dataDir, "agents/ones/parents");
@@ -102,7 +103,7 @@ export class OnesAgentService {
           }
         },
       }));
-      tools.push({name: "finish_ones_task", label: "提交 ONES 查询结果", description: "Submit the final evidence-based task result, then stop. Use needs_clarification when essential information is missing; partial when only part was verified. Sources must come from actual tool responses.", parameters: finishSchema,
+      tools.push({...ONES_FINISH_TOOL, parameters: finishSchema,
         execute: async (_id, args: OnesAnswer) => {
           ensure();
           if (JSON.stringify(args).length > 32000) throw new Error("ONES 任务结果过长，请精简结论和来源。");

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { isReasoningMode, type ReasoningMode } from "../agent/reasoning.js";
 import { FILE_TOOL_NAMES, CREATE_TOOL_NAMES, type FileToolName } from "../file-tools/config.js";
 import { safeDirectory } from "../file-tools/store.js";
+import { validateSubAgentSwitches, type SubAgentSwitches } from "./sub-agents.js";
 
 import { defaultWebToolSettings, WEB_TOOL_NAMES, type WebToolName } from "../web-tools/config.js";
 
@@ -14,6 +15,7 @@ export interface WebAgentSettings {
   libraryLinks: { enabled: boolean };
   firmware?: { enabled: boolean };
   memoryRecall?: { enabled: boolean };
+  subAgents?: SubAgentSwitches;
   webTools: { tools: Record<WebToolName, boolean> };
   fileTools: { tools: Record<FileToolName, boolean> };
 }
@@ -25,7 +27,7 @@ function toolPreferences<T extends string>(input: unknown, names: readonly T[], 
 }
 export function validateAgentSettings(input: unknown): WebAgentSettings {
   const value = input as WebAgentSettings;
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["effort", "fileTools", "libraryLinks", "webTools", "mcp", "firmware", "memoryRecall"].includes(key)) || !isReasoningMode(value.effort)) throw new Error("Select a valid reasoning level.");
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["effort", "fileTools", "libraryLinks", "webTools", "mcp", "firmware", "memoryRecall", "subAgents"].includes(key)) || !isReasoningMode(value.effort)) throw new Error("Select a valid reasoning level.");
   if (value.firmware !== undefined && (!value.firmware || typeof value.firmware !== "object" || Array.isArray(value.firmware) || Object.keys(value.firmware).some(key => key !== "enabled") || typeof value.firmware.enabled !== "boolean")) throw new Error("Provide a valid firmware tool switch.");
   if (value.mcp !== undefined && (!value.mcp || typeof value.mcp !== "object" || Array.isArray(value.mcp) || Object.keys(value.mcp).some(key => key !== "enabled") || typeof value.mcp.enabled !== "boolean")) throw new Error("Provide a valid MCP switch.");
   const recall = value.memoryRecall;
@@ -35,7 +37,8 @@ export function validateAgentSettings(input: unknown): WebAgentSettings {
   // Settings saved before the library switch existed retain their enabled behavior.
   if (links !== undefined && (!links || typeof links !== "object" || Array.isArray(links) || Object.keys(links).some(key => key !== "enabled") || typeof links.enabled !== "boolean")) throw new Error("Provide a valid library link tool switch.");
   const webTools = value.webTools === undefined ? defaultWebToolSettings() : toolPreferences(value.webTools, WEB_TOOL_NAMES, "online");
-  return { effort: value.effort, ...(value.mcp ? { mcp: { enabled: value.mcp.enabled } } : {}), ...(value.firmware ? { firmware: { enabled: value.firmware.enabled } } : {}), ...(recall ? { memoryRecall: { enabled: recall.enabled } } : {}), webTools, libraryLinks: { enabled: links?.enabled ?? true }, fileTools };
+  const subAgents = value.subAgents === undefined ? {} : { subAgents: validateSubAgentSwitches(value.subAgents) };
+  return { effort: value.effort, ...(value.mcp ? { mcp: { enabled: value.mcp.enabled } } : {}), ...(value.firmware ? { firmware: { enabled: value.firmware.enabled } } : {}), ...(recall ? { memoryRecall: { enabled: recall.enabled } } : {}), ...subAgents, webTools, libraryLinks: { enabled: links?.enabled ?? true }, fileTools };
 }
 export class AgentSettingsStore {
   readonly file: string;

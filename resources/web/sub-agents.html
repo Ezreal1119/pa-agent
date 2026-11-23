@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sub-Agents · Product Expert</title>
+  <link rel="icon" type="image/png" href="/favicon.png?v=patrick-1">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/sub-agents.css">
+  <script defer src="/sub-agents.js"></script>
+</head>
+<body>
+  <main class="contacts-page sub-agents-page">
+    <header class="contacts-page-header">
+      <a class="brand" href="/"><span class="brand-mark">pe</span><span><strong>Product Expert</strong><small>KNOWLEDGE WORKSPACE</small></span></a>
+      <a class="contacts-back" href="/">← Back to workspace</a>
+    </header>
+    <h1>Sub-Agents</h1>
+    <p class="contacts-description">Control which specialists the Supervisor can call. Switches apply to new requests across all channels.</p>
+    <p id="sub-agents-status" class="sub-agents-status" role="status">Loading sub-agents…</p>
+    <p id="sub-agents-error" class="form-error" role="alert" hidden></p>
+    <div id="sub-agents-list" class="sub-agents-list"></div>
+  </main>
+  <template id="sub-agent-card">
+    <article class="sub-agent-card">
+      <header class="sub-agent-header">
+        <div>
+          <h2 data-field="name"></h2>
+          <p data-field="description"></p>
+          <p class="sub-agent-delegation">Supervisor tool <code data-field="supervisor-tool"></code></p>
+        </div>
+        <label class="sub-agent-switch">
+          <span data-field="state"></span>
+          <input type="checkbox" role="switch">
+        </label>
+      </header>
+      <p class="sub-agent-unavailable" data-field="unavailable" hidden></p>
+      <details class="sub-agent-details">
+        <summary>Prompt and tools <span>Read-only</span></summary>
+        <div class="sub-agent-detail-body">
+          <h3>Agent prompt</h3>
+          <pre data-field="prompt" tabindex="0" aria-label="Agent prompt"></pre>
+          <h3>Supervisor instructions</h3>
+          <p data-field="supervisor-description"></p>
+          <p data-field="supervisor-guidance"></p>
+          <h3>Internal tools</h3>
+          <dl data-field="internal-tools"></dl>
+          <h3>Allowed MCP tools</h3>
+          <p>The agent uses allowed tools that are available from the MCP server at runtime.</p>
+          <ul class="sub-agent-tool-list" data-field="mcp-tools"></ul>
+        </div>
+      </details>
+    </article>
+  </template>
+</body>
+</html>

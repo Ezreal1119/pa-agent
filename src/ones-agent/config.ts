@@ -34,13 +34,9 @@ const defaults: OnesSettings = {
   maxDelegations: 3, maxContextChars: 32000, maxResultBytes: 1024 * 1024, concurrency: 2, queueLimit: 8,
   compaction: { enabled: true, triggerTokens: 384000, keepRecentRounds: 5 },
 };
-/** Files and explicit options share the same validation; secrets never belong in these files. */
-export function onesConfig(resourcesDir: string, model: ModelConfig, options: OnesOptions = {}, env = process.env): OnesConfig {
-  const enabled = options.enabled ?? env.ONES_AGENT_ENABLED ?? false;
-  if (![true, false, "true", "false"].includes(enabled)) throw new Error("ONES_AGENT_ENABLED must be true or false.");
-  const on = enabled === true || enabled === "true";
-  const file = on ? JSON.parse(fs.readFileSync(path.join(resourcesDir, "agents/ones/config.json"), "utf8")) : {};
-  if (!file || typeof file !== "object" || Array.isArray(file) || Object.keys(file).some(k => !Object.hasOwn(defaults, k))) throw new Error("Invalid ONES Agent config fields.");
+function onesSettings(input: unknown, options: OnesOptions): OnesSettings {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(k => !Object.hasOwn(defaults, k))) throw new Error("Invalid ONES Agent config fields.");
+  const file = input as NonNullable<OnesOptions["settings"]>;
   for (const value of [file.compaction, options.settings?.compaction]) {
     if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !Object.hasOwn(defaults.compaction, k)))) throw new Error("Invalid ONES compaction fields.");
   }
@@ -51,14 +47,38 @@ export function onesConfig(resourcesDir: string, model: ModelConfig, options: On
     if (!Number.isSafeInteger(n) || n < (name === "queueLimit" ? 0 : 1) || n > ({concurrency: 8, queueLimit: 100, timeoutMs: 900000, maxContextChars: 128000, maxResultBytes: 4 * 1024 * 1024}[name as string] ?? 1000)) throw new Error(`Invalid ONES Agent ${name}.`);
   }
   if (!Array.isArray(settings.tools) || !settings.tools.length || settings.tools.some((t: unknown) => typeof t !== "string" || !ONES_READ_TOOLS.includes(t as typeof ONES_READ_TOOLS[number])) || new Set(settings.tools).size !== settings.tools.length) throw new Error("ONES Agent tools must be a unique allowlist of supported read-only tools.");
-  const compaction = chatCompactionConfig({ ...defaults.compaction, ...file.compaction, ...options.settings?.compaction }, {}, on ? model : undefined);
-  if (on && !compaction.enabled) throw new Error("ONES Agent requires compaction; configure its independent threshold instead of disabling it.");
+  const compaction = chatCompactionConfig({ ...defaults.compaction, ...file.compaction, ...options.settings?.compaction }, {});
+  return { ...settings, tools: [...settings.tools], compaction };
+}
+
+/** The saved profile is available for inspection while the specialist is disabled. */
+export function onesProfile(resourcesDir: string, options: OnesOptions = {}): OnesSettings & { prompt: string } {
+  const directory = path.join(resourcesDir, "agents/ones");
+  const settings = onesSettings(JSON.parse(fs.readFileSync(path.join(directory, "config.json"), "utf8")), options);
+  const prompt = fs.readFileSync(path.join(directory, "system.md"), "utf8");
+  if (!prompt.trim()) throw new Error("ONES Agent prompt is empty.");
+  return { ...settings, prompt };
+}
+
+export function onesConnection(options: OnesOptions = {}, env = process.env) {
   const url = options.url ?? env.ONES_MCP_URL ?? "https://ones.urovo.com:8881/mcp";
-  const token = options.token ?? env.ONES_MCP_TOKEN ?? "";
-  const parsed = new URL(url);
+  return { url, token: options.token ?? env.ONES_MCP_TOKEN ?? "" };
+}
+
+export function validateOnesActivation(settings: OnesSettings, model: ModelConfig, connection: ReturnType<typeof onesConnection>) {
+  if (!connection.token.trim() || /[\r\n]/.test(connection.token)) throw new Error("Set a valid ONES_MCP_TOKEN in .env and restart the service.");
+  let parsed: URL;
+  try { parsed = new URL(connection.url); } catch { throw new Error("Set a valid ONES_MCP_URL in .env and restart the service."); }
   if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.protocol !== "https:" && !(parsed.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname))) throw new Error("ONES MCP requires HTTPS without URL credentials, query or fragment.");
-  if (on && (!token.trim() || /[\r\n]/.test(token))) throw new Error("ONES_MCP_TOKEN is required and must be a single line.");
-  const prompt = on ? fs.readFileSync(path.join(resourcesDir, "agents/ones/system.md"), "utf8") : "";
-  if (on && !prompt.trim()) throw new Error("ONES Agent prompt is empty.");
-  return { ...settings, tools: [...settings.tools], compaction, enabled: on, url, token, prompt };
+  if (!settings.compaction.enabled) throw new Error("ONES Agent requires compaction; configure its independent threshold instead of disabling it.");
+  if (settings.compaction.triggerTokens >= model.contextWindow - model.maxTokens - 16384) throw new Error("The ONES compaction threshold must be below CONTEXT_WINDOW - MAX_TOKENS - 16384.");
+}
+
+/** Files and explicit options share the same validation; secrets never belong in these files. */
+export function onesConfig(resourcesDir: string, model: ModelConfig, options: OnesOptions = {}, env = process.env): OnesConfig {
+  const enabled = options.enabled ?? false;
+  const connection = onesConnection(options, env);
+  const profile = enabled ? onesProfile(resourcesDir, options) : { ...onesSettings({}, options), prompt: "" };
+  if (enabled) validateOnesActivation(profile, model, connection);
+  return { ...profile, ...connection, enabled };
 }

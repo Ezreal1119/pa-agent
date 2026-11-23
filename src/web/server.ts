@@ -1,7 +1,7 @@
 import { memoryRecallConfig } from "../memory-recall/config.js";
 import { fullMemory, memorySnapshot } from "../memory-recall/retrieve.js";
 import { recoverAllOnesReceipts, recoverOnesReceipts } from "../ones-agent/store.js";
-import { onesConfig } from "../ones-agent/config.js";
+import { onesConnection } from "../ones-agent/config.js";
 import { removeOnesParent } from "../ones-agent/service.js";
 import { recordSubAgentResult } from "../sub-agents/metrics.js";
 import { chatCompaction, contextRounds } from "../agent/chat-compaction.js";
@@ -43,6 +43,7 @@ import { wecomRunDetail } from "./run-detail.js";
 import { chatHistory, ChatHistoryError, CHAT_HISTORY_PAGE_SIZE, historyPageSize } from "./chat-history.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
+import { onesCatalogEntry, subAgentId } from "./sub-agents.js";
 import { WebAuth } from "./auth.js";
 import { WecomContacts, observation } from "./wecom-contacts.js";
 import { WebOriginPolicy, RequestOriginError } from "./origin.js";
@@ -129,10 +130,12 @@ export async function createWebServer(options: WebOptions = {}) {
     contextWindow: options.model?.contextWindow ?? Number(process.env.CONTEXT_WINDOW ?? diskEnv.CONTEXT_WINDOW ?? 128000),
     maxTokens: options.model?.maxTokens ?? Number(process.env.MAX_TOKENS ?? diskEnv.MAX_TOKENS ?? 16384),
   };
-  const ones = onesConfig(resourcesDir, settings, options.ones, { ...diskEnv, ...process.env });
+  const ones = onesConnection(options.ones, { ...diskEnv, ...process.env });
+  const subAgents = { ones: onesCatalogEntry(resourcesDir, settings, options.ones, ones) };
+  const subAgentRequested = (id: keyof typeof subAgents) => agentSettings.subAgents?.[id] ?? (id === "ones" && options.ones?.enabled === true);
+  const onesOptions = () => ({ ...options.ones, ...ones, enabled: subAgentRequested("ones") && !subAgents.ones.unavailable });
   const recallDefaults = memoryRecallConfig(options.memoryRecall, { ...diskEnv, ...process.env });
   const recallConfig = () => ({ ...recallDefaults, enabled: agentSettings.memoryRecall?.enabled ?? recallDefaults.enabled });
-  const onesOptions = { ...options.ones, enabled: ones.enabled, url: ones.url, token: ones.token };
   const compactionConfig = chatCompactionConfig(options.compaction, { ...diskEnv, ...process.env }, settings);
   const csrf = randomBytes(24).toString("hex");
   const webConfig = webToolConfig(options.webTools, settings, { ...diskEnv, ...process.env });
@@ -141,12 +144,15 @@ export async function createWebServer(options: WebOptions = {}) {
     webConfig.tools = WEB_TOOL_NAMES.filter(name => agentSettings.webTools.tools[name]); webConfig.enabled = webConfig.tools.length > 0;
   };
   applyAgentSettings();
-  const agentSettingsResponse = () => ({
-    settings: { ...agentSettings, memoryRecall: { enabled: recallConfig().enabled } },
-    reasoningSupported: isDeepSeekModel(settings),
-    webToolsConfigured: Boolean(webConfig.apiKey),
-    firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token),
-  });
+  const agentSettingsResponse = () => {
+    const { subAgents: _subAgents, ...preferences } = agentSettings;
+    return {
+      settings: { ...preferences, memoryRecall: { enabled: recallConfig().enabled } },
+      reasoningSupported: isDeepSeekModel(settings),
+      webToolsConfigured: Boolean(webConfig.apiKey),
+      firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token),
+    };
+  };
   mcpOptions.enabled = agentSettings.mcp?.enabled ?? mcpOptions.enabled;
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
@@ -170,10 +176,20 @@ export async function createWebServer(options: WebOptions = {}) {
   let initializing: Promise<AgentRuntime> | undefined;
   let configuring = false;
   let openingSessions = 0;
+  const canReconfigure = () => !configuring && (!initializing || Boolean(runtime)) &&
+    openingSessions === 0 && ![...records.values()].some(item => item.running || item.opening || item.mutating);
+  async function resetRuntime() {
+    await Promise.all([...records.values()].map(item => item.session && chatCompaction(item.session)?.cancel()));
+    for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
+    const previous = runtime;
+    runtime = undefined;
+    initializing = undefined;
+    await previous?.close();
+  }
   let mcp: McpService | undefined;
   let httpApiService: McpService | undefined;
   const configured = () => Boolean(settings.apiKey && settings.baseUrl && settings.modelId);
-  const redact = (error: unknown) => {
+  const redactSecrets = (error: unknown) => {
     let message = error instanceof Error ? error.message : String(error);
     for (const reader of knowledgeTokens) message = message.split(reader.token).join("[REDACTED]");
     if (httpApiOptions.apiKey) message = message.split(httpApiOptions.apiKey).join("[REDACTED]");
@@ -187,8 +203,13 @@ export async function createWebServer(options: WebOptions = {}) {
     if (sftpOptions.password) message = message.split(sftpOptions.password).join("[REDACTED]");
     if (adminPassword) message = message.split(adminPassword).join("[REDACTED]");
     if (fileConfig.vision.apiKey) message = message.split(fileConfig.vision.apiKey).join("[REDACTED]");
-    return message.slice(0, 2000);
+    return message;
   };
+  const redact = (error: unknown) => redactSecrets(error).slice(0, 2000);
+  const subAgentsResponse = () => ({ agents: Object.values(subAgents).map(agent => {
+    const requested = subAgentRequested(agent.id);
+    return { ...agent, prompt: redactSecrets(agent.prompt), requested, enabled: requested && !agent.unavailable };
+  }) });
   const syncEnv = { ...diskEnv, ...process.env };
   const syncTimeout = boundedSetting(options.sync?.timeoutMs ?? syncEnv.SYNC_FILE_TIMEOUT_MS, 1800000, 1000, 7200000, "SYNC_FILE_TIMEOUT_MS");
   const syncCalls = boundedSetting(syncEnv.SYNC_MAX_MODEL_REQUESTS, 64, 1, 512, "SYNC_MAX_MODEL_REQUESTS");
@@ -238,7 +259,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
-      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, ones: onesOptions, memoryRecall: recallConfig(), compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
+      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, ones: onesOptions(), memoryRecall: recallConfig(), compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
       initializing = AgentRuntime.create(config).then(value => runtime = value).catch(error => { initializing = undefined; throw error; });
     }
     return initializing;
@@ -577,7 +598,7 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       const publicAsset = ["/login", "/login.js", "/style.css", "/favicon.png", "/favicon.ico"].includes(url.pathname) && (method === "GET" || method === "HEAD");
       if (!authenticated && !publicAsset) {
-        if (["/", "/wecom-contacts", "/mcp-usage", "/synchronize", "/research"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
+        if (["/", "/wecom-contacts", "/mcp-usage", "/synchronize", "/research", "/sub-agents"].includes(url.pathname) && (method === "GET" || method === "HEAD")) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
         throw new HttpError(401, "Please sign in first.");
       }
       if (url.pathname === "/login" && authenticated) { res.writeHead(302, { Location: "/" }); res.end(); return; }
@@ -604,7 +625,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (url.pathname === "/api/prompt/preview" && method === "POST") {
           const body = await readBody(req, 262144);
           if (Object.keys(body).some(k => !["instructions", "mode"].includes(k)) || !["standard", "mcp"].includes(body.mode)) throw new HttpError(400, "Provide instructions and standard or mcp mode.");
-          const config = resolveConfig({cwd,dataDir,resourcesDir,ones:onesOptions,memoryRecall:recallConfig(),model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
+          const config = resolveConfig({cwd,dataDir,resourcesDir,ones:onesOptions(),memoryRecall:recallConfig(),model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
           const release = await knowledgeLock(path.join(dataDir,"urovo-product-expert")).read();
           try { return json(res, 200, {...await previewPrompt(config,body.mode === "mcp",body.instructions), reasoning: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default"}); }
           finally { release(); }
@@ -849,14 +870,44 @@ export async function createWebServer(options: WebOptions = {}) {
       }
       if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "bearer", keyConfigured: mcpAccess.configured, ...await mcpStore.summary() });
       if (url.pathname === "/api/config") throw new HttpError(410, "Model connections are configured in .env. Restart the service after making changes.");
+      if (url.pathname === "/api/sub-agents" || url.pathname.startsWith("/api/sub-agents/")) {
+        if (url.search) throw new HttpError(400, "Sub-agents do not accept query parameters.");
+        if (url.pathname === "/api/sub-agents") {
+          if (method !== "GET") throw new HttpError(405, "Use GET to list sub-agents.");
+          return json(res, 200, subAgentsResponse());
+        }
+        const id = url.pathname.slice("/api/sub-agents/".length);
+        if (!subAgentId(id)) throw new HttpError(404, "Sub-agent not found.");
+        if (method !== "PUT") throw new HttpError(405, "Use PUT to change a sub-agent switch.");
+        if (!canReconfigure()) throw new HttpError(409, "Wait for the current run to finish before changing sub-agent settings.");
+        configuring = true;
+        try {
+          const body = await readBody(req);
+          if (Object.keys(body).length !== 1 || typeof body.enabled !== "boolean") throw new HttpError(400, "Provide the enabled switch only.");
+          const { unavailable } = subAgents[id];
+          if (body.enabled && unavailable) throw new HttpError(409, unavailable);
+          if (body.enabled !== subAgentRequested(id)) {
+            const next = { ...agentSettings, subAgents: { ...agentSettings.subAgents, [id]: body.enabled } };
+            await resetRuntime();
+            await agentSettingsStore.save(next);
+            agentSettings = next;
+          }
+          return json(res, 200, subAgentsResponse());
+        } finally { configuring = false; }
+      }
       if (url.pathname === "/api/agent-settings") {
         if (method === "GET") return json(res, 200, agentSettingsResponse());
         if (method !== "PUT") throw new HttpError(405, "Agent settings support GET and PUT only.");
-        if (configuring || initializing && !runtime || openingSessions > 0 || [...records.values()].some(item => item.running || item.opening || item.mutating)) throw new HttpError(409, "Wait for the current run to finish before changing agent settings.");
+        if (!canReconfigure()) throw new HttpError(409, "Wait for the current run to finish before changing agent settings.");
         configuring = true;
         try {
           let next;
-          try { next = validateAgentSettings(await readBody(req)); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, redact(error)); }
+          try {
+            const body = await readBody(req);
+            if (Object.hasOwn(body, "subAgents")) throw new Error("Change sub-agent switches on the Sub-Agents page.");
+            next = validateAgentSettings(body);
+          } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, redact(error)); }
+          next.subAgents = agentSettings.subAgents;
           next.mcp ??= agentSettings.mcp;
           next.firmware ??= agentSettings.firmware;
           next.memoryRecall ??= agentSettings.memoryRecall;
@@ -868,9 +919,7 @@ export async function createWebServer(options: WebOptions = {}) {
             catch (error) { throw new HttpError(400, `Memory recall could not read the memory files. ${redact(error)}`); }
           }
           await agentSettingsStore.save(next);
-          await Promise.all([...records.values()].map(item => item.session && chatCompaction(item.session)?.cancel()));
-          for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
-          await runtime?.close(); runtime = undefined; initializing = undefined;
+          await resetRuntime();
           agentSettings = next; applyAgentSettings(); mcpOptions.enabled = next.mcp?.enabled ?? mcpOptions.enabled;
           return json(res, 200, agentSettingsResponse());
         } finally { configuring = false; }
@@ -1185,6 +1234,9 @@ export async function createWebServer(options: WebOptions = {}) {
         "/favicon.ico": [path.join(resourcesDir, "web/favicon.png"), "image/png"],
         "/": [path.join(resourcesDir, "web/index.html"), "text/html; charset=utf-8"],
         "/wecom-contacts": [path.join(resourcesDir, "web/contacts.html"), "text/html; charset=utf-8"],
+        "/sub-agents": [path.join(resourcesDir, "web/sub-agents.html"), "text/html; charset=utf-8"],
+        "/sub-agents.js": [path.join(resourcesDir, "web/sub-agents.js"), "text/javascript; charset=utf-8"],
+        "/sub-agents.css": [path.join(resourcesDir, "web/sub-agents.css"), "text/css; charset=utf-8"],
         "/synchronize": [path.join(resourcesDir, "web/synchronize.html"), "text/html; charset=utf-8"],
         "/synchronize.js": [path.join(resourcesDir, "web/synchronize.js"), "text/javascript; charset=utf-8"],
         "/synchronize-source-tabs.js": [path.join(resourcesDir, "web/synchronize-source-tabs.js"), "text/javascript; charset=utf-8"],

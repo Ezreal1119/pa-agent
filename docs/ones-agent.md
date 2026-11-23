@@ -1,6 +1,6 @@
 # ONES 专业 Agent
 
-ONES 专业 Agent 使用现有 Pi core 和模型连接，在同一个应用进程内运行。主 Agent 通过 `ask_ones_agent` 委派查询，ONES 自行执行查询并返回证据、限制和需要澄清的问题，主 Agent 统一回答。没有独立服务、直接聊天端点或 Web 配置编辑器。
+ONES 专业 Agent 使用现有 Pi core 和模型连接，在同一个应用进程内运行。主 Agent 通过 `ask_ones_agent` 委派查询，ONES 自行执行查询并返回证据、限制和需要澄清的问题，主 Agent 统一回答。
 
 ## 启用与配置
 
@@ -9,18 +9,19 @@ ONES 专业 Agent 使用现有 Pi core 和模型连接，在同一个应用进�
 在部署环境填写：
 
 ```dotenv
-ONES_AGENT_ENABLED=true
 ONES_MCP_URL=https://ones.urovo.com:8881/mcp
 ONES_MCP_TOKEN=<你的 ONES 手工 MCP Token>
 ```
+
+重启服务以加载连接配置。在侧栏打开 **Sub-Agents**，启用 **ONES Agent**。默认关闭，开关设置会保留到下次重启。旧的 `ONES_AGENT_ENABLED` 环境变量可以移除。开关保存后对后续 Web、企微、HTTP API 和 MCP 问答生效。如果当前有问答运行，等待完成后再切换。页面可展开查看 Supervisor 委派工具、ONES Prompt 和工具允许列表。
 
 应用固定发送 `X-ONES-MCP-Token`。当前 ONES 服务实测该请求头可用；相同 Token 使用 `Authorization: Bearer` 曾返回 invalid_token。凭据仅由后端连接层使用，不加入模型 Prompt、配置 JSON、URL、普通日志或错误响应。没有配置凭据时不能启用。仅允许 HTTPS；本地回归夹具允许 localhost HTTP。拒绝跳转，避免凭据跟随重定向。
 
 配置分为：
 
 - `resources/agents/ones/system.md`：职责、业务术语、查询规则、来源要求和最终提交方式。用户“发布记录”“工单”等用语不直接等同于某个 ONES 类型；应查询后确认。
-- `resources/agents/ones/config.json`：工具允许列表、任务预算、并发和上下文策略。所有字段通过统一配置校验，后续 Web 编辑可以复用；本版修改后重启生效。
-- 环境变量：开关、地址和凭据。模型连接及推理级别复用主 Agent，不复制其产品知识、记忆、技能或文件工具。
+- `resources/agents/ones/config.json`：工具允许列表、任务预算、并发和上下文策略。所有字段通过统一配置校验，修改后重启生效。
+- 环境变量：MCP 地址和凭据。模型连接及推理级别复用主 Agent。
 
 JSON 默认值：
 

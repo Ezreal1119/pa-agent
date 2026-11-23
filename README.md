@@ -343,7 +343,7 @@ WeCom `/firmware` opens a separate OS firmware workflow: real FTP candidates →
 
 ## ONES specialist Agent
 
-Optionally enable `ONES_AGENT_ENABLED=true`, set `ONES_MCP_URL` and `ONES_MCP_TOKEN`, and restart the application. The main Agent can delegate read-only after-sales/ONES queries with `ask_ones_agent` across Web, WeCom, HTTP API and MCP. The backend attaches the original question; the main model selects relevant facts, corrections and constraints. ONES uses its own prompt, tool allowlist and durable context, with independent post-task compaction (384,000 tokens, latest five complete tasks retained). All callers use the configured ONES account's visibility. Disabled by default; no direct specialist endpoint or Web configuration page is added. Run `npm ci` on upgrade because the MCP client is now a production dependency. [Configuration, lifecycle and local tests](docs/ones-agent.md).
+Set `ONES_MCP_URL` and `ONES_MCP_TOKEN` in `.env` and restart the application. Use **Sub-Agents → ONES Agent** to enable it and inspect its prompt and tools. The switch defaults to off and survives restarts. The Supervisor can delegate read-only after-sales/ONES queries with `ask_ones_agent` across Web, WeCom, HTTP API and MCP. The backend attaches the original question and the Supervisor selects relevant facts, corrections and constraints. ONES uses its own prompt, tool allowlist and durable context, with independent post-task compaction (384,000 tokens, latest five complete tasks retained). All callers use the configured ONES account's visibility. [Configuration, lifecycle and local tests](docs/ones-agent.md).
 
 ## On-demand memory recall
 
