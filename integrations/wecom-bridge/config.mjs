@@ -24,7 +24,9 @@ export function bridgeConfig(env, cwd) {
   if (groupChatId && (groupChatId.length > 256 || /[\s\u0000-\u001f\u007f]/.test(groupChatId) || !bots.some(bot => bot.botId === groupBotId))) throw new Error('WECOM_SYNC_GROUP_CHAT_ID 必须是有效的群 Chat ID，WECOM_SYNC_GROUP_BOT_ID 必须是已配置的机器人。');
   const syncGroup = groupChatId ? { botId: groupBotId, recipient: groupChatId } : undefined;
   const dataDir = path.resolve(cwd, env.AGENT_DATA_DIR || '.data');
-  return { enabled, bots, notifyUserId, syncGroup, balanceNotifications: Boolean(notifyUserId), dataDir, directory: path.join(dataDir, 'wecom'), apiUrl: env.WECOM_AGENT_URL || `http://127.0.0.1:${env.WEB_PORT || 4321}`, token: env.WECOM_API_TOKEN,
+  return { enabled, bots, notifyUserId, syncGroup,
+    ...(env.APK_NOTIFY_ENABLED === 'true' ? {apkNotifications: {url: env.APK_NOTIFY_URL || 'http://127.0.0.1:8767', token: env.APK_NOTIFY_API_TOKEN}} : {}),
+    balanceNotifications: Boolean(notifyUserId), dataDir, directory: path.join(dataDir, 'wecom'), apiUrl: env.WECOM_AGENT_URL || `http://127.0.0.1:${env.WEB_PORT || 4321}`, token: env.WECOM_API_TOKEN,
     concurrency: number(env.WECOM_MAX_CONCURRENT_RUNS, 2, 1, 8, 'WECOM_MAX_CONCURRENT_RUNS'),
     queueLimit: number(env.WECOM_QUEUE_LIMIT, 8, 1, 100, 'WECOM_QUEUE_LIMIT'),
     maxFileBytes: Math.min(number(env.FILE_MAX_BYTES, 30 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER, 'FILE_MAX_BYTES'), 30 * 1024 * 1024),

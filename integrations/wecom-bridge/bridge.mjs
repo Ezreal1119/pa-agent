@@ -1,4 +1,5 @@
 import { SyncNotifier } from './sync-notifications.mjs';
+import {ApkNotifier, ApkNoticeApi} from './apk-notifications.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -48,6 +49,14 @@ export class WecomBridge {
         isConnected: botId => this.connected.has(botId), now: this.balanceNow, log: this.log }).start();
     }
     this.retryTimer = setInterval(() => this.pump(), 1000); this.retryTimer.unref?.();
+    if (this.config.apkNotifications) {
+      try {
+        this.apkNotifier = new ApkNotifier({store: this.store,
+          api: new ApkNoticeApi(this.config.apkNotifications.url, this.config.apkNotifications.token),
+          clients: this.clients, botId: this.config.bots[0]?.botId, recipient: this.config.notifyUserId,
+          isConnected: id => this.connected.has(id), log: this.log}).start();
+      } catch { this.log.warn('APK notifications unavailable; other Bridge functions remain enabled.'); }
+    }
     await this.enableFirmwareNotifications();
     this.firmwareCapabilityTimer = setInterval(() => { void this.enableFirmwareNotifications(); }, 15000); this.firmwareCapabilityTimer.unref?.();
   }
@@ -64,7 +73,7 @@ export class WecomBridge {
     } catch { /* Backend upgrades must not disable chat or lose queued firmware notices. */ }
     finally { this.firmwareChecking = false; }
   }
-  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); this.firmwareNotifier?.pump(); this.syncNotifier?.pump(); this.syncGroupNotifier?.pump(); }
+  authenticated(botId) { this.connected.add(botId); this.pump(); this.observer?.pump(); this.balanceNotifier?.pump(); this.firmwareNotifier?.pump(); this.syncNotifier?.pump(); this.syncGroupNotifier?.pump(); this.apkNotifier?.pump(); }
   disconnected(botId) { this.connected.delete(botId); }
   client(botId) { const client = this.clients.get(botId); if (!client) throw new Error('机器人配置不存在。'); return client; }
   async send(job, text) {
@@ -351,7 +360,7 @@ export class WecomBridge {
   async shutdown() {
     this.closing = true; clearInterval(this.timer); clearInterval(this.retryTimer); clearInterval(this.firmwareCapabilityTimer);
     for (const controller of this.controllers) controller.abort();
-    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close(), this.firmwareNotifier?.close(), this.syncNotifier?.close(), this.syncGroupNotifier?.close()]);
+    await Promise.allSettled([...this.active.values(), ...this.controlActive.values(), ...this.receiving, this.balanceNotifier?.close(), this.firmwareNotifier?.close(), this.syncNotifier?.close(), this.syncGroupNotifier?.close(), this.apkNotifier?.close()]);
     for (const client of this.clients.values()) client.disconnect();
     await this.observer?.close();
     await this.store.save(); await this.store.close();
