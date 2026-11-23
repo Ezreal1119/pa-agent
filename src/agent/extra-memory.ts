@@ -77,8 +77,8 @@ export class ExtraMemoryStore {
     const text = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(await this.download());
     return {text, revision: hash(text)};
   }
-  async change(input: MemoryChange, signal?: AbortSignal) {
-    return this.enqueue(() => this.commit(input, signal));
+  async change(input: MemoryChange, signal?: AbortSignal, compactConflict = false) {
+    return this.enqueue(() => this.commit(input, signal, compactConflict));
   }
   private async enqueue<T>(task: () => Promise<T>): Promise<T> {
     const previous = queues.get(this.file) ?? Promise.resolve();
@@ -87,7 +87,7 @@ export class ExtraMemoryStore {
     try { return await pending; }
     finally { if (queues.get(this.file) === pending) queues.delete(this.file); }
   }
-  private async commit(input: MemoryChange, signal?: AbortSignal) {
+  private async commit(input: MemoryChange, signal?: AbortSignal, compactConflict = false) {
     signal?.throwIfAborted();
     if (!/^[a-f0-9]{64}$/.test(input.expected_revision)) throw new Error("Use the extra memory Revision from this run or the latest successful memory tool result.");
     if (!["add", "edit", "delete"].includes(input.action)) throw new Error("Unsupported memory operation.");
@@ -96,7 +96,7 @@ export class ExtraMemoryStore {
       if (input.kind !== undefined && !/^[a-z][a-z0-9_-]{0,31}$/.test(input.kind)) throw new Error("Memory kind must be a short lowercase identifier such as fact, correction, or preference.");
     }
     const before = await this.snapshot();
-    const conflict = (current: typeof before) => new Error(`MEMORY_CONFLICT: extra memory changed. Re-evaluate the user's intended change against the current memory before retrying. ${JSON.stringify({ revision: current.revision, memory: current.text })}`);
+    const conflict = (current: typeof before) => new Error(`MEMORY_CONFLICT: extra memory changed. Re-evaluate the user's intended change against the current memory before retrying. ${JSON.stringify({ revision: current.revision, ...(compactConflict ? {} : {memory: current.text}) })}`);
     if (before.revision !== input.expected_revision) throw conflict(before);
     const entries = parse(before.text);
     const existing = input.action === "add" ? undefined : entries.find(entry => entry.id === input.id);
@@ -111,7 +111,7 @@ export class ExtraMemoryStore {
       ? `${before.text.trim() ? before.text.trimEnd() : "# Skill Memories"}\n\n${render(entry)}`
       : before.text.slice(0, existing!.start) + (input.action === "edit" ? render(entry) : "") + before.text.slice(existing!.end);
     parse(next);
-    const saved = await this.write(before, next, signal);
+    const saved = await this.write(before, next, signal, compactConflict);
     return { action: input.action, id: entry.id, ...saved, ...(input.action === "delete" ? {} : { entry }) };
   }
   /** Administrator raw editor. Uses the exact same queue and atomic writer as the memory tool. */
@@ -128,8 +128,8 @@ export class ExtraMemoryStore {
       return {text, revision: saved.revision, changed: true};
     });
   }
-  private async write(before: {text: string; revision: string}, next: string, signal?: AbortSignal) {
-    const conflict = (current: {text: string; revision: string}) => new Error(`MEMORY_CONFLICT: extra memory changed. Re-evaluate the user's intended change against the current memory before retrying. ${JSON.stringify({revision: current.revision, memory: current.text})}`);
+  private async write(before: {text: string; revision: string}, next: string, signal?: AbortSignal, compactConflict = false) {
+    const conflict = (current: {text: string; revision: string}) => new Error(`MEMORY_CONFLICT: extra memory changed. Re-evaluate the user's intended change against the current memory before retrying. ${JSON.stringify({revision: current.revision, ...(compactConflict ? {} : {memory: current.text})})}`);
     const directory = (await this.directory(MEMORY_DIRECTORY_PARTS, true))!;
     const backupDir = (await this.directory(["maintenance-backups", "extra-memory"], true))!;
     const backup = path.join(backupDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(6).toString("hex")}.md`);

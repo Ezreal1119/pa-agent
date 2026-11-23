@@ -247,6 +247,10 @@ export class WecomBridge {
           if (event === 'start') { job.runId = value.run.id; await this.store.save(); }
           if (event === 'output') { outputs.push(value.file); job.outputs = outputs; await this.store.save(); }
           if (event === 'error') job.runError = value.message;
+          if (event === 'notice' && ['ones', 'memory'].includes(value.agent)) {
+            const preview = splitUtf8(partial ? `${partial}\n\n${value.text}` : value.text)[0];
+            this.trackProgress(job, this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {}));
+          }
           if (event === 'text') partial += value.delta;
           if (event === 'text' && Date.now() - lastProgress > 2500) {
             lastProgress = Date.now();

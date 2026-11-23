@@ -340,3 +340,11 @@ Opt-in post-answer compaction accumulates conversation context until a configura
 ## OS firmware command
 
 WeCom `/firmware` opens a separate OS firmware workflow: real FTP candidates → AI matching → owner confirmation → local download and R2 upload → scheduled progress and final download link. A single global slot includes input and confirmation. The independent `firmware` tool switch blocks new requests; disabled/offline entry replies with a maintenance message while accepted tasks remain tracked. Local execution code stays in the Git/Docker-ignored `local-download-service/`; cloud-side state and notice outbox live in `.data/firmware/`. Configure the three `FIRMWARE_*` values and enable the tool in Agent Settings. See [setup, tunnel routing, behavior and manual VPS upgrade](docs/firmware.md).
+
+## ONES specialist Agent
+
+Optionally enable `ONES_AGENT_ENABLED=true`, set `ONES_MCP_URL` and `ONES_MCP_TOKEN`, and restart the application. The main Agent can delegate read-only after-sales/ONES queries with `ask_ones_agent` across Web, WeCom, HTTP API and MCP. The backend attaches the original question; the main model selects relevant facts, corrections and constraints. ONES uses its own prompt, tool allowlist and durable context, with independent post-task compaction (384,000 tokens, latest five complete tasks retained). All callers use the configured ONES account's visibility. Disabled by default; no direct specialist endpoint or Web configuration page is added. Run `npm ci` on upgrade because the MCP client is now a production dependency. [Configuration, lifecycle and local tests](docs/ones-agent.md).
+
+## On-demand memory recall
+
+Use **Agent settings → Memory recall** and **Save and apply** to switch between full memory injection and on-demand recall. The switch defaults to off. A saved choice takes precedence over the initial `MEMORY_RECALL_ENABLED` value and applies to subsequent Web, WeCom, HTTP API, and MCP requests. Each lookup makes at most one model request. [Setup and verification](docs/memory-recall.md)

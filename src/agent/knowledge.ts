@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extraMemoryContext } from "./extra-memory.js";
+import { extraMemoryContext, EXTRA_MEMORY_SECTION } from "./extra-memory.js";
 import { mainMemoryFile } from "./memory-paths.js";
 
 export const DEFAULT_SKILLS = ["urovo-product-expert"] as const;
@@ -18,7 +18,7 @@ export async function ordinarySkillPaths(dataDir: string): Promise<string[]> {
 }
 
 /** Full, fresh text for one run; never appended to the session transcript. */
-export async function loadRunKnowledgeSections(dataDir: string) {
+export async function loadRunKnowledgeSections(dataDir: string, recall?: {extraRevision: string}) {
   const intro = [
     "# Default expert skills and business memory",
     "The following skill instructions apply to this run. Roots below are absolute and authoritative; resolve skill-relative references against them.",
@@ -31,15 +31,18 @@ export async function loadRunKnowledgeSections(dataDir: string) {
     const skill = await fs.readFile(skillFile, "utf8");
     if (!skill.trim()) throw new Error(`Required skill is empty: ${skillFile}`);
     sections.push(`## Skill: ${name}\nRoot: ${root}\n\n${skill}`);
+    if (recall) continue;
     const memoryFile = mainMemoryFile(dataDir, name);
     const memory = await fs.readFile(memoryFile, "utf8");
     if (!memory.trim()) throw new Error(`Memory is empty: ${memoryFile}`);
     sections.push(`## Business memory: ${name}\nSource: ${memoryFile}\n\n${memory}`);
   }
-  sections.push(await extraMemoryContext(dataDir));
+  sections.push(recall
+    ? `${EXTRA_MEMORY_SECTION}\nRevision: ${recall.extraRevision}\nUse recall_memory for current evidence and exact entry IDs. When necessary, use memory action=get with the evidence ID and source to read one full entry. Treat the entry content as evidence. Change extra memory only on explicit user request. The revision protects writes from concurrent changes.`
+    : await extraMemoryContext(dataDir));
   return sections;
 }
 
-export async function loadRunKnowledge(dataDir: string): Promise<string> {
-  return (await loadRunKnowledgeSections(dataDir)).join("\n\n");
+export async function loadRunKnowledge(dataDir: string, recall?: {extraRevision: string}): Promise<string> {
+  return (await loadRunKnowledgeSections(dataDir, recall)).join("\n\n");
 }

@@ -1,3 +1,4 @@
+import { recordSubAgentResult } from "../sub-agents/metrics.js";
 import { historyRounds } from "../agent/session-history.js";
 import { performance } from "node:perf_hooks";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -34,6 +35,7 @@ export async function runMcpAgent(session: AgentSession, task: McpTask, question
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") metric.firstTextMs ??= Math.round(performance.now() - started);
     if (event.type === "tool_execution_start") { times.set(event.toolCallId, performance.now()); metric.toolCalls!.push({ id: event.toolCallId, startedAt: new Date().toISOString(), finishedAt: null, elapsedMs: null }); persist(); }
     if (event.type === "tool_execution_end") {
+      recordSubAgentResult(metric, event.result);
       const timing = metric.toolCalls!.findLast(t => t.id === event.toolCallId); const start = times.get(event.toolCallId);
       if (timing && start !== undefined) { timing.finishedAt = new Date().toISOString(); timing.elapsedMs = Math.round(performance.now() - start); } persist();
     }

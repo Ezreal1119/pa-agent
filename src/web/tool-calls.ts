@@ -1,3 +1,4 @@
+import { splitAgentUsage } from "../sub-agents/metrics.js";
 import { historyMessages, historyRounds } from "../agent/session-history.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { getRunMetrics } from "./run-metrics.js";
@@ -61,6 +62,6 @@ export function getToolRuns(session: AgentSession, activeId?: string) {
 export function publicRunMetrics(session: AgentSession, activeId?: string, rounds = getToolRuns(session, activeId)) {
   return getRunMetrics(session, activeId).map(metric => {
     const run = [...rounds.values()].find(r => r.id === metric.id);
-    return { ...metric, toolCallCount: run?.calls.length ?? 0 };
+    return { ...metric, ...(metric.onesTasks?.length || metric.memoryTasks?.length ? {agentUsage: splitAgentUsage(metric)} : {}), toolCallCount: run?.calls.length ?? 0 };
   });
 }

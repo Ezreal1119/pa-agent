@@ -1,3 +1,4 @@
+import { omitOldRecallEvidence, withoutRecallHistory } from "../memory-recall/tool.js";
 import fs from "node:fs/promises";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { recentRounds } from "./context-window.js";
@@ -8,11 +9,11 @@ import type { SessionRetention } from "./retention.js";
 import { chatCompaction } from "./chat-compaction.js";
 
 /** Enforce at the SDK boundary rather than depending on optional model tool calls. */
-export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention, promptOptions?: { sections: PromptSection[]; attachments?: () => Promise<PromptSection>; userRoleStyle?: () => string | undefined }): Promise<void> {
+export async function installSessionPolicy(session: AgentSession, dataDir: string, retention: SessionRetention, promptOptions?: { sections: PromptSection[]; attachments?: () => Promise<PromptSection>; userRoleStyle?: () => string | undefined; recall?: () => {extraRevision: string} }): Promise<void> {
   type Snapshot = { knowledge: string[]; instructions: string[]; userRoleStyle?: string };
   const store = new PromptInstructionsStore(dataDir);
   const load = async (): Promise<Snapshot> => {
-    const [knowledge, state] = await Promise.all([loadRunKnowledgeSections(dataDir), store.load()]);
+    const [knowledge, state] = await Promise.all([loadRunKnowledgeSections(dataDir, promptOptions?.recall?.()), store.load()]);
     return { knowledge, instructions: state.instructions, userRoleStyle: promptOptions?.userRoleStyle?.() };
   };
   let snapshot: Promise<Snapshot> | undefined;
@@ -30,7 +31,8 @@ export async function installSessionPolicy(session: AgentSession, dataDir: strin
   const compactor = chatCompaction(session);
   session.agent.transformContext = async (messages, signal) => {
     const context = transform ? await transform(messages, signal) : messages;
-    return compactor ? context : recentRounds(context);
+    const window = compactor ? context : recentRounds(context);
+    return promptOptions?.recall ? omitOldRecallEvidence(window) : withoutRecallHistory(window);
   };
 
   const stream = session.agent.streamFunction;

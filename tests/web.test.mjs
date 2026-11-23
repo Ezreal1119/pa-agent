@@ -628,10 +628,13 @@ test('Agent settings enforce authentication, CSRF, schema and provider capabilit
  const f=await fixture(t);const current=(await(await f.request('/api/agent-settings')).json()).settings;
  assert.equal((await f.request('/api/agent-settings','PUT',current,{'X-Local-Token':''})).status,403);
  assert.equal((await f.request('/api/agent-settings','PUT',current,{Cookie:''})).status,401);
+ for (const memoryRecall of [null, [], {}, {enabled:'true'}, {enabled:true,extra:true}]) {
+  assert.equal((await f.request('/api/agent-settings','PUT',{...current,memoryRecall})).status,400);
+ }
  for(const body of [{...current,effort:'bad'},...[null,[],{},true,{enabled:'true',tools:{search:true,fetch:true}},{enabled:true,tools:{search:true}},{enabled:true,tools:{search:true,fetch:true,bash:true}},{enabled:true,tools:{search:'yes',fetch:true}},{enabled:true,tools:{search:true,fetch:true},apiKey:'injection'}].map(webTools=>({...current,webTools})),...[{enabled:'true'},null,[],{},{enabled:true,endpoint:'https://other.example'}].map(libraryLinks=>({...current,libraryLinks})),{...current,modelId:'injection'},{...current,fileTools:{enabled:true,tools:{bash:true}}},{...current,fileTools:{...current.fileTools,enabled:'true'}}])assert.equal((await f.request('/api/agent-settings','PUT',body)).status,400);
  assert.equal((await f.request('/api/agent-settings','PUT',{...current,effort:'high'})).status,400);
  assert.deepEqual((await(await f.request('/api/agent-settings')).json()).settings,current);
- const page=await(await f.request('/')).text();assert.ok(page.includes('Agent settings'));assert.ok(!page.includes('id="api-key"'));assert.ok(!page.includes('id="base-url"'));assert.ok(!page.includes('data-effort='));
+ const page=await(await f.request('/')).text();assert.ok(page.includes('Agent settings'));assert.ok(page.includes('id="memory-recall-enabled"'));assert.ok(!page.includes('id="api-key"'));assert.ok(!page.includes('id="base-url"'));assert.ok(!page.includes('data-effort='));
 });
 
 test('Agent preferences reject linked or malformed storage without changing other files', async t=>{

@@ -1,3 +1,9 @@
+import { memoryRecallConfig } from "../memory-recall/config.js";
+import { fullMemory, memorySnapshot } from "../memory-recall/retrieve.js";
+import { recoverAllOnesReceipts, recoverOnesReceipts } from "../ones-agent/store.js";
+import { onesConfig } from "../ones-agent/config.js";
+import { removeOnesParent } from "../ones-agent/service.js";
+import { recordSubAgentResult } from "../sub-agents/metrics.js";
 import { chatCompaction, contextRounds } from "../agent/chat-compaction.js";
 import { chatCompactionConfig } from "../agent/compaction-config.js";
 import { historyRounds } from "../agent/session-history.js";
@@ -92,7 +98,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp" | "http-api"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; activeRunText?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { compaction?: AgentConfigOptions["compaction"]; httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions { memoryRecall?: AgentConfigOptions["memoryRecall"]; ones?: AgentConfigOptions["ones"]; compaction?: AgentConfigOptions["compaction"]; httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -123,6 +129,10 @@ export async function createWebServer(options: WebOptions = {}) {
     contextWindow: options.model?.contextWindow ?? Number(process.env.CONTEXT_WINDOW ?? diskEnv.CONTEXT_WINDOW ?? 128000),
     maxTokens: options.model?.maxTokens ?? Number(process.env.MAX_TOKENS ?? diskEnv.MAX_TOKENS ?? 16384),
   };
+  const ones = onesConfig(resourcesDir, settings, options.ones, { ...diskEnv, ...process.env });
+  const recallDefaults = memoryRecallConfig(options.memoryRecall, { ...diskEnv, ...process.env });
+  const recallConfig = () => ({ ...recallDefaults, enabled: agentSettings.memoryRecall?.enabled ?? recallDefaults.enabled });
+  const onesOptions = { ...options.ones, enabled: ones.enabled, url: ones.url, token: ones.token };
   const compactionConfig = chatCompactionConfig(options.compaction, { ...diskEnv, ...process.env }, settings);
   const csrf = randomBytes(24).toString("hex");
   const webConfig = webToolConfig(options.webTools, settings, { ...diskEnv, ...process.env });
@@ -131,6 +141,12 @@ export async function createWebServer(options: WebOptions = {}) {
     webConfig.tools = WEB_TOOL_NAMES.filter(name => agentSettings.webTools.tools[name]); webConfig.enabled = webConfig.tools.length > 0;
   };
   applyAgentSettings();
+  const agentSettingsResponse = () => ({
+    settings: { ...agentSettings, memoryRecall: { enabled: recallConfig().enabled } },
+    reasoningSupported: isDeepSeekModel(settings),
+    webToolsConfigured: Boolean(webConfig.apiKey),
+    firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token),
+  });
   mcpOptions.enabled = agentSettings.mcp?.enabled ?? mcpOptions.enabled;
   const adminAccount = (options.admin?.account ?? process.env.ADMIN_ACCOUNT ?? diskEnv.ADMIN_ACCOUNT ?? "").trim();
   const adminPassword = options.admin?.password ?? process.env.ADMIN_PASSWORD ?? diskEnv.ADMIN_PASSWORD ?? "";
@@ -162,6 +178,7 @@ export async function createWebServer(options: WebOptions = {}) {
     for (const reader of knowledgeTokens) message = message.split(reader.token).join("[REDACTED]");
     if (httpApiOptions.apiKey) message = message.split(httpApiOptions.apiKey).join("[REDACTED]");
     if (mcpOptions.apiKey) message = message.split(mcpOptions.apiKey).join("[REDACTED]");
+    if (ones.token) message = message.split(ones.token).join("[REDACTED]");
     if (bridgeToken) message = message.split(bridgeToken).join("[REDACTED]");
     if (firmwareOptions.token) message = message.split(firmwareOptions.token).join("[REDACTED]");
     if (settings.apiKey) message = message.split(settings.apiKey).join("[REDACTED]");
@@ -221,7 +238,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
-      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
+      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, ones: onesOptions, memoryRecall: recallConfig(), compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
       initializing = AgentRuntime.create(config).then(value => runtime = value).catch(error => { initializing = undefined; throw error; });
     }
     return initializing;
@@ -245,6 +262,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const retention = new SessionRetention(sessionsDir, console.error, async id => {
     const item = records.get(id);
     if (item?.running || item?.opening || item?.mutating) throw new Error("Session is busy; retry expiration later.");
+    if (runtime) await runtime.removeSubAgentSessions(id); else await removeOnesParent(dataDir, id);
     await fileStore.remove(id);
     await bridge.remove(id);
     await mcp?.removeSession(id);
@@ -262,6 +280,7 @@ export async function createWebServer(options: WebOptions = {}) {
       let manager: SessionManager | undefined;
       if (!metrics) {
         manager = SessionManager.open(file, sessionsDir, cwd);
+        await recoverOnesReceipts(dataDir, cwd, manager);
         metrics = new Map(readRunMetrics(manager).map(run => [run.id, run]));
         // Startup groups tasks by session; retain only compact metrics, never every SDK conversation.
         recoveryMetrics.clear(); recoveryMetrics.set(task.sessionId, metrics);
@@ -317,6 +336,7 @@ export async function createWebServer(options: WebOptions = {}) {
   let recoveryIndex: Map<string, string> | undefined;
   const recoveryMetrics = new Map<string, Map<string, RunMetric>>();
   async function recoveryFiles() { return recoveryIndex ??= new Map((await savedSessions()).map(session => [session.id, session.path])); }
+  await recoverAllOnesReceipts(dataDir, cwd, sessionsDir);
   await mcp.start();
   await httpApiService.start(); recoveryMetrics.clear(); recoveryIndex = undefined;
   await retention.cleanup(); retention.start();
@@ -358,6 +378,7 @@ export async function createWebServer(options: WebOptions = {}) {
         const engine = await getRuntime();
         const saved = (await savedSessions()).find(s => s.id === item.id);
         const manager = saved ? SessionManager.open(saved.path, sessionsDir, cwd) : SessionManager.create(cwd, sessionsDir, { id: item.id });
+        await recoverOnesReceipts(dataDir, cwd, manager);
         const textOnly = Boolean(item.channel) || mcpStore.hasSession(item.id) || httpApiStore.hasSession(item.id) || manager.getEntries().some(entry => entry.type === "custom" && entry.customType === RUN_METRICS_TYPE && Boolean((entry.data as Partial<RunMetric>)?.mcpTaskId));
         const session = await engine.createSession(manager, { textOnly, userRoleStyle: () => item.userRoleStyle });
         // Replay persisted snapshots after a restart; cursors make this idempotent.
@@ -583,7 +604,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (url.pathname === "/api/prompt/preview" && method === "POST") {
           const body = await readBody(req, 262144);
           if (Object.keys(body).some(k => !["instructions", "mode"].includes(k)) || !["standard", "mcp"].includes(body.mode)) throw new HttpError(400, "Provide instructions and standard or mcp mode.");
-          const config = resolveConfig({cwd,dataDir,resourcesDir,model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
+          const config = resolveConfig({cwd,dataDir,resourcesDir,ones:onesOptions,memoryRecall:recallConfig(),model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
           const release = await knowledgeLock(path.join(dataDir,"urovo-product-expert")).read();
           try { return json(res, 200, {...await previewPrompt(config,body.mode === "mcp",body.instructions), reasoning: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default"}); }
           finally { release(); }
@@ -829,7 +850,7 @@ export async function createWebServer(options: WebOptions = {}) {
       if (method === "GET" && url.pathname === "/api/mcp/usage") return json(res, 200, { enabled: mcpOptions.enabled, authentication: "bearer", keyConfigured: mcpAccess.configured, ...await mcpStore.summary() });
       if (url.pathname === "/api/config") throw new HttpError(410, "Model connections are configured in .env. Restart the service after making changes.");
       if (url.pathname === "/api/agent-settings") {
-        if (method === "GET") return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey), firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token) });
+        if (method === "GET") return json(res, 200, agentSettingsResponse());
         if (method !== "PUT") throw new HttpError(405, "Agent settings support GET and PUT only.");
         if (configuring || initializing && !runtime || openingSessions > 0 || [...records.values()].some(item => item.running || item.opening || item.mutating)) throw new HttpError(409, "Wait for the current run to finish before changing agent settings.");
         configuring = true;
@@ -838,15 +859,20 @@ export async function createWebServer(options: WebOptions = {}) {
           try { next = validateAgentSettings(await readBody(req)); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, redact(error)); }
           next.mcp ??= agentSettings.mcp;
           next.firmware ??= agentSettings.firmware;
+          next.memoryRecall ??= agentSettings.memoryRecall;
           if (next.mcp?.enabled && !mcpAccess.configured) throw new HttpError(400, "Set MCP_API_KEY in .env and restart the service before enabling MCP.");
           if (!isDeepSeekModel(settings) && next.effort !== agentSettings.effort) throw new HttpError(400, "This model does not support reasoning-level changes. Tool switches remain available.");
           if (WEB_TOOL_NAMES.some(name => next.webTools.tools[name]) && !webConfig.apiKey) throw new HttpError(400, "Online tools require a DeepSeek key. Direct DeepSeek connections reuse API_KEY; otherwise set DEEPSEEK_API_KEY in .env and restart the service.");
+          if (next.memoryRecall?.enabled && !recallConfig().enabled) {
+            try { fullMemory(await memorySnapshot(dataDir)); }
+            catch (error) { throw new HttpError(400, `Memory recall could not read the memory files. ${redact(error)}`); }
+          }
           await agentSettingsStore.save(next);
           await Promise.all([...records.values()].map(item => item.session && chatCompaction(item.session)?.cancel()));
           for (const item of records.values()) { item.session?.dispose(); item.session = undefined; }
-          runtime?.dispose(); runtime = undefined; initializing = undefined;
+          await runtime?.close(); runtime = undefined; initializing = undefined;
           agentSettings = next; applyAgentSettings(); mcpOptions.enabled = next.mcp?.enabled ?? mcpOptions.enabled;
-          return json(res, 200, { settings: agentSettings, reasoningSupported: isDeepSeekModel(settings), webToolsConfigured: Boolean(webConfig.apiKey), firmwareConfigured: Boolean(options.firmware?.client || firmwareOptions.baseUrl && firmwareOptions.token) });
+          return json(res, 200, agentSettingsResponse());
         } finally { configuring = false; }
       }
       if (method === "GET" && url.pathname === "/api/sessions") return json(res, 200, { sessions: await listSessions() });
@@ -941,6 +967,7 @@ export async function createWebServer(options: WebOptions = {}) {
             const target = await managedFile(item);
             await mcp?.removeSession(item.id);
             await httpApiService?.removeSession(item.id);
+            if (runtime) await runtime.removeSubAgentSessions(item.id); else await removeOnesParent(dataDir, item.id);
             await fileStore.remove(item.id);
             if (target?.exists) await fs.unlink(target.file);
             item.session?.dispose(); item.session = undefined;
@@ -1007,7 +1034,7 @@ export async function createWebServer(options: WebOptions = {}) {
             const acceptedAt = performance.now();
             const acceptedAtIso = new Date().toISOString();
             session = await getSession(item);
-            await loadRunKnowledge(dataDir);
+            if (!recallConfig().enabled) await loadRunKnowledge(dataDir);
             if (res.destroyed) throw new HttpError(499, "The page connection was closed.");
             if (item.cancelled) throw new HttpError(409, "This run was stopped.");
             if (item.title === "New conversation" && !session.sessionName) item.title = text.slice(0, 36);
@@ -1082,7 +1109,16 @@ export async function createWebServer(options: WebOptions = {}) {
                 saveRunMetric(session, metric);
                 send("tool", { id: event.toolCallId, name: event.toolName, state: "running", count: getToolRuns(session, metric.id).get(initialRounds + 1)?.calls.length ?? metric.toolCalls!.length });
               }
+              if (event.type === "tool_execution_update" && event.toolName === "ask_ones_agent") {
+                const text = (event.partialResult as {details?: {onesNotice?: string}})?.details?.onesNotice;
+                if (text) send("notice", {text, agent: "ones"});
+              }
+              if (event.type === "tool_execution_update" && event.toolName === "recall_memory") {
+                const text = (event.partialResult as {details?: {memoryNotice?: string}})?.details?.memoryNotice;
+                if (text) send("notice", {text, agent: "memory"});
+              }
               if (event.type === "tool_execution_end") {
+                recordSubAgentResult(metric, event.result);
                 const result = event.result as { details?: { metrics?: { vision?: { cached?: boolean; usage?: unknown }[] } } };
                 for (const vision of result?.details?.metrics?.vision ?? []) {
                   if (vision.cached) continue;
@@ -1208,7 +1244,7 @@ export async function createWebServer(options: WebOptions = {}) {
     await syncNotifications.refresh().catch(() => {}); await syncNotifications.close();
     await syncGroupNotifications.refresh().catch(() => {}); await syncGroupNotifications.close();
     for (const r of records.values()) r.session?.dispose();
-    runtime?.dispose();
+    await runtime?.close();
     await auth.close(); retention.dispose();
     server.closeAllConnections();
     if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

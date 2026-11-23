@@ -15,5 +15,8 @@ export function wecomRunDetail(manager: SessionManager, runId: string, activeId?
     const text = typeof content === "string" ? content : content.filter(block => block.type === "text").map(block => block.text).join("");
     if (text) answers.push(text);
   }
-  return { status: run.status, answer: run.id === activeId && activeText !== undefined ? activeText : answers.join("\n\n") };
+  let answer = run.id === activeId && activeText !== undefined ? activeText : answers.join("\n\n");
+  if (run.onesTasks?.length) answer += "\n\nONES 查询：\n" + run.onesTasks.map(t => `${t.taskId} · ${t.status} · ${(t.elapsedMs / 1000).toFixed(1)} 秒 · ${t.toolCalls} 次查询 · ${t.usage.input + t.usage.output} tokens`).join("\n");
+  if (run.memoryTasks?.length) answer += "\n\n记忆召回：\n" + run.memoryTasks.map(t => `${t.status} · ${(t.elapsedMs / 1000).toFixed(1)} 秒 · ${t.usage.input + t.usage.output} tokens`).join("\n");
+  return { status: run.status, answer };
 }

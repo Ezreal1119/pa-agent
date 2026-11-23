@@ -1,3 +1,11 @@
+import { MemoryRecallService, type RecallResult } from "../memory-recall/service.js";
+import { createRecallTool, recallQueryKey } from "../memory-recall/tool.js";
+import { memorySnapshot, type MemorySnapshot } from "../memory-recall/retrieve.js";
+import { MEMORY_RECEIPT } from "../sub-agents/metrics.js";
+import { ONES_RECEIPT } from "../ones-agent/store.js";
+import { historyRounds } from "./session-history.js";
+import { OnesAgentService, removeOnesParent } from "../ones-agent/service.js";
+import { createOnesTool } from "../ones-agent/tool.js";
 import { meterSession } from "../usage/ledger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -38,6 +46,8 @@ const PROVIDER_ID = "openai-compatible";
 export class AgentRuntime {
   private readonly retention: SessionRetention;
   readonly files?: FileTools;
+  readonly ones?: OnesAgentService;
+  readonly memoryRecall?: MemoryRecallService;
   private fileCleanupTimer?: NodeJS.Timeout;
   // The constructor is private so callers must finish async setup through create().
   private constructor(
@@ -64,7 +74,9 @@ export class AgentRuntime {
       this.fileCleanupTimer = setInterval(() => { void this.cleanupFiles().catch(console.error); }, 3600000);
       this.fileCleanupTimer.unref();
     }
-    this.retention = new SessionRetention(config.sessionsDir, console.error, async id => { await new FileStore(config.fileTools).remove(id); });
+    if (config.memoryRecall.enabled) this.memoryRecall = new MemoryRecallService(config);
+    if (config.ones.enabled) this.ones = new OnesAgentService(config.ones, config, modelRuntime);
+    this.retention = new SessionRetention(config.sessionsDir, console.error, async id => { await this.removeSubAgentSessions(id); await new FileStore(config.fileTools).remove(id); });
     this.retention.start();
   }
 
@@ -80,8 +92,9 @@ export class AgentRuntime {
     await fs.mkdir(config.agentDir, { recursive: true });
 
     // Validate required expert resources before starting a runtime.
-    await loadRunKnowledge(config.dataDir);
-    await new SessionRetention(config.sessionsDir, console.error, async id => { await new FileStore(config.fileTools).remove(id); }).cleanup();
+    const initialMemory = config.memoryRecall.enabled ? await memorySnapshot(config.dataDir) : undefined;
+    await loadRunKnowledge(config.dataDir, initialMemory && {extraRevision: initialMemory.extra.revision});
+    await new SessionRetention(config.sessionsDir, console.error, async id => { await removeOnesParent(config.dataDir, id); await new FileStore(config.fileTools).remove(id); }).cleanup();
 
     // Creates Agent Model manager.
     const modelRuntime = await ModelRuntime.create({
@@ -128,7 +141,7 @@ export class AgentRuntime {
 
     // The model environment is now ready and can be shared by multiple sessions.
     const runtime = new AgentRuntime(config, modelRuntime);
-    try { await runtime.cleanupFiles(); return runtime; }
+    try { await runtime.ones?.start(); await runtime.cleanupFiles(); return runtime; }
     catch (error) { runtime.dispose(); throw error; }
   }
 
@@ -161,7 +174,7 @@ export class AgentRuntime {
       throw new Error(`Model ${this.config.model.modelId} was not registered`);
 
     // Loads only the system prompt explicitly maintained by this project.
-    const systemPrompt = await loadSystemPrompt(this.config.resourcesDir);
+    const systemPrompt = await loadSystemPrompt(this.config.resourcesDir, this.config.memoryRecall.enabled);
 
     // Keeps session behavior independent from global or project settings files.
     const settingsManager = SettingsManager.inMemory({
@@ -219,11 +232,54 @@ export class AgentRuntime {
     await resourceLoader.reload();
 
     let boundSession: AgentSession | undefined;
+    let parentRun: {
+      question: string; onesCalls: number; recallCalls: number; memory?: MemorySnapshot; extraRevision?: string;
+      recalledExtra: Set<string>; recallResults: Map<string, Promise<RecallResult>>;
+    } | undefined;
+    const recallTool = this.memoryRecall ? createRecallTool(async (toolCallId, args, signal, notice) => {
+      const run = parentRun;
+      if (!run?.memory) throw new Error("Memory recall requires an active parent question.");
+      signal?.throwIfAborted();
+      const key = recallQueryKey(args);
+      const previous = run.recallResults.get(key);
+      if (previous) {
+        const result = await previous;
+        signal?.throwIfAborted();
+        return {...result, reused: true};
+      }
+      if (run.recallCalls >= this.config.memoryRecall.maxDelegations) throw new Error("本轮记忆召回次数已用尽。");
+      run.recallCalls++;
+      const binding = {round: historyRounds(boundSession!), toolCallId};
+      const pending = this.memoryRecall!.run(sessionManager.getSessionId(), run.question, args, run.memory, binding, signal, notice).then(result => {
+        for (const item of result.evidence) if (item.source === "extra") run.recalledExtra.add(item.id);
+        const {taskId, status, elapsedMs, toolCalls, usage} = result;
+        sessionManager.appendCustomEntry(MEMORY_RECEIPT, {...binding, result: {taskId, status, elapsedMs, toolCalls, usage}});
+        if (status !== "matched" && status !== "no_match") run.recallResults.delete(key);
+        return result;
+      }).catch(error => {
+        run.recallResults.delete(key);
+        throw error;
+      });
+      run.recallResults.set(key, pending);
+      return pending;
+    }) : undefined;
+    const onesTool = this.ones ? createOnesTool(this.config.ones, async (args, signal, notice, toolCallId) => {
+      if (!parentRun) throw new Error("ONES delegation requires an active parent question.");
+      if (parentRun.onesCalls >= this.config.ones.maxDelegations) throw new Error("本轮 ONES 委派次数已用尽，请根据已有结果回答或询问用户。");
+      parentRun.onesCalls++;
+      const result = await this.ones!.run(sessionManager.getSessionId(), parentRun.question, args, signal, notice, boundSession?.thinkingLevel, {round: historyRounds(boundSession!), toolCallId: toolCallId!});
+      sessionManager.appendCustomEntry(ONES_RECEIPT, {round: historyRounds(boundSession!), toolCallId, result});
+      return result;
+    }) : undefined;
     const preparedTools = promptTools(this.config, !!options.textOnly, files, sessionManager.getSessionId(), () => {
       const message = boundSession?.messages.findLast(message => message.role === "user");
       if (!message) return undefined;
       return typeof message.content === "string" ? message.content : message.content.filter(block => block.type === "text").map(block => block.text).join("");
-    }, (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file));
+    }, (file, userId, toolId) => registerGeneratedFile(sessionManager, userId, toolId, file), onesTool, recallTool, this.memoryRecall ? {
+      hasEntry: id => parentRun?.recalledExtra.has(id) ?? false,
+      revision: () => parentRun?.extraRevision,
+      updateRevision: revision => { if (parentRun) parentRun.extraRevision = revision; },
+    } : undefined, () => parentRun?.memory);
 
     // Gives the model, resources, and session manager to Agent Core to create the session.
     // Composition of the Prompts: System + User&Assistant... + Tools
@@ -248,6 +304,7 @@ export class AgentRuntime {
 
     const compactor = this.config.compaction.enabled ? new ChatCompaction(session, {
       config: this.config.compaction, model: this.config.model, dataDir: this.config.dataDir,
+      recallEnabled: this.config.memoryRecall.enabled,
       retention: this.retention, stream: session.agent.streamFunction,
     }) : undefined;
     const disposeSession = session.dispose.bind(session);
@@ -258,6 +315,7 @@ export class AgentRuntime {
       await installSessionPolicy(session, this.config.dataDir, this.retention, {
         sections: await staticPromptSections(this.config, !!options.textOnly),
         userRoleStyle: options.textOnly ? undefined : options.userRoleStyle,
+        recall: this.memoryRecall ? () => ({extraRevision: parentRun!.memory!.extra.revision}) : undefined,
         attachments: files ? async () => {
           await files.store.touch(session.sessionId);
           const boundIds = new Set(messageAttachments(session).flatMap(record => record.files.map(file => file.id)));
@@ -276,8 +334,11 @@ export class AgentRuntime {
         try {
           release = await knowledgeLock(path.join(this.config.dataDir, "urovo-product-expert")).read(controller.signal);
           controller.signal.throwIfAborted();
+          const memory = this.memoryRecall ? await memorySnapshot(this.config.dataDir) : undefined;
+          controller.signal.throwIfAborted();
+          parentRun = {question: text, onesCalls: 0, recallCalls: 0, memory, extraRevision: memory?.extra.revision, recalledExtra: new Set(), recallResults: new Map()};
           return await prompt(text, options);
-        } finally { release?.(); waitingOrRunning = undefined; }
+        } finally { parentRun = undefined; release?.(); waitingOrRunning = undefined; }
       };
       if (!files && !options.textOnly) guardNativeReads(session, [], this.config.cwd, false);
       installMessageAttachments(session, files?.store.directory(session.sessionId));
@@ -306,8 +367,17 @@ export class AgentRuntime {
     const removed = await this.retention.cleanup(); await this.cleanupFiles(); return removed;
   }
 
+  async removeSubAgentSessions(id: string) {
+    await this.memoryRecall?.deleteParent(id);
+    if (this.ones) await this.ones.deleteParent(id);
+    else await removeOnesParent(this.config.dataDir, id);
+  }
+  async close() { await Promise.all([this.ones?.close(), this.memoryRecall?.close()]); this.dispose(); }
+
   /** Stop the housekeeping timer after disposing all sessions. */
   dispose(): void {
+    this.ones?.dispose();
+    this.memoryRecall?.dispose();
     this.retention.dispose();
     if (this.fileCleanupTimer) clearInterval(this.fileCleanupTimer);
   }

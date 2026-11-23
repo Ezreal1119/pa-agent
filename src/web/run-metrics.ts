@@ -1,3 +1,5 @@
+import { applySubAgentReceipts } from "../sub-agents/metrics.js";
+import type { TaskReceipt } from "../sub-agents/tasks.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { Observation, TokenUsage } from "./wecom-contacts.js";
 import type { ReasoningMode } from "../agent/reasoning.js";
@@ -26,10 +28,13 @@ export interface RunMetric {
   wecom?: Observation;
   mcpTaskId?: string;
   usage?: TokenUsage;
+  onesTasks?: TaskReceipt[];
+  memoryTasks?: TaskReceipt[];
 }
 
 /** Custom entries persist in the SDK log but are excluded from model context. */
 export function saveRunMetric(session: AgentSession, metric: RunMetric): void {
+  applySubAgentReceipts(metric, session.sessionManager);
   session.sessionManager.appendCustomEntry(RUN_METRICS_TYPE, structuredClone(metric));
 }
 
@@ -43,11 +48,14 @@ export function readRunMetrics(manager: AgentSession["sessionManager"], activeId
     if (entry.type !== "custom" || entry.customType !== RUN_METRICS_TYPE) continue;
     const value = entry.data as Partial<RunMetric> | null;
     if (!value || typeof value.id !== "string" || typeof value.sequence !== "number" || typeof value.startedAt !== "string" || typeof value.status !== "string") continue;
-    const metric = value as RunMetric;
+    // Receipt recovery enriches the view; never mutate an SDK entry through
+    // shared nested usage objects when marking a saved run interrupted.
+    const metric = structuredClone(value as RunMetric);
     runs.set(metric.id, metric.status === "running" && metric.id !== activeId
       ? { ...metric, status: "interrupted", elapsedMs: null, finishedAt: null }
       : metric);
   }
+  for (const run of runs.values()) applySubAgentReceipts(run, manager);
   return [...runs.values()];
 }
 

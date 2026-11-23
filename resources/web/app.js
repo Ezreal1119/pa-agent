@@ -46,7 +46,7 @@ function showRuns(runs = []) {
     const row = document.createElement('div'); row.className = `run-history-row ${run.status}`;
     const label = document.createElement('span'); label.textContent = `#${run.sequence} ${effortLabels[run.effort] || run.effort}`;
     const time = document.createElement('strong'); time.textContent = duration(run.elapsedMs);
-    const status = document.createElement('small'); status.textContent = `${statusLabels[run.status] || run.status} · ${countLabel(run.toolCallCount ?? 0, 'tool call')} · ${new Date(run.startedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+    const status = document.createElement('small'); status.textContent = `${statusLabels[run.status] || run.status} · ${countLabel(run.toolCallCount ?? 0, 'tool call')} · ${new Date(run.startedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}${run.onesTasks?.length ? ` · ONES: ${run.onesTasks.length} tasks, ${run.onesTasks.reduce((n, t) => n + t.usage.input + t.usage.output, 0).toLocaleString()} tokens` : ''}${run.memoryTasks?.length ? ` · Memory: ${countLabel(run.memoryTasks.length, 'lookup')}, ${run.memoryTasks.reduce((n, t) => n + t.usage.input + t.usage.output, 0).toLocaleString()} tokens` : ''}`;
     row.append(label, time, status); $('run-history').append(row);
   }
 }
@@ -440,6 +440,7 @@ async function openSettings() {
     const [data, mcp] = await Promise.all([api('/api/agent-settings'), api('/api/mcp/settings')]);
     renderMcpSettings(mcp);
     $('global-effort').value = data.settings.effort; $('global-effort').disabled = !data.reasoningSupported;
+    $('memory-recall-enabled').checked = data.settings.memoryRecall?.enabled ?? false;
     $('effort-support').textContent = data.reasoningSupported ? 'Fast, Standard, Thorough, and Deep research. Lower levels suit simple questions.' : 'This model uses the provider’s default reasoning settings. Tool switches remain available.';
     $('web-search-enabled').checked = data.settings.webTools.tools.search;
     $('web-fetch-enabled').checked = data.settings.webTools.tools.fetch;
@@ -540,7 +541,7 @@ $('settings-form').addEventListener('submit', async event => {
   event.preventDefault(); if (mcpSaving) return; $('settings-save').disabled = true; $('mcp-enabled').disabled = true; $('settings-error').hidden = true;
   try {
     const tools = Object.fromEntries([...$('file-tool-toggles').querySelectorAll('input')].map(input => [input.dataset.fileTool, input.checked]));
-    await api('/api/agent-settings', { method: 'PUT', body: JSON.stringify({ effort: $('global-effort').value, webTools: { tools: { search: $('web-search-enabled').checked, fetch: $('web-fetch-enabled').checked } }, libraryLinks: { enabled: $('library-links-enabled').checked }, firmware: { enabled: $('firmware-enabled').checked }, fileTools: { tools } }) });
+    await api('/api/agent-settings', { method: 'PUT', body: JSON.stringify({ effort: $('global-effort').value, memoryRecall: { enabled: $('memory-recall-enabled').checked }, webTools: { tools: { search: $('web-search-enabled').checked, fetch: $('web-fetch-enabled').checked } }, libraryLinks: { enabled: $('library-links-enabled').checked }, firmware: { enabled: $('firmware-enabled').checked }, fileTools: { tools } }) });
     dialog.close(); await refreshStatus(); toast('Agent settings saved. Changes apply to subsequent requests.');
   } catch (error) { $('settings-error').textContent = error.message; $('settings-error').hidden = false; }
   finally { $('settings-save').disabled = false; $('mcp-enabled').disabled = false; }

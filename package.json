@@ -35,10 +35,12 @@
     "sftp:check-host": "npm run build && node dist/sftp-sync/probe.js",
     "wecom:import": "node dist/wecom-import/cli.js",
     "test:wecom-import": "npm run build && node --test tests/wecom-import*.test.mjs",
-    "library:import": "node dist/library-import/cli.js"
+    "library:import": "node dist/library-import/cli.js",
+    "test:ones": "npm run build && node --test tests/ones-agent.test.mjs tests/ones-integration.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
+    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.3.1",
     "@napi-rs/canvas": "1.0.2",
@@ -56,7 +58,6 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^24.3.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/ssh2": "1.15.6",

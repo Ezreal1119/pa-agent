@@ -1,4 +1,6 @@
+import { memoryRecallConfig, type MemoryRecallOptions } from "./memory-recall/config.js";
 import "dotenv/config";
+import { onesConfig, type OnesConfig, type OnesOptions } from "./ones-agent/config.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileToolConfig, type FileToolConfig, type FileToolOptions } from "./file-tools/config.js";
@@ -32,6 +34,8 @@ export interface AgentConfig {
   firmwareEnabled: boolean;
   webTools: WebToolConfig;
   compaction: ChatCompactionConfig;
+  ones: OnesConfig;
+  memoryRecall: ReturnType<typeof memoryRecallConfig>;
 }
 
 export interface AgentConfigOptions {
@@ -45,6 +49,8 @@ export interface AgentConfigOptions {
   firmwareEnabled?: boolean;
   webTools?: WebToolOptions;
   compaction?: Partial<ChatCompactionConfig>;
+  ones?: OnesOptions;
+  memoryRecall?: MemoryRecallOptions;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -100,5 +106,7 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
     webTools: webToolConfig(options.webTools, { baseUrl, apiKey: required(options.model?.apiKey ?? process.env.API_KEY, "API_KEY") }),
     model,
     compaction: chatCompactionConfig(options.compaction, process.env, model),
+    memoryRecall: memoryRecallConfig(options.memoryRecall),
+    ones: onesConfig(path.resolve(options.resourcesDir ?? path.join(packageRoot, "resources")), model, options.ones),
   };
 }

@@ -1,0 +1,23 @@
+{
+  "tools": [
+    "get_issue_activities", "get_issue_code_info", "get_issue_human_readable_keys", "get_issue_details",
+    "get_issue_executable_workflows", "get_issue_fields", "get_issue_status", "get_issue_type_hierarchy_configs",
+    "get_list_of_issue_comments", "get_onesql_grammar_help", "query_issues_by_onesql", "search_for_issue_field_options",
+    "search_for_issue_types", "get_project_details_by_project_id", "get_sprint_details", "search_for_epics",
+    "search_for_modules", "search_for_projects", "search_for_releases", "search_for_sprints",
+    "get_testcase_details", "get_testcase_library_fields", "search_for_modules_in_testcase_library",
+    "search_for_testcases_in_library", "search_for_testcase_libraries", "search_for_users", "who_am_i", "get_user_notices",
+    "get_space_details", "get_list_of_space_pages", "search_pages_by_title", "search_for_spaces", "get_page_details",
+    "get_page_changes", "get_favorite_or_watch_pages", "get_manhour_mode", "get_manhour_list_in_simple_mode",
+    "get_manhour_list_in_summary_mode", "read_attachment_content"
+  ],
+  "timeoutMs": 180000,
+  "maxModelRequests": 24,
+  "maxToolCalls": 48,
+  "maxDelegations": 3,
+  "maxContextChars": 32000,
+  "maxResultBytes": 1048576,
+  "concurrency": 2,
+  "queueLimit": 8,
+  "compaction": { "enabled": true, "triggerTokens": 384000, "keepRecentRounds": 5 }
+}

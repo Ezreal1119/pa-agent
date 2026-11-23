@@ -1,3 +1,6 @@
+import { createRecallTool, RECALL_GUIDANCE } from "../memory-recall/tool.js";
+import { memorySnapshot, type MemorySnapshot } from "../memory-recall/retrieve.js";
+import { createOnesTool, ONES_GUIDANCE } from "../ones-agent/tool.js";
 import path from "node:path";
 import {
   DefaultResourceLoader,
@@ -19,7 +22,7 @@ import {
   createLibraryLinkTool,
   LIBRARY_LINK_GUIDANCE,
 } from "../tools/library-link.js";
-import { createMemoryTool } from "../tools/memory.js";
+import { createMemoryTool, type MemoryWriteAccess } from "../tools/memory.js";
 import { createFirmwareTool, FIRMWARE_GUIDANCE } from "../tools/firmware.js";
 import { publishedSearchTools } from "../knowledge-sync/read-tools.js";
 import { FileTools } from "../file-tools/index.js";
@@ -35,6 +38,8 @@ export function capabilityGuidance(config: AgentConfig, textOnly: boolean) {
     onlineTools = config.webTools.enabled ? config.webTools.tools : [],
     files = !textOnly && config.fileTools.enabled;
   return [
+    ...(config.ones.enabled ? [ONES_GUIDANCE] : []),
+    ...(config.memoryRecall.enabled ? [RECALL_GUIDANCE] : []),
     ...(options.textOnly
       ? [
           "This is a text-only MCP product expert session. Shared memories and all knowledge are read-only. No memory mutation, binary-document/image processing, upload, file creation, or arbitrary command execution is available. Never claim to have changed memories or produced attachments.",
@@ -103,7 +108,7 @@ export async function staticPromptSections(
     {
       id: "base",
       title: "Base system prompt",
-      content: await loadSystemPrompt(config.resourcesDir),
+      content: await loadSystemPrompt(config.resourcesDir, config.memoryRecall.enabled),
     },
     {
       id: "capabilities",
@@ -155,7 +160,7 @@ export function composePrompt(
         [
           "Knowledge context",
           "Product SKILL.md",
-          "Main MEMORY.md",
+          content.startsWith("## Extra agent memory") ? "Memory recall and revision" : "Main MEMORY.md",
           "Extra MEMORY_EXTRA.md",
         ][i] ?? "Knowledge",
       content,
@@ -177,10 +182,20 @@ export function promptTools(
   sessionId: string,
   getPrompt: () => string | undefined = () => undefined,
   onPublished?: Parameters<FileTools["tools"]>[1],
+  onesTool?: ToolDefinition<any, any>,
+  recallTool?: ToolDefinition<any, any>,
+  memoryWriteAccess?: MemoryWriteAccess,
+  currentMemory?: () => MemorySnapshot | undefined,
 ) {
   const custom: ToolDefinition<any, any>[] = [
     ...publishedSearchTools(config.cwd),
-    ...(!textOnly ? [createMemoryTool(config.dataDir)] : []),
+    ...(config.ones.enabled ? [onesTool ?? createOnesTool(config.ones)] : []),
+    ...(config.memoryRecall.enabled ? [recallTool ?? createRecallTool()] : []),
+    ...(!textOnly || config.memoryRecall.enabled ? [createMemoryTool(config.dataDir, {
+      snapshot: config.memoryRecall.enabled ? currentMemory ?? (() => undefined) : undefined,
+      writeAccess: memoryWriteAccess,
+      readOnly: textOnly,
+    })] : []),
     ...(config.webTools.enabled
       ? createWebTools(
           { apiKey: config.webTools.apiKey },
@@ -210,7 +225,8 @@ export async function previewPrompt(
   instructions: unknown,
 ) {
   const values = validateInstructions(instructions);
-  const knowledge = await loadRunKnowledgeSections(config.dataDir);
+  const snapshot = config.memoryRecall.enabled ? await memorySnapshot(config.dataDir) : undefined;
+  const knowledge = await loadRunKnowledgeSections(config.dataDir, snapshot && {extraRevision: snapshot.extra.revision});
   const composed = composePrompt(
     await staticPromptSections(config, textOnly),
     values,
