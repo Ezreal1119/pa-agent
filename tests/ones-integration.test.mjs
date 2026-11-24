@@ -50,8 +50,8 @@ test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own
 
  const issue = 'Explain the PCTool fixture error';
  const delegation = {task: issue, background:'A Windows utility error', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
- const source = {path:'PCTool/README.md', startLine:2, endLine:2};
- const diagnostic = {status:'completed', answer:'The fixture reaches the documented failure branch.', sources:[source], unknowns:[], questions:[]};
+ const sourcePath = 'PCTool/README.md';
+ const diagnostic = 'The fixture reaches the documented failure branch.';
  const replyWithTool = (res, name, args) => streamReply(res, {tool:{name, args}});
  const mainResults = [];
  const childResults = [];
@@ -63,18 +63,16 @@ test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own
     ['grep', {path:'PCTool', pattern:'WINDOWS_FIXTURE', glob:'*', literal:true}],
     ['read', {path:'PCTool/link.txt'}],
     ['read', {path:'PCTool/README.md', offset:2, limit:1}],
-    ['finish_windows_tools_task', {...diagnostic, sources:[{...source, endLine:3}]}],
-    ['finish_windows_tools_task', diagnostic],
    ][results.length];
-   return next ? replyWithTool(res, ...next) : streamReply(res);
+   return next ? replyWithTool(res, ...next) : streamReply(res, {text:diagnostic});
   }
   mainResults.push(body);
   const next = [
-   ['read', {path:path.join(workspace, source.path)}],
+   ['read', {path:path.join(workspace, sourcePath)}],
    ['grep', {path:f.dataDir, pattern:'WINDOWS_FIXTURE_MESSAG[E]', literal:false}],
    ['ask_windows_tools_agent', delegation],
   ][results.length];
-  return next ? replyWithTool(res, ...next) : streamReply(res, {text:diagnostic.answer});
+  return next ? replyWithTool(res, ...next) : streamReply(res, {text:'Supervisor analysis: The failure happens in the documented branch.'});
  });
  const api = f.api();
  const {id} = await api.json('/sessions','POST',{});
@@ -83,7 +81,7 @@ test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own
  assert.equal(done.run.windowsToolsTasks[0].status, 'completed');
  assert.equal(done.run.agentUsage.windowsTools.requests, childResults.length);
  assert.equal(done.run.usage.requests, childResults.length + mainResults.length);
- assert.deepEqual(childResults[0].tools.map(tool => tool.function.name).sort(), ['find','finish_windows_tools_task','grep','ls','read']);
+ assert.deepEqual(childResults[0].tools.map(tool => tool.function.name).sort(), ['find','grep','ls','read']);
  assert.equal(JSON.parse(lastUser(childResults[0]).content).question, issue);
  assert.doesNotMatch(system(childResults[0]), /BUSINESS_PRIVATE_MEMORY|BUSINESS_PRIVATE_KNOWLEDGE/);
  const finalChildTools = currentTools(childResults.at(-1));
@@ -91,18 +89,43 @@ test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own
  assert.doesNotMatch(finalChildTools[0].content, /WINDOWS_FIXTURE_HIDDEN|WINDOWS_FIXTURE_OUTSIDE/);
  assert.match(finalChildTools[1].content, /Linked paths are unavailable/);
  assert.match(finalChildTools[2].content, /2: WINDOWS_FIXTURE_MESSAGE/);
- assert.match(finalChildTools[3].content, /line ranges returned by read/);
  const finalMainTools = currentTools(mainResults.at(-1));
  assert.match(finalMainTools[0].content, /reserved for its specialist/);
  assert.doesNotMatch(finalMainTools[1].content, /WINDOWS_FIXTURE_MESSAGE/);
- assert.deepEqual(JSON.parse(finalMainTools[2].content).sources, [source]);
- assert.match((await api.json(`/sessions/${id}/runs/${done.run.id}/detail`)).answer, /Windows Tools 排障/);
+ assert.equal(finalMainTools[2].content, diagnostic);
+ assert.match(system(mainResults.at(-1)), /formulate your own answer/);
+ const rendered = (await api.json(`/sessions/${id}/runs/${done.run.id}/detail`)).answer;
+ assert.match(rendered, /Supervisor analysis: The failure happens in the documented branch/);
+ assert.match(rendered, /Windows Tools 排障/);
  await f.restart();
  assert.equal((await catalog()).enabled, true);
  assert.equal((await f.admin(switchRoute, 'PUT', {enabled:false})).status, 200);
  const preview = await f.admin('/api/prompt/preview','POST', {instructions:[], mode:'standard'});
  assert.equal(preview.status, 200);
  assert.doesNotMatch(await preview.text(), /ask_windows_tools_agent/);
+});
+
+test('Windows Tools returns text after the read budget and keeps truncated analysis as partial', async t => {
+ const f = await onesFixture(t, {extra:{windowsTools:{enabled:true}}});
+ for (const name of ['PCTool', 'SNTool']) {
+  const directory = path.join(f.dataDir, 'windows-tools/workspace', name);
+  await fs.mkdir(directory, {recursive:true});
+  await fs.writeFile(path.join(directory, 'README.md'), 'Snapshot\n');
+ }
+ const delegation = {task:'Read startup evidence', background:'', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
+ const read = {name:'read', args:{path:'PCTool/README.md', limit:1}};
+ const text = 'The failure occurs during startup.';
+ for (const [reply, status] of [[{text}, 'completed'], [{text, stopReason:'length'}, 'partial'], [{text:' '}, 'failed']]) {
+  f.setModel((body, res) => currentTools(body).length
+   ? streamReply(res, reply)
+   : streamReply(res, {tools:Array.from({length:50}, () => read)}));
+  const result = await f.runtime.windowsTools.run('diagnosis-parent', 'Analyze the error', delegation, {round:1, toolCallId:'fixture'});
+  assert.equal(result.usage.requests, 2);
+  assert.equal(result.toolCalls, 50);
+  assert.equal(result.status, status);
+  if (status === 'completed') assert.equal(result.answer, text);
+  if (status === 'partial') assert.equal(result.answer, `${text}\n\n（以上为子 Agent 返回的部分分析。）`);
+ }
 });
 
 test('Windows Tools searches a delegated WeCom log by ID and cannot read other attachments', async t => {
@@ -126,7 +149,7 @@ test('Windows Tools searches a delegated WeCom log by ID and cannot read other a
  const issue = 'What error is in this PCTool log?';
  const delegation = {task:issue, background:'', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
  const alias = `attachment:${selected.id}`;
- const evidence = {path:alias, startLine:1241, endLine:1241};
+ const diagnostic = 'PCTool.log records a startup error.';
  let childFirst, childFinal, mainFirst, mainFinal;
  const tool = (res, name, args) => streamReply(res, {tool:{name,args}});
  f.setModel((body, res) => {
@@ -139,7 +162,7 @@ test('Windows Tools searches a delegated WeCom log by ID and cannot read other a
    if (results.length === 1) return tool(res, 'read', {path:`attachment:${unselected.id}`, limit:2});
    if (results.length === 2) return tool(res, 'read', {path:alias, offset:1241, limit:1});
    childFinal = body;
-   return tool(res, 'finish_windows_tools_task', {status:'completed', answer:'PCTool.log records a startup error.', sources:[evidence], unknowns:[], questions:[]});
+   return streamReply(res, {text:diagnostic});
   }
   if (!results.length) {
    mainFirst = body;
@@ -168,12 +191,12 @@ test('Windows Tools searches a delegated WeCom log by ID and cannot read other a
   assert.doesNotMatch(JSON.stringify(childFinal.messages), /UNSELECTED_FIXTURE_DATA|UNBOUND_FIXTURE_DATA|FOREIGN_FIXTURE_DATA/);
   const parentResults = currentTools(mainFinal);
   assert.match(parentResults[0].content, /attached to a message in this conversation/);
-  assert.deepEqual(JSON.parse(parentResults[1].content).sources, [evidence]);
+  assert.equal(parentResults[1].content, diagnostic);
  }
  assert.deepEqual(await api.download(id, selected), log);
 });
 
-test('Supervisor caps a batched call at 50 and Windows Tools reserves its 50th call to submit', async t => {
+test('Supervisor caps a batched call at 50 and Windows Tools reserves its 50th model request to answer', async t => {
  const f = await fixture(t);
  const workspace = path.join(f.dataDir, 'windows-tools/workspace');
  for (const name of ['PCTool', 'SNTool']) {
@@ -186,14 +209,14 @@ test('Supervisor caps a batched call at 50 and Windows Tools reserves its 50th c
  const delegation = {task:issue, background:'', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
  const read = {name:'read', args:{path:path.join(f.dataDir, 'urovo-product-expert/SKILL.md')}};
  const childRead = {name:'read', args:{path:'PCTool/README.md'}};
- const submission = {name:'finish_windows_tools_task', args:{status:'partial', answer:'The snapshot specifies the affected step.', sources:[{path:'PCTool/README.md', startLine:1, endLine:1}], unknowns:['Firmware revision'], questions:[]}};
+ const diagnostic = 'The snapshot specifies the affected step. The firmware revision is unknown.';
  let childFinal, mainFinal, followupFirst;
  f.setModel((body, res) => {
   const results = currentTools(body);
   if (system(body).includes('你是 Windows Tools Agent')) {
    if (results.length < 49) return streamReply(res, {tool:childRead});
    childFinal = body;
-   return streamReply(res, {tool:submission});
+   return streamReply(res, {text:diagnostic});
   }
   if (lastUser(body).content.includes('Follow up')) {
    if (!results.length) { followupFirst = body; return streamReply(res, {tool:read}); }
@@ -209,14 +232,15 @@ test('Supervisor caps a batched call at 50 and Windows Tools reserves its 50th c
  const sender = {botId:'bot', userId:'customer', chatType:'single', at:Date.now()};
  const result = await api.run(id, issue, [], () => {}, undefined, sender);
  assert.equal(result.failed, false);
- assert.equal(result.run.windowsToolsTasks[0].status, 'partial');
+ assert.equal(result.run.windowsToolsTasks[0].status, 'completed');
  assert.equal(result.run.windowsToolsTasks[0].usage.requests, 50);
  assert.equal(result.run.windowsToolsTasks[0].toolCalls, 49);
- assert.deepEqual(childFinal.tools.map(tool => tool.function.name), [submission.name]);
- assert.match(system(childFinal), /Submit a partial result/);
+ assert.equal(childFinal.tools?.length ?? 0, 0);
+ assert.match(system(childFinal), /Answer now using the available results/);
  assert.equal(mainFinal.tools?.length ?? 0, 0);
  assert.match(system(mainFinal), /Answer now using the available results/);
- const reads = currentTools(mainFinal).slice(1);
+ const [childAnswer, ...reads] = currentTools(mainFinal);
+ assert.equal(childAnswer.content, diagnostic);
  assert.equal(reads.filter(result => result.content.includes('BUSINESS_PRIVATE_KNOWLEDGE')).length, 49);
  assert.equal(reads.filter(result => result.content.includes('Tool call limit reached')).length, 2);
  assert.equal((await api.run(id, 'Follow up', [], () => {}, undefined, sender)).failed, false);

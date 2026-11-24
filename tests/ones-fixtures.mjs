@@ -12,10 +12,10 @@ import {SessionManager} from '@earendil-works/pi-coding-agent';
 import {writeMemoryFixture} from './memory-fixtures.mjs';
 
 export const delegation={task:'查找该型号最近发布的软件及修改点',background:'客户在追问之前讨论的 SQ29M',confirmedFacts:['型号 SQ29M'],corrections:['发布记录指提测单进入已发布，不是独立邮件'],constraints:['仅查询，不修改'],unresolvedQuestions:[]};
-export function streamReply(res,{text='ANSWER',tool,tools=tool?[tool]:[],input=100,output=7}={}){
+export function streamReply(res,{text='ANSWER',tool,tools=tool?[tool]:[],input=100,output=7,stopReason=tools.length?'tool_calls':'stop'}={}){
  res.writeHead(200,{'Content-Type':'text/event-stream'});
  const delta=tools.length?{tool_calls:tools.map(({name,args},index)=>({index,id:randomUUID(),type:'function',function:{name,arguments:JSON.stringify(args)}}))}:{content:text};
- for(const [d,end] of [[{role:'assistant'},null],[delta,null],[{},tools.length?'tool_calls':'stop']])res.write(`data: ${JSON.stringify({id:randomUUID(),object:'chat.completion.chunk',created:1,model:'fixture',choices:[{index:0,delta:d,finish_reason:end}],...(end?{usage:{prompt_tokens:input,completion_tokens:output,total_tokens:input+output,prompt_tokens_details:{cached_tokens:30}}}:{})})}\n\n`);
+ for(const [d,end] of [[{role:'assistant'},null],[delta,null],[{},stopReason]])res.write(`data: ${JSON.stringify({id:randomUUID(),object:'chat.completion.chunk',created:1,model:'fixture',choices:[{index:0,delta:d,finish_reason:end}],...(end?{usage:{prompt_tokens:input,completion_tokens:output,total_tokens:input+output,prompt_tokens_details:{cached_tokens:30}}}:{})})}\n\n`);
  res.end('data: [DONE]\n\n');
 }
 export const system=b=>b.messages.filter(m=>m.role==='system').map(m=>m.content).join('\n');

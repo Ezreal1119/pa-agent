@@ -1,10 +1,12 @@
 # Windows Tools Agent
 
-Supervisor 通过 `ask_windows_tools_agent` 委派 PCTool 和 SNTool 的静态排障。子 Agent 使用独立的只读工具 `read`、`grep`、`find` 和 `ls`。每次委派从独立会话开始，接收当前问题和 Supervisor 提取的相关背景。它可以引用本轮读到的 workspace 相对路径和行号。
+Supervisor 通过 `ask_windows_tools_agent` 委派 PCTool 和 SNTool 的静态排障。子 Agent 使用独立的只读工具 `read`、`grep`、`find` 和 `ls`。每次委派从独立会话开始，接收当前问题和 Supervisor 提取的相关背景。
 
-Supervisor 每轮最多调用 50 次工具，达到上限后根据已有结果回答。Windows Tools 每次委派的总时间上限为 180 秒，最多 50 次模型请求和 50 次工具调用，其中预留一次调用提交结论。
+Supervisor 每轮最多调用 50 次工具，达到上限后根据已有结果回答。Windows Tools 每次委派最多 180 秒、50 次工具调用和 50 次模型请求。达到工具额度或只剩最后一次模型请求时，子 Agent 使用已有资料作答。
 
-Web 和企微的已上传文本附件可以通过 `ask_windows_tools_agent` 的可选参数 `attachment_ids` 委派。Supervisor 从会话里的附件元数据取 ID，子 Agent 用 `attachment:<id>` 搜索和分段读取原件。访问权限限于本次显式委派的附件，支持引用附件的原始行号。
+Web 和企微的已上传文本附件可以通过 `ask_windows_tools_agent` 的可选参数 `attachment_ids` 委派。Supervisor 从会话里的附件元数据取 ID，子 Agent 用 `attachment:<id>` 搜索和分段读取原件。访问权限限于本次显式委派的附件。
+
+子 Agent 用普通文字说明可能的问题、判断原因和仍缺的信息。Supervisor 可以结合对话和子 Agent 的诊断继续分析，组织自己的回答。已截断的输出以部分分析交回。
 
 ## 上传 workspace
 

@@ -6,7 +6,6 @@ import { inside } from "../file-tools/store.js";
 import { publishedSearchTools } from "../knowledge-sync/read-tools.js";
 import { ATTACHMENT_PREFIX, grepWindowsAttachment, type WindowsAttachment } from "./attachments.js";
 
-interface SourceRange { path: string; startLine: number; endLine: number }
 const LINE_BYTES = 2400;
 const READ_BYTES = 18000;
 
@@ -57,13 +56,13 @@ async function readLines(handle: FileHandle, offset: number, limit: number, sign
         }
         length += end - start;
         if (newline < 0) break;
-        if (!append()) return { output, endLine: lineNumber - 1, next: lineNumber };
+        if (!append()) return { output, next: lineNumber };
         length = 0;
         start = end + 1;
       }
     }
-    if (length && !append() && lineNumber < offset + limit) return { output, endLine: lineNumber - 1, next: lineNumber };
-    return { output, endLine: lineNumber - 1 };
+    if (length && !append() && lineNumber < offset + limit) return { output, next: lineNumber };
+    return { output };
   } finally {
     await handle.close();
   }
@@ -72,7 +71,6 @@ async function readLines(handle: FileHandle, offset: number, limit: number, sign
 export function windowsReadTools(
   root: string,
   signal: AbortSignal,
-  onRead: (source: SourceRange) => void,
   charge: () => void,
   attachments: readonly WindowsAttachment[] = [],
 ): ToolDefinition<any, any>[] {
@@ -100,7 +98,6 @@ export function windowsReadTools(
       handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     }
     const page = await readLines(handle, offset, limit, signal);
-    if (page.output) onRead({ path: sourcePath, startLine: offset, endLine: page.endLine });
     return {
       content: [{type: "text", text: page.output
         ? `${sourcePath}\n${page.output}${page.next ? `\n[Continue with offset ${page.next}.]` : ""}`

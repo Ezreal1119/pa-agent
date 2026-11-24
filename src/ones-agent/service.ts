@@ -126,7 +126,8 @@ export class OnesAgentService {
       session.dispose = () => { compactor.dispose(); dispose(); };
       installToolBudget(session, {
         limit: Math.min(AGENT_TOOL_CALL_LIMIT, this.config.maxToolCalls + 1),
-        finish: { tool: ONES_FINISH_TOOL.name, lastRequest: () => result.usage.requests >= this.config.maxModelRequests - 1 },
+        finishTool: ONES_FINISH_TOOL.name,
+        lastRequest: () => result.usage.requests >= this.config.maxModelRequests - 1,
       });
       const prompt = JSON.stringify({originalQuestion, delegation, now: new Date().toISOString(), timezone: "Asia/Shanghai"});
       compactor.assertCapacity(prompt);
