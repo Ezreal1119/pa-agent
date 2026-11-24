@@ -10,6 +10,7 @@ import { installToolBudget } from "../agent/tool-budget.js";
 import { readyWindowsWorkspace } from "./config.js";
 import { WINDOWS_FINISH_TOOL, windowsAnswerSchema, type WindowsAnswer, type WindowsToolsResult } from "./tool.js";
 import { windowsReadTools } from "./read-tools.js";
+import type { WindowsAttachment } from "./attachments.js";
 
 export class WindowsToolsService {
   private readonly tasks: SubAgentTasks;
@@ -17,7 +18,7 @@ export class WindowsToolsService {
     this.tasks = new SubAgentTasks(config.windowsTools);
   }
 
-  run(parentId: string, question: string, input: Delegation, binding: ParentBinding, signal?: AbortSignal, effort?: AgentSession["thinkingLevel"]) {
+  run(parentId: string, question: string, input: Delegation, binding: ParentBinding, signal?: AbortSignal, effort?: AgentSession["thinkingLevel"], attachments: readonly WindowsAttachment[] = []) {
     const settings = this.config.windowsTools;
     if (JSON.stringify(input).length > settings.maxContextChars) throw new Error("Windows Tools task background is too long.");
     return this.tasks.run(parentId, binding, signal, async task => {
@@ -38,7 +39,7 @@ export class WindowsToolsService {
         const tools = windowsReadTools(root, task.signal, source => evidence.push(source), () => {
           task.signal.throwIfAborted();
           result.toolCalls++;
-        });
+        }, attachments);
         let answer: WindowsAnswer | undefined;
         tools.push(defineTool({
           ...WINDOWS_FINISH_TOOL, parameters: windowsAnswerSchema,
@@ -48,7 +49,7 @@ export class WindowsToolsService {
             if (args.status === "completed" && !args.sources.length ||
                 args.sources.some(source => source.endLine < source.startLine || !evidence.some(page =>
                   page.path === source.path && page.startLine <= source.startLine && page.endLine >= source.endLine))) {
-              throw new Error("Cite workspace-relative paths and line ranges returned by read during this task.");
+              throw new Error("Cite workspace-relative or delegated attachment paths and line ranges returned by read during this task.");
             }
             answer = structuredClone(args);
             return {content: [{type: "text", text: "Diagnosis submitted."}], details: {}};
@@ -66,7 +67,10 @@ export class WindowsToolsService {
         });
         await runChildModel({
           session, task, source: "windows-tools", dataDir: this.config.dataDir, model: this.config.model,
-          effort, maxRequests: settings.maxModelRequests, prompt: JSON.stringify({ question, delegation: input }),
+          effort, maxRequests: settings.maxModelRequests, prompt: JSON.stringify({
+            question, delegation: input,
+            ...(attachments.length ? {attachments: attachments.map(({path, name, bytes}) => ({path, name, bytes}))} : {}),
+          }),
         });
         if (!answer) throw new Error("Windows Tools did not submit a diagnosis.");
         Object.assign(result, answer);

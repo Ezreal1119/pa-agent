@@ -4,6 +4,8 @@ Supervisor 通过 `ask_windows_tools_agent` 委派 PCTool 和 SNTool 的静态�
 
 Supervisor 每轮最多调用 50 次工具，达到上限后根据已有结果回答。Windows Tools 每次委派的总时间上限为 180 秒，最多 50 次模型请求和 50 次工具调用，其中预留一次调用提交结论。
 
+Web 和企微的已上传文本附件可以通过 `ask_windows_tools_agent` 的可选参数 `attachment_ids` 委派。Supervisor 从会话里的附件元数据取 ID，子 Agent 用 `attachment:<id>` 搜索和分段读取原件。访问权限限于本次显式委派的附件，支持引用附件的原始行号。
+
 ## 上传 workspace
 
 在 Mac 执行下面的命令。源码通过 Git 部署，完整快照存放在 VPS 的应用数据目录。

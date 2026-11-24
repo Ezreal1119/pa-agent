@@ -34,7 +34,8 @@ import { installToolBudget } from "./tool-budget.js";
 import { isDeepSeekModel } from "./reasoning.js";
 import { registerGeneratedFile } from "../file-tools/outputs.js";
 import { FileTools } from "../file-tools/index.js";
-import { installMessageAttachments, messageAttachments, attachmentReadInfo } from "./message-attachments.js";
+import { attachedFileIds, installMessageAttachments, attachmentReadInfo } from "./message-attachments.js";
+import { windowsAttachments } from "../windows-tools/attachments.js";
 import { FileStore } from "../file-tools/store.js";
 import { knowledgeLock } from "../knowledge-sync/core.js";
 import { guardNativeReads } from "../file-tools/read-guard.js";
@@ -277,13 +278,17 @@ export class AgentRuntime {
       return result;
     }) : undefined;
     const windowsToolsService = this.windowsTools;
-    const windowsToolsTool = windowsToolsService ? createWindowsToolsDelegationTool(async (input, toolCallId, signal) => {
+    const windowsToolsTool = windowsToolsService ? createWindowsToolsDelegationTool(async ({attachment_ids, ...input}, toolCallId, signal) => {
       const run = parentRun;
       if (!run || !boundSession) throw new Error("Windows Tools delegation requires an active parent question.");
       if (run.windowsToolsCalls >= this.config.windowsTools.maxDelegations) throw new Error("本轮 Windows Tools 委派次数已用尽。");
       run.windowsToolsCalls++;
       const binding = {round: historyRounds(boundSession), toolCallId};
-      const result = await windowsToolsService.run(sessionManager.getSessionId(), run.question, input, binding, signal, boundSession.thinkingLevel);
+      const parentId = sessionManager.getSessionId();
+      const attachments = attachment_ids?.length
+        ? await windowsAttachments(files?.store, parentId, attachedFileIds(boundSession), attachment_ids)
+        : [];
+      const result = await windowsToolsService.run(parentId, run.question, input, binding, signal, boundSession.thinkingLevel, attachments);
       const {taskId, status, elapsedMs, toolCalls, usage} = result;
       sessionManager.appendCustomEntry(WINDOWS_TOOLS_RECEIPT, {...binding, result: {taskId, status, elapsedMs, toolCalls, usage}});
       return result;
@@ -336,8 +341,15 @@ export class AgentRuntime {
         recall: this.memoryRecall ? () => ({extraRevision: parentRun!.memory!.extra.revision}) : undefined,
         attachments: files ? async () => {
           await files.store.touch(session.sessionId);
-          const boundIds = new Set(messageAttachments(session).flatMap(record => record.files.map(file => file.id)));
-          const catalog = (await files.store.list(session.sessionId)).filter(file => file.direction === "outputs" || !file.messageScoped || boundIds.has(file.id)).map(file => ({ name: file.name, path: file.path, direction: file.direction, bytes: file.bytes, ...attachmentReadInfo(file, files.store.directory(session.sessionId)) }));
+          const boundIds = attachedFileIds(session);
+          const directory = files.store.directory(session.sessionId);
+          const catalog = (await files.store.list(session.sessionId)).filter(file => file.direction === "outputs" || !file.messageScoped || boundIds.has(file.id)).map(file => {
+            const readInfo = attachmentReadInfo(file, directory);
+            return {
+              ...(windowsToolsTool && file.direction === "inputs" && boundIds.has(file.id) && readInfo.format === "plain-text" ? {id: file.id} : {}),
+              name: file.name, path: file.path, direction: file.direction, bytes: file.bytes, ...readInfo,
+            };
+          });
           return attachmentSection(catalog);
         } : undefined,
       });

@@ -105,6 +105,74 @@ test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own
  assert.doesNotMatch(await preview.text(), /ask_windows_tools_agent/);
 });
 
+test('Windows Tools searches a delegated WeCom log by ID and cannot read other attachments', async t => {
+ const f = await fixture(t, {}, {fileTools:{enabled:true, tools:['pdf_read']}});
+ const workspace = path.join(f.dataDir, 'windows-tools/workspace');
+ for (const name of ['PCTool', 'SNTool']) {
+  await fs.mkdir(path.join(workspace, name), {recursive:true});
+  await fs.writeFile(path.join(workspace, name, 'README.md'), 'Snapshot\n');
+ }
+ await f.restart();
+ assert.equal((await f.admin('/api/sub-agents/windows-tools', 'PUT', {enabled:true})).status, 200);
+ const api = f.api();
+ const {id} = await api.json('/sessions', 'POST', {});
+ const other = (await api.json('/sessions', 'POST', {})).id;
+ const filename = 'PCTool.log';
+ const log = Buffer.from('ordinary status message\r\n'.repeat(1240) + 'PCTOOL_FIXTURE_ERROR at startup\r\nending\r\n');
+ const selected = await api.upload(id, filename, log);
+ const unselected = await api.upload(id, filename, Buffer.from('UNSELECTED_FIXTURE_DATA\n'));
+ const unbound = await api.upload(id, filename, Buffer.from('UNBOUND_FIXTURE_DATA\n'));
+ const foreign = await api.upload(other, filename, Buffer.from('FOREIGN_FIXTURE_DATA\n'));
+ const issue = 'What error is in this PCTool log?';
+ const delegation = {task:issue, background:'', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
+ const alias = `attachment:${selected.id}`;
+ const evidence = {path:alias, startLine:1241, endLine:1241};
+ let childFirst, childFinal, mainFirst, mainFinal;
+ const tool = (res, name, args) => streamReply(res, {tool:{name,args}});
+ f.setModel((body, res) => {
+  const results = currentTools(body);
+  if (system(body).includes('你是 Windows Tools Agent')) {
+   if (!results.length) {
+    childFirst = body;
+    return tool(res, 'grep', {path:alias, pattern:'PCTOOL_FIXTURE_ERROR', literal:true, limit:2});
+   }
+   if (results.length === 1) return tool(res, 'read', {path:`attachment:${unselected.id}`, limit:2});
+   if (results.length === 2) return tool(res, 'read', {path:alias, offset:1241, limit:1});
+   childFinal = body;
+   return tool(res, 'finish_windows_tools_task', {status:'completed', answer:'PCTool.log records a startup error.', sources:[evidence], unknowns:[], questions:[]});
+  }
+  if (!results.length) {
+   mainFirst = body;
+   const denied = lastUser(body).content.includes('previous') ? unbound.id : foreign.id;
+   return tool(res, 'ask_windows_tools_agent', {...delegation, attachment_ids:[denied]});
+  }
+  if (results.length === 1) return tool(res, 'ask_windows_tools_agent', {...delegation, attachment_ids:[selected.id]});
+  mainFinal = body;
+  return streamReply(res, {text:'Startup error found.'});
+ });
+ const sender = {botId:'bot', userId:'customer', chatType:'single', at:Date.now()};
+ for (const [question, ids] of [[issue, [selected.id, unselected.id]], ['Recheck the previous log', []]]) {
+  const result = await api.run(id, question, ids, () => {}, undefined, sender);
+  assert.equal(result.failed, false);
+  assert.equal(result.run.windowsToolsTasks.length, 1);
+  assert.equal(result.run.windowsToolsTasks[0].status, 'completed');
+  assert.ok(JSON.stringify(mainFirst.messages).includes(selected.id));
+  assert.ok(!JSON.stringify(mainFirst.messages).includes('PCTOOL_FIXTURE_ERROR'));
+  assert.ok(mainFirst.tools.find(t => t.function.name === 'ask_windows_tools_agent').function.parameters.properties.attachment_ids);
+  assert.deepEqual(JSON.parse(lastUser(childFirst).content).attachments, [{path:alias, name:filename, bytes:log.length}]);
+  assert.ok(!JSON.stringify(childFirst.messages).includes(selected.path));
+  const childReads = currentTools(childFinal);
+  assert.match(childReads[0].content, /1241:PCTOOL_FIXTURE_ERROR at startup/);
+  assert.match(childReads[1].content, /not delegated for the current task/);
+  assert.match(childReads[2].content, /1241: PCTOOL_FIXTURE_ERROR at startup/);
+  assert.doesNotMatch(JSON.stringify(childFinal.messages), /UNSELECTED_FIXTURE_DATA|UNBOUND_FIXTURE_DATA|FOREIGN_FIXTURE_DATA/);
+  const parentResults = currentTools(mainFinal);
+  assert.match(parentResults[0].content, /attached to a message in this conversation/);
+  assert.deepEqual(JSON.parse(parentResults[1].content).sources, [evidence]);
+ }
+ assert.deepEqual(await api.download(id, selected), log);
+});
+
 test('Supervisor caps a batched call at 50 and Windows Tools reserves its 50th call to submit', async t => {
  const f = await fixture(t);
  const workspace = path.join(f.dataDir, 'windows-tools/workspace');

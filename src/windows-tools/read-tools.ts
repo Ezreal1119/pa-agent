@@ -1,9 +1,10 @@
 import { constants } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { inside } from "../file-tools/store.js";
 import { publishedSearchTools } from "../knowledge-sync/read-tools.js";
+import { ATTACHMENT_PREFIX, grepWindowsAttachment, type WindowsAttachment } from "./attachments.js";
 
 interface SourceRange { path: string; startLine: number; endLine: number }
 const LINE_BYTES = 2400;
@@ -23,7 +24,7 @@ async function resolveCorpusPath(root: string, input: string) {
 }
 
 /** Page individual lines without buffering large IL or disassembly exports. */
-async function readLines(file: string, offset: number, limit: number, signal?: AbortSignal) {
+async function readLines(handle: FileHandle, offset: number, limit: number, signal?: AbortSignal) {
   let lineNumber = 1;
   let bytes = 0;
   let output = "";
@@ -41,7 +42,6 @@ async function readLines(file: string, offset: number, limit: number, signal?: A
     lineNumber++;
     return lineNumber < offset + limit;
   };
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!(await handle.stat()).isFile()) throw new Error("Select a regular file.");
     const stream = handle.createReadStream({signal});
@@ -74,30 +74,54 @@ export function windowsReadTools(
   signal: AbortSignal,
   onRead: (source: SourceRange) => void,
   charge: () => void,
+  attachments: readonly WindowsAttachment[] = [],
 ): ToolDefinition<any, any>[] {
+  const delegated = new Map(attachments.map(file => [file.path, file]));
+  const openAttachment = (alias: string) => {
+    const file = delegated.get(alias);
+    if (!file) throw new Error("This attachment was not delegated for the current task.");
+    return file.open();
+  };
   const read = createReadToolDefinition(root);
-  read.description = "Read a workspace text export with numbered lines. Specify offset (1-based) and limit for large files.";
+  read.description = "Read a workspace text export or a delegated attachment by its attachment:<id> path. Specify offset (1-based) and limit for numbered lines.";
   read.execute = async (_id, args) => {
     charge();
-    const { real, relative, stat } = await resolveCorpusPath(root, args.path);
-    if (!stat.isFile()) throw new Error("Select a file to read.");
     const offset = Math.max(1, Math.floor(args.offset ?? 1));
     const limit = Math.min(200, Math.max(1, Math.floor(args.limit ?? 80)));
-    const page = await readLines(real, offset, limit, signal);
-    if (page.output) onRead({ path: relative, startLine: offset, endLine: page.endLine });
+    let sourcePath: string;
+    let handle: FileHandle;
+    if (args.path.startsWith(ATTACHMENT_PREFIX)) {
+      sourcePath = args.path;
+      handle = await openAttachment(sourcePath);
+    } else {
+      const { real, relative, stat } = await resolveCorpusPath(root, args.path);
+      if (!stat.isFile()) throw new Error("Select a file to read.");
+      sourcePath = relative;
+      handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    }
+    const page = await readLines(handle, offset, limit, signal);
+    if (page.output) onRead({ path: sourcePath, startLine: offset, endLine: page.endLine });
     return {
       content: [{type: "text", text: page.output
-        ? `${relative}\n${page.output}${page.next ? `\n[Continue with offset ${page.next}.]` : ""}`
+        ? `${sourcePath}\n${page.output}${page.next ? `\n[Continue with offset ${page.next}.]` : ""}`
         : "No text at that offset."}],
       details: {},
     };
   };
   const search = publishedSearchTools(root, { privateCorpus: true });
   for (const tool of search) {
+    if (tool.name === "grep") tool.description += " Use a delegated attachment:<id> path to search one uploaded text file.";
     const execute = tool.execute;
     tool.execute = async (id, args, _signal, update, context) => {
       charge();
       const query = args as { path?: string; limit?: number };
+      if (tool.name === "grep" && query.path?.startsWith(ATTACHMENT_PREFIX)) {
+        const handle = await openAttachment(query.path);
+        try {
+          const output = await grepWindowsAttachment(handle, args as Parameters<typeof grepWindowsAttachment>[1], signal);
+          return {content: [{type: "text", text: output ? `${query.path}\n${output}` : "No matches."}], details: {}};
+        } finally { await handle.close(); }
+      }
       const { relative } = await resolveCorpusPath(root, query.path ?? ".");
       return execute(id, { ...query, path: relative, limit: Math.min(100, Math.max(1, query.limit ?? 50)) }, signal, update, context);
     };

@@ -29,6 +29,9 @@ export function messageAttachments(session: AgentSession): MessageAttachments[] 
   }
   return [...records.values()];
 }
+export function attachedFileIds(session: AgentSession): Set<string> {
+  return new Set(messageAttachments(session).flatMap(record => record.files.map(file => file.id)));
+}
 /** The user's text stays unchanged in the SDK log; only inference receives the file brief. */
 export function installMessageAttachments(session: AgentSession, directory?: string): void {
   const transform = session.agent.transformContext;
