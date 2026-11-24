@@ -93,6 +93,7 @@ test('Web delegates with a single main run slot, reports progress/usage, retains
  const events=parseSse(await response.text()),done=events.find(e=>e.event==='done').data;
  assert.equal(done.failed,false);assert.equal(done.run.onesTasks.length,1);assert.equal(done.run.usage.input,400);assert.equal(done.run.usage.output,28);assert.equal(done.run.agentUsage.ones.requests,2);assert.equal(done.run.agentUsage.main.requests,2);
  assert.ok(events.some(e=>e.event==='notice'&&e.data.agent==='ones'&&e.data.text.includes('查询 ONES')));
+ assert.ok(!events.some(e=>e.event==='tool_progress'));
  const details=await(await f.admin(`/api/sessions/${s.id}/runs/${done.run.id}/tools`)).json();assert.equal(details.calls.find(c=>c.name==='ask_ones_agent').result.details.onesTask.status,'completed');
  const list=await(await f.admin('/api/sessions')).json();assert.equal(list.sessions.length,1);
  const child=path.join(f.dataDir,'agents/ones/parents',s.id);await fs.stat(child);
@@ -100,9 +101,12 @@ test('Web delegates with a single main run slot, reports progress/usage, retains
 });
 
 test('WeCom uses the same strategy, preserves patrick_detail and respects channel ownership',async t=>{
- const f=await fixture(t),api=f.api();const {id}=await api.json('/sessions','POST',{});const notices=[];
- const result=await api.run(id,'企微查询 SQ29M',[],(event,data)=>{if(event==='notice')notices.push(data);},undefined,{botId:'bot',userId:'customer',chatType:'single',at:Date.now()});
+ const f=await fixture(t),api=f.api();const {id}=await api.json('/sessions','POST',{});const notices=[],steps=[];
+ const result=await api.run(id,'企微查询 SQ29M',[],(event,data)=>{if(event==='notice')notices.push(data);if(event==='tool_progress')steps.push(data);},undefined,{botId:'bot',userId:'customer',chatType:'single',at:Date.now()});
  assert.equal(result.failed,false);assert.equal(result.run.onesTasks.length,1);assert.ok(notices.some(n=>n.agent==='ones'));
+ assert.deepEqual(steps.map(step=>[step.name,step.state]),[['get_issue_details','running'],['get_issue_details','done']]);
+ assert.equal(steps[0].id,steps[1].id);
+ assert.deepEqual(Object.keys(steps[0]).sort(),['agent','id','name','state']);
  const route=`/sessions/${id}/runs/${result.run.id}/detail`;
  const detail=await api.json(route);assert.match(detail.answer,/主 Agent 已整合/);assert.match(detail.answer,/ONES 查询/);
  await f.restart();assert.deepEqual(await f.api().json(route),detail);

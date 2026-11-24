@@ -3,6 +3,7 @@ import { fullMemory, memorySnapshot } from "../memory-recall/retrieve.js";
 import { recoverAllOnesReceipts, recoverOnesReceipts } from "../ones-agent/store.js";
 import { onesConnection } from "../ones-agent/config.js";
 import { removeOnesParent } from "../ones-agent/service.js";
+import type { OnesQueryStep } from "../ones-agent/types.js";
 import { recordSubAgentResult } from "../sub-agents/metrics.js";
 import { chatCompaction, contextRounds } from "../agent/chat-compaction.js";
 import { chatCompactionConfig } from "../agent/compaction-config.js";
@@ -1159,8 +1160,13 @@ export async function createWebServer(options: WebOptions = {}) {
                 send("tool", { id: event.toolCallId, name: event.toolName, state: "running", count: getToolRuns(session, metric.id).get(initialRounds + 1)?.calls.length ?? metric.toolCalls!.length });
               }
               if (event.type === "tool_execution_update" && event.toolName === "ask_ones_agent") {
-                const text = (event.partialResult as {details?: {onesNotice?: string}})?.details?.onesNotice;
+                const details = (event.partialResult as {details?: {onesNotice?: string; onesQueryStep?: OnesQueryStep}})?.details;
+                const text = details?.onesNotice;
                 if (text) send("notice", {text, agent: "ones"});
+                if (machine && details?.onesQueryStep) {
+                  const {id, name, state} = details.onesQueryStep;
+                  send("tool_progress", {id: `${event.toolCallId}:${id}`, name, state, agent: "ones"});
+                }
               }
               if (event.type === "tool_execution_update" && event.toolName === "recall_memory") {
                 const text = (event.partialResult as {details?: {memoryNotice?: string}})?.details?.memoryNotice;
@@ -1168,7 +1174,7 @@ export async function createWebServer(options: WebOptions = {}) {
               }
               if (event.type === "tool_execution_end") {
                 recordSubAgentResult(metric, event.result);
-                const result = event.result as { details?: { metrics?: { vision?: { cached?: boolean; usage?: unknown }[] } } };
+                const result = event.result as { details?: { metrics?: { vision?: { cached?: boolean; usage?: unknown }[] }; onesTask?: {status?: string}; memoryTask?: {status?: string} } };
                 for (const vision of result?.details?.metrics?.vision ?? []) {
                   if (vision.cached) continue;
                   metric.usage!.requests++;
@@ -1185,7 +1191,9 @@ export async function createWebServer(options: WebOptions = {}) {
                 const start = toolStarts.get(event.toolCallId);
                 if (timing && start !== undefined) { timing.finishedAt = new Date().toISOString(); timing.elapsedMs = Math.round(performance.now() - start); }
                 saveRunMetric(session, metric);
-                send("tool", { id: event.toolCallId, name: event.toolName, state: event.isError ? "error" : "done", elapsedMs: timing?.elapsedMs });
+                const subTaskStatus = result?.details?.onesTask?.status ?? result?.details?.memoryTask?.status;
+                const childFailed = machine && /^(failed|cancelled|interrupted)$/.test(subTaskStatus ?? "");
+                send("tool", { id: event.toolCallId, name: event.toolName, state: event.isError || childFailed ? "error" : "done", elapsedMs: timing?.elapsedMs });
               }
               if (event.type === "auto_retry_start") send("notice", { text: "The model request failed temporarily. Retrying…" });
             });

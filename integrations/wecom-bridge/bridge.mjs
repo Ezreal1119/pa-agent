@@ -11,6 +11,7 @@ import { commandInput, processControl } from './commands.mjs';
 import { BalanceNotifier } from './balance-notifications.mjs';
 import { FirmwareNotifier } from './firmware-notifications.mjs';
 import { canReadDetails, notificationRecipient } from './question-details.mjs';
+import { ReplyProgress, THINKING_INDICATOR, withThinking } from './reply-progress.mjs';
 
 const live = job => !['done', 'interrupted'].includes(job.state);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -132,7 +133,7 @@ export class WecomBridge {
     observe(job.detailRecipient ? job.id : undefined);
     const client = this.client(botId);
     // This acknowledgement is best-effort; durable result delivery below is retried.
-    if (this.isCurrent(job)) this.trackProgress(job, client.replyStream(job.frame, job.streamId, 'AI Thinking...', false).catch(() => {}));
+    if (this.isCurrent(job)) this.trackProgress(job, client.replyStream(job.frame, job.streamId, THINKING_INDICATOR, false).catch(() => {}));
     try {
       if (input.media.length) {
         const stage = async () => {
@@ -241,25 +242,28 @@ export class WecomBridge {
           if (!pending.files.length) delete conversation.pending[job.userId];
         }
         this.assertCurrent(job); job.state = 'running'; await this.store.save();
-        let lastProgress = 0; let partial = ''; const outputs = [];
-        const done = await this.api.run(id, job.text, [...new Set(job.attachmentIds)], async (event, value) => {
-          this.assertCurrent(job);
-          if (event === 'start') { job.runId = value.run.id; await this.store.save(); }
-          if (event === 'output') { outputs.push(value.file); job.outputs = outputs; await this.store.save(); }
-          if (event === 'error') job.runError = value.message;
-          if (event === 'notice' && ['ones', 'memory'].includes(value.agent)) {
-            const preview = splitUtf8(partial ? `${partial}\n\n${value.text}` : value.text)[0];
-            this.trackProgress(job, this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {}));
-          }
-          if (event === 'text') partial += value.delta;
-          if (event === 'text' && Date.now() - lastProgress > 2500) {
-            lastProgress = Date.now();
-            const preview = splitUtf8(partial)[0] || 'AI Thinking...';
-            // Non-blocking SDK path avoids a slow WeCom connection holding Agent SSE open.
-            const progress = this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, preview, false).catch(() => {});
-            this.trackProgress(job, progress);
-          }
-        }, signal, { botId: job.botId, userId: job.userId, chatType: JSON.parse(job.key)[1], ...(JSON.parse(job.key)[1] === 'group' ? { chatId: job.target } : {}), at: job.created });
+        const outputs = [];
+        const progress = new ReplyProgress(content => {
+          if (!this.isCurrent(job) || signal.aborted || this.closing) return;
+          const pending = this.client(job.botId).replyStreamNonBlocking?.(job.frame, job.streamId, content, false).catch(() => {});
+          this.trackProgress(job, pending);
+          return pending;
+        });
+        let done;
+        try {
+          done = await this.api.run(id, job.text, [...new Set(job.attachmentIds)], async (event, value) => {
+            this.assertCurrent(job);
+            if (event === 'start') { job.runId = value.run.id; await this.store.save(); }
+            if (event === 'output') { outputs.push(value.file); job.outputs = outputs; await this.store.save(); }
+            if (event === 'error') job.runError = value.message;
+            if (event === 'tool') progress.tool(value);
+            if (event === 'tool_progress') progress.tool(value, true);
+            if (event === 'text') progress.text(value.delta);
+          }, signal, { botId: job.botId, userId: job.userId, chatType: JSON.parse(job.key)[1], ...(JSON.parse(job.key)[1] === 'group' ? { chatId: job.target } : {}), at: job.created });
+        } finally {
+          progress.close();
+          job.replyThinking = progress.summary(true);
+        }
         this.assertCurrent(job);
         job.result = resultFromDone(done, job.runId, outputs);
         if (done.failed && job.runError) job.result.text += `\n\n本轮未完整完成：${job.runError}`;
@@ -309,7 +313,7 @@ export class WecomBridge {
     for (let index = job.sentParts ?? 0; index < chunks.length; index++) {
       this.assertCurrent(job); signal.throwIfAborted();
       if (!index) {
-        try { await this.client(job.botId).replyStream(job.frame, job.streamId, chunks[index], true); }
+        try { await this.client(job.botId).replyStream(job.frame, job.streamId, withThinking(chunks[index], job.replyThinking), true); }
         catch { this.assertCurrent(job); signal.throwIfAborted(); await this.send(job, chunks[index]); }
       } else await this.send(job, chunks[index]);
       job.sentParts = index + 1; await this.store.save();
@@ -332,7 +336,7 @@ export class WecomBridge {
       job.sentFiles.push(file.id); await this.store.save();
     }
     job.state = 'done'; job.finished = Date.now();
-    for (const key of ['text', 'staged', 'attachmentIds', 'result', 'outputs', 'runError', 'upgradeNotified', 'control']) delete job[key];
+    for (const key of ['text', 'staged', 'attachmentIds', 'result', 'outputs', 'runError', 'upgradeNotified', 'control', 'replyThinking']) delete job[key];
     await this.store.save(); await fs.rm(this.store.jobDirectory(job.id), { recursive: true, force: true });
   }
   safeError(error) {

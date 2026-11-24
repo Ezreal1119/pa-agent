@@ -10,7 +10,7 @@ import { SessionRetention } from "../agent/retention.js";
 import { ChatCompaction, chatCompaction } from "../agent/chat-compaction.js";
 import type { OnesConfig } from "./config.js";
 import { OnesMcp, OnesError } from "./mcp.js";
-import { finishSchema, type Delegation, type OnesAnswer, type OnesTaskResult } from "./types.js";
+import { finishSchema, type Delegation, type OnesAnswer, type OnesProgress, type OnesQueryStep, type OnesTaskResult } from "./types.js";
 import { ONES_FINISH_TOOL } from "./tool.js";
 
 const MONTH = 30 * 86400000;
@@ -19,7 +19,6 @@ export async function removeOnesParent(dataDir: string, id: string) {
   if (!validParentId(id)) throw new Error("Invalid ONES parent session.");
   await fs.rm(await safePath(rootDir(dataDir), id), {recursive: true, force: true});
 }
-export type OnesNotice = (text: string) => void;
 
 /** Each parent has its own durable Pi history. Ordinary main-session APIs never enumerate this tree. */
 export class OnesAgentService {
@@ -37,12 +36,12 @@ export class OnesAgentService {
     this.timer = setInterval(() => { void this.cleanup().catch(() => console.warn("[ones-agent] cleanup failed")); }, 3600000);
     this.timer.unref();
   }
-  run(parentId: string, originalQuestion: string, delegation: Delegation, signal?: AbortSignal, notice?: OnesNotice, effort?: AgentSession["thinkingLevel"], binding?: ParentBinding): Promise<OnesTaskResult> {
+  run(parentId: string, originalQuestion: string, delegation: Delegation, signal?: AbortSignal, notice?: OnesProgress, effort?: AgentSession["thinkingLevel"], binding?: ParentBinding): Promise<OnesTaskResult> {
     if (!originalQuestion.trim()) return Promise.reject(new Error("无法取得当前问题原文，未调用 ONES。"));
     if (JSON.stringify(delegation).length > this.config.maxContextChars) return Promise.reject(new Error(`ONES 任务背景超过 ${this.config.maxContextChars} 字符，请保留相关事实、纠正及约束后重试。`));
     return this.tasks.run(parentId, binding, signal, task => this.execute(task, originalQuestion, delegation, notice, effort));
   }
-  private async execute(task: TaskContext, originalQuestion: string, delegation: Delegation, notice?: OnesNotice, effort?: AgentSession["thinkingLevel"]): Promise<OnesTaskResult> {
+  private async execute(task: TaskContext, originalQuestion: string, delegation: Delegation, notice?: OnesProgress, effort?: AgentSession["thinkingLevel"]): Promise<OnesTaskResult> {
     const {parentId, binding, signal, receipt} = task;
     const {taskId} = receipt;
     const result: OnesTaskResult = {taskId, status: "failed", answer: "", sources: [], unknowns: [], questions: [], elapsedMs: 0, toolCalls: 0, usage: receipt.usage};
@@ -51,7 +50,7 @@ export class OnesAgentService {
     const taskFile = path.join(directory, "tasks", `${taskId}.json`);
     let mcp: OnesMcp | undefined; let session: AgentSession | undefined;
     let completed = false;
-    const progress = (text: string) => { if (!signal.aborted && !task.deleted() && !this.closing) notice?.(text); };
+    const progress = (update: string | OnesQueryStep) => { if (!signal.aborted && !task.deleted() && !this.closing) notice?.(update); };
     try {
       signal.throwIfAborted();
       await atomic(taskFile, JSON.stringify({...record, result: {...result, status: "queued"}}));
@@ -86,21 +85,24 @@ export class OnesAgentService {
       const ensure = () => { signal.throwIfAborted(); if (task.deleted() || this.closing) throw new Error("ONES task stopped."); if (fatal) throw fatal; if (answer) throw new Error("ONES task result already submitted."); };
       const tools: ToolDefinition<any, any>[] = definitions.map(definition => ({
         name: definition.name, label: definition.name, description: definition.description ?? definition.name, parameters: definition.inputSchema as any,
-        execute: async (_id: string, args: Record<string, unknown>) => {
+        execute: async (id: string, args: Record<string, unknown>) => {
           ensure();
           if (result.toolCalls >= this.config.maxToolCalls) throw new Error("ONES 查询工具调用预算已用尽，请提交已有结果或说明未完成事项。");
           result.toolCalls++;
+          let state: "done" | "error" = "error";
+          progress({id, name: definition.name, state: "running"});
           try {
             const response = await mcp!.call(definition.name, args);
             ensure();
             const text = JSON.stringify(response).split(this.agent.model.apiKey).join("[REDACTED]");
             observed.push(text);
+            state = response.isError ? "error" : "done";
             return {content: [{type: "text", text: JSON.stringify({...JSON.parse(text), externalData: true})}], details: {isError: response.isError ?? false}};
           } catch (error) {
             signal.throwIfAborted();
             if (error instanceof OnesError && ["auth", "permission", "unavailable"].includes(error.kind)) { fatal = error; throw error; }
             return {content: [{type: "text", text: error instanceof OnesError ? error.message : "ONES 查询失败，请检查查询参数。"}], details: {isError: true}};
-          }
+          } finally { progress({id, name: definition.name, state}); }
         },
       }));
       tools.push({...ONES_FINISH_TOOL, parameters: finishSchema,

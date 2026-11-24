@@ -26,7 +26,8 @@ export function inbound(body) {
   if (!text && !unique.length) throw new Error('请发送文字问题或文件。');
   return { text, media: unique };
 }
-export function splitUtf8(text, limit = 18000) {
+export const WECOM_TEXT_CHUNK_BYTES = 18000;
+export function splitUtf8(text, limit = WECOM_TEXT_CHUNK_BYTES) {
   const result = []; let part = '', size = 0;
   for (const char of String(text)) {
     const bytes = Buffer.byteLength(char);

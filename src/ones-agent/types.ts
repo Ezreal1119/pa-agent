@@ -10,6 +10,8 @@ export const delegationSchema = Type.Object({
   unresolvedQuestions: Type.Array(Type.String({ maxLength: 8000 }), { maxItems: 40, description: "Relevant missing information and uncertainty. Do not guess." }),
 }, { additionalProperties: false });
 export interface Delegation { task: string; background: string; confirmedFacts: string[]; corrections: string[]; constraints: string[]; unresolvedQuestions: string[]; }
+export type OnesQueryStep = { id: string; name: string; state: "running" | "done" | "error" };
+export type OnesProgress = (update: string | OnesQueryStep) => void;
 export const finishSchema = Type.Object({
   status: Type.Union([Type.Literal("completed"), Type.Literal("partial"), Type.Literal("needs_clarification"), Type.Literal("failed")]),
   answer: Type.String({ maxLength: 12000 }),

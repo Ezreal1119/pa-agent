@@ -79,6 +79,64 @@ import { WELCOME, welcome } from '../integrations/wecom-bridge/commands.mjs';
 const keyOf = (user='u', chat, bot='bot') => JSON.stringify([bot,chat?'group':'single',chat??user]);
 const until = async predicate => { const end=Date.now()+5000; while(!predicate()){if(Date.now()>end)throw new Error('wait timeout');await new Promise(r=>setTimeout(r,5));} };
 
+test('chat streams per-tool indicators, nested ONES steps and the answer through one WeCom stream', async t => {
+ const f = await setup(t);
+ const frames = [];
+ let skipFirst = true;
+ f.client.replyStream = async (_frame, id, text, finish) => { frames.push({id,text,finish}); };
+ f.client.replyStreamNonBlocking = async (_frame, id, text, finish) => {
+   if (skipFirst) { skipFirst = false; return 'skipped'; }
+   frames.push({id,text,finish});
+ };
+ const answer = '核对后的回复。' + '中'.repeat(6500);
+ f.api.run = async (_id, _text, _ids, event) => {
+   const run = {id: randomUUID(), status: 'completed'};
+   await event('start', {run});
+   await event('tool', {id:'ones', name:'ask_ones_agent', state:'running', arguments:{secret:'PRIVATE_ARGUMENT'}});
+   await until(() => frames.at(-1)?.text.includes('Querying via the ONES Agent 🤖…'));
+   await event('tool_progress', {id:'ones:lookup', name:'get_issue_details', state:'running', agent:'ones'});
+   await until(() => frames.at(-1)?.text.includes('Read ONES work item details · 1 in progress'));
+   await event('tool_progress', {id:'ones:lookup', name:'get_issue_details', state:'done', agent:'ones', result:'PRIVATE_RESULT'});
+   await event('tool', {id:'ones', name:'ask_ones_agent', state:'done'});
+   await event('tool', {id:'other', name:'check_product_status', state:'running'});
+   await until(() => frames.at(-1)?.text.includes('Running check product status…'));
+   await event('tool', {id:'other', name:'check_product_status', state:'error'});
+   await event('text', {delta:'核对后的回复。'});
+   await until(() => frames.at(-1)?.text.endsWith('核对后的回复。'));
+   assert.doesNotMatch(frames.at(-1).text, /Running check product status…|Querying via the ONES Agent 🤖…/);
+   return {run, failed:false, messages:[{role:'assistant',text:answer,run}]};
+ };
+ await f.bridge.receive('bot', message());
+ await f.bridge.idle();
+ assert.equal(frames[0].text, 'Thinking…');
+ assert.equal(new Set(frames.map(frame => frame.id)).size, 1);
+ assert.equal(frames.filter(frame => frame.finish).length, 1);
+ const final = frames.at(-1);
+ assert.match(final.text, /<think>[\s\S]*Read ONES work item details · 1 completed[\s\S]*Run check product status · 1 failed[\s\S]*<\/think>/);
+ assert.equal(final.text.split('</think>\n\n')[1] + f.client.texts.join(''), answer);
+ assert.ok(Buffer.byteLength(final.text) <= 20480);
+ assert.ok(frames.every(frame => !/PRIVATE_ARGUMENT|PRIVATE_RESULT/.test(frame.text)));
+});
+
+test('a failed final stream falls back to a plain answer without think markup', async t => {
+ const f = await setup(t);
+ const reply = f.client.replyStream;
+ f.client.replyStream = async (...args) => {
+   if (args[3] && args[2].startsWith('<think>')) throw new Error('Stream expired');
+   return reply.apply(f.client, args);
+ };
+ const run = f.api.run;
+ f.api.run = async (id, text, ids, event, ...rest) => {
+   const done = await run(id, text, ids, event, ...rest);
+   await event('tool', {id:'read', name:'read', state:'running'});
+   await event('tool', {id:'read', name:'read', state:'done'});
+   return done;
+ };
+ await f.bridge.receive('bot', message());
+ await f.bridge.idle();
+ assert.deepEqual(f.client.texts, ['回答 问题']);
+});
+
 test('welcome responds only to private enter-chat events, using the approved text without inference',async()=>{
  const replies=[];const client={async replyWelcome(frame,body){replies.push({frame,body});}};
  await welcome(client,{body:{chattype:'single'}});await welcome(client,{body:{chattype:'group'}});
