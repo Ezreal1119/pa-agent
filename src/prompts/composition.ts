@@ -1,6 +1,7 @@
 import { createRecallTool, RECALL_GUIDANCE } from "../memory-recall/tool.js";
 import { memorySnapshot, type MemorySnapshot } from "../memory-recall/retrieve.js";
 import { createOnesTool, ONES_GUIDANCE } from "../ones-agent/tool.js";
+import { createWindowsToolsDelegationTool, WINDOWS_TOOLS_GUIDANCE } from "../windows-tools/tool.js";
 import path from "node:path";
 import {
   DefaultResourceLoader,
@@ -39,6 +40,7 @@ export function capabilityGuidance(config: AgentConfig, textOnly: boolean) {
     files = !textOnly && config.fileTools.enabled;
   return [
     ...(config.ones.enabled ? [ONES_GUIDANCE] : []),
+    ...(config.windowsTools.enabled ? [WINDOWS_TOOLS_GUIDANCE] : []),
     ...(config.memoryRecall.enabled ? [RECALL_GUIDANCE] : []),
     ...(options.textOnly
       ? [
@@ -186,10 +188,12 @@ export function promptTools(
   recallTool?: ToolDefinition<any, any>,
   memoryWriteAccess?: MemoryWriteAccess,
   currentMemory?: () => MemorySnapshot | undefined,
+  windowsToolsTool?: ToolDefinition<any, any>,
 ) {
   const custom: ToolDefinition<any, any>[] = [
-    ...publishedSearchTools(config.cwd),
+    ...publishedSearchTools(config.cwd, { exclude: ["**/windows-tools/workspace", "**/windows-tools/workspace/**"] }),
     ...(config.ones.enabled ? [onesTool ?? createOnesTool(config.ones)] : []),
+    ...(config.windowsTools.enabled ? [windowsToolsTool ?? createWindowsToolsDelegationTool()] : []),
     ...(config.memoryRecall.enabled ? [recallTool ?? createRecallTool()] : []),
     ...(!textOnly || config.memoryRecall.enabled ? [createMemoryTool(config.dataDir, {
       snapshot: config.memoryRecall.enabled ? currentMemory ?? (() => undefined) : undefined,

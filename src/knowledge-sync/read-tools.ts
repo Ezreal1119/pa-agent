@@ -8,7 +8,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 /** Filter before searching, not after returning snippets containing unpublished material. */
-export function publishedSearchTools(cwd: string): ToolDefinition<any, any>[] {
+export function publishedSearchTools(cwd: string, options: { privateCorpus?: boolean; exclude?: readonly string[] } = {}): ToolDefinition<any, any>[] {
   const run = (args: string[], signal?: AbortSignal) =>
     new Promise<string>((resolve, reject) =>
       execFile(
@@ -39,7 +39,12 @@ export function publishedSearchTools(cwd: string): ToolDefinition<any, any>[] {
     "!**/newly_added/**",
     "--glob",
     "!**/knowledge-sync/**",
+    ...(options.privateCorpus ? ["--glob", "!**/.*", "--glob", "!**/.*/**"] : []),
+    ...(options.exclude ?? []).flatMap(glob => ["--glob", "!" + glob]),
   ];
+  const root = (query?: string) => options.privateCorpus
+    ? path.relative(cwd, path.resolve(cwd, query ?? ".")) || "."
+    : path.resolve(cwd, query ?? ".");
   const grep = createGrepToolDefinition(cwd),
     find = createFindToolDefinition(cwd),
     ls = createLsToolDefinition(cwd);
@@ -49,14 +54,16 @@ export function publishedSearchTools(cwd: string): ToolDefinition<any, any>[] {
       "--line-number",
       "--color",
       "never",
-      "--hidden",
+      "--no-config",
+      "--no-follow",
+      ...(options.privateCorpus ? ["--with-filename", "--max-columns", "1600", "--max-columns-preview"] : ["--hidden"]),
     ];
     if (a.ignoreCase) args.push("-i");
     if (a.literal) args.push("-F");
     if (a.glob) args.push("--glob", a.glob);
     if (a.context)
       args.push("-C", String(Math.min(10, Math.max(0, Math.floor(a.context)))));
-    args.push(...exclusions, "--", a.pattern, path.resolve(cwd, a.path ?? "."));
+    args.push(...exclusions, "--", a.pattern, root(a.path));
     const lines = (await run(args, signal)).split("\n");
     const n = Math.min(500, Math.max(1, a.limit ?? 100));
     return {
@@ -75,12 +82,14 @@ export function publishedSearchTools(cwd: string): ToolDefinition<any, any>[] {
     const text = await run(
       [
         "--files",
-        "--hidden",
+        "--no-config",
+        "--no-follow",
+        ...(options.privateCorpus ? [] : ["--hidden"]),
         "--glob",
         a.pattern,
         ...exclusions,
         "--",
-        path.resolve(cwd, a.path ?? "."),
+        root(a.path),
       ],
       signal,
     );

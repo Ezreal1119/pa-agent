@@ -11,6 +11,7 @@ const document = action('Reading your document…', 'Read the document');
 const file = action('Preparing your file…', 'Prepare the file');
 const toolActions = new Map(Object.entries({
   ask_ones_agent: action('Querying via the ONES Agent 🤖…', 'Query the ONES Agent'),
+  ask_windows_tools_agent: action('Diagnosing via the Windows Tools Agent 🤖…', 'Diagnose with the Windows Tools Agent'),
   recall_memory: action('Checking relevant saved notes…', 'Check relevant saved notes'),
   memory: action('Working with saved notes…', 'Work with saved notes'),
   grep: workspace, find: workspace, ls: workspace,

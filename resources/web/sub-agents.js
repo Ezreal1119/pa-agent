@@ -28,6 +28,7 @@ function renderAgent(agent) {
   const unavailable = field('unavailable');
   const internalTools = field('internal-tools');
   const mcpTools = field('mcp-tools');
+  field('mcp-section').hidden = !agent.mcpTools.length;
   const label = `Enable ${agent.name}`;
   control.setAttribute('aria-label', label);
   field('name').textContent = agent.name;

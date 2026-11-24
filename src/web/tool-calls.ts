@@ -62,6 +62,7 @@ export function getToolRuns(session: AgentSession, activeId?: string) {
 export function publicRunMetrics(session: AgentSession, activeId?: string, rounds = getToolRuns(session, activeId)) {
   return getRunMetrics(session, activeId).map(metric => {
     const run = [...rounds.values()].find(r => r.id === metric.id);
-    return { ...metric, ...(metric.onesTasks?.length || metric.memoryTasks?.length ? {agentUsage: splitAgentUsage(metric)} : {}), toolCallCount: run?.calls.length ?? 0 };
+    const agentUsage = splitAgentUsage(metric);
+    return { ...metric, ...(agentUsage ? {agentUsage} : {}), toolCallCount: run?.calls.length ?? 0 };
   });
 }

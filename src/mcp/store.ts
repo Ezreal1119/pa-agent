@@ -11,7 +11,7 @@ export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancel
 export interface McpTask {
   id: string; conversationId: string; sessionId: string; questionHash: string; requestId?: string;
   status: TaskStatus; created: number; updated: number; modelId?: string; started?: number; finished?: number;
-  usage: TokenUsage; onesTasks?: TaskReceipt[]; memoryTasks?: TaskReceipt[]; toolCalls: number; elapsedMs: number | null;
+  usage: TokenUsage; onesTasks?: TaskReceipt[]; memoryTasks?: TaskReceipt[]; windowsToolsTasks?: TaskReceipt[]; toolCalls: number; elapsedMs: number | null;
 }
 export interface TaskAnswer { answer: string; error?: string; error_code?: "capacity_exceeded"; truncated?: boolean; }
 interface Totals { submitted: number; started: number; completed: number; failed: number; cancelled: number; interrupted: number; inputTokens: number; outputTokens: number; requests: number; reportedRequests: number; }

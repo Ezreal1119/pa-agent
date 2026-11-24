@@ -8,7 +8,7 @@ import {once} from 'node:events';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
 import {createWebServer} from '../dist/web/server.js';
 import {AgentApi} from '../integrations/wecom-bridge/api.mjs';
-import {onesFixture,defaultModel,streamReply,isChild,currentTools,system,until} from './ones-fixtures.mjs';
+import {onesFixture,defaultModel,streamReply,isChild,currentTools,lastUser,system,until} from './ones-fixtures.mjs';
 
 async function fixture(t,settings={},extra={}){
  const cleanup=[];const f=await onesFixture({after:fn=>cleanup.push(fn)},{web:true,ones:settings,extra});
@@ -27,6 +27,83 @@ async function fixture(t,settings={},extra={}){
  return {...f,key,admin,api,apiResult,mcpClient,get app(){return app;},get base(){return base;},async restart(){for(const c of clients.splice(0))await c.close();await app.close();await start();}};
 }
 const parseSse=text=>text.split('\n\n').flatMap(frame=>{const event=frame.split('\n').find(s=>s.startsWith('event: '))?.slice(7),data=frame.split('\n').find(s=>s.startsWith('data: '))?.slice(6);return event&&data?[{event,data:JSON.parse(data)}]:[]});
+
+test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own read-only workspace', async t => {
+ const f = await fixture(t);
+ const switchRoute = '/api/sub-agents/windows-tools';
+ const catalog = async () => (await (await f.admin('/api/sub-agents')).json()).agents.find(entry => entry.id === 'windows-tools');
+ assert.match((await catalog()).unavailable, /upload/i);
+ assert.equal((await f.admin(switchRoute, 'PUT', {enabled:true})).status, 409);
+
+ const workspace = path.join(f.dataDir, 'windows-tools/workspace');
+ await fs.mkdir(path.join(workspace, 'PCTool'), {recursive:true});
+ await fs.mkdir(path.join(workspace, 'SNTool'));
+ await fs.writeFile(path.join(workspace, 'PCTool/README.md'), 'Snapshot\nWINDOWS_FIXTURE_MESSAGE\nNext line\n');
+ await fs.writeFile(path.join(workspace, 'SNTool/README.md'), 'SNTool snapshot\n');
+ await fs.writeFile(path.join(workspace, 'PCTool/.private'), 'WINDOWS_FIXTURE_HIDDEN');
+ await fs.writeFile(path.join(f.root, 'outside.txt'), 'WINDOWS_FIXTURE_OUTSIDE');
+ await fs.symlink(path.join(f.root, 'outside.txt'), path.join(workspace, 'PCTool/link.txt'));
+ await f.restart();
+ assert.equal((await catalog()).enabled, false);
+ assert.equal((await catalog()).supervisorTool.name, 'ask_windows_tools_agent');
+ assert.equal((await f.admin(switchRoute, 'PUT', {enabled:true})).status, 200);
+
+ const issue = 'Explain the PCTool fixture error';
+ const delegation = {task: issue, background:'A Windows utility error', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
+ const source = {path:'PCTool/README.md', startLine:2, endLine:2};
+ const diagnostic = {status:'completed', answer:'The fixture reaches the documented failure branch.', sources:[source], unknowns:[], questions:[]};
+ const replyWithTool = (res, name, args) => streamReply(res, {tool:{name, args}});
+ const mainResults = [];
+ const childResults = [];
+ f.setModel((body, res) => {
+  const results = currentTools(body);
+  if (system(body).includes('你是 Windows Tools Agent')) {
+   childResults.push(body);
+   const next = [
+    ['grep', {path:'PCTool', pattern:'WINDOWS_FIXTURE', glob:'*', literal:true}],
+    ['read', {path:'PCTool/link.txt'}],
+    ['read', {path:'PCTool/README.md', offset:2, limit:1}],
+    ['finish_windows_tools_task', {...diagnostic, sources:[{...source, endLine:3}]}],
+    ['finish_windows_tools_task', diagnostic],
+   ][results.length];
+   return next ? replyWithTool(res, ...next) : streamReply(res);
+  }
+  mainResults.push(body);
+  const next = [
+   ['read', {path:path.join(workspace, source.path)}],
+   ['grep', {path:f.dataDir, pattern:'WINDOWS_FIXTURE_MESSAG[E]', literal:false}],
+   ['ask_windows_tools_agent', delegation],
+  ][results.length];
+  return next ? replyWithTool(res, ...next) : streamReply(res, {text:diagnostic.answer});
+ });
+ const api = f.api();
+ const {id} = await api.json('/sessions','POST',{});
+ const done = await api.run(id, issue, [], () => {}, undefined, {botId:'bot', userId:'customer', chatType:'single', at:Date.now()});
+ assert.equal(done.failed, false);
+ assert.equal(done.run.windowsToolsTasks[0].status, 'completed');
+ assert.equal(done.run.agentUsage.windowsTools.requests, childResults.length);
+ assert.equal(done.run.usage.requests, childResults.length + mainResults.length);
+ assert.deepEqual(childResults[0].tools.map(tool => tool.function.name).sort(), ['find','finish_windows_tools_task','grep','ls','read']);
+ assert.equal(JSON.parse(lastUser(childResults[0]).content).question, issue);
+ assert.doesNotMatch(system(childResults[0]), /BUSINESS_PRIVATE_MEMORY|BUSINESS_PRIVATE_KNOWLEDGE/);
+ const finalChildTools = currentTools(childResults.at(-1));
+ assert.match(finalChildTools[0].content, /PCTool\/README\.md:2:WINDOWS_FIXTURE_MESSAGE/);
+ assert.doesNotMatch(finalChildTools[0].content, /WINDOWS_FIXTURE_HIDDEN|WINDOWS_FIXTURE_OUTSIDE/);
+ assert.match(finalChildTools[1].content, /Linked paths are unavailable/);
+ assert.match(finalChildTools[2].content, /2: WINDOWS_FIXTURE_MESSAGE/);
+ assert.match(finalChildTools[3].content, /line ranges returned by read/);
+ const finalMainTools = currentTools(mainResults.at(-1));
+ assert.match(finalMainTools[0].content, /reserved for its specialist/);
+ assert.doesNotMatch(finalMainTools[1].content, /WINDOWS_FIXTURE_MESSAGE/);
+ assert.deepEqual(JSON.parse(finalMainTools[2].content).sources, [source]);
+ assert.match((await api.json(`/sessions/${id}/runs/${done.run.id}/detail`)).answer, /Windows Tools 排障/);
+ await f.restart();
+ assert.equal((await catalog()).enabled, true);
+ assert.equal((await f.admin(switchRoute, 'PUT', {enabled:false})).status, 200);
+ const preview = await f.admin('/api/prompt/preview','POST', {instructions:[], mode:'standard'});
+ assert.equal(preview.status, 200);
+ assert.doesNotMatch(await preview.text(), /ask_windows_tools_agent/);
+});
 
 test('Sub-Agents lists the read-only ONES profile and persists its switch across requests and restarts', async t => {
  const f = await fixture(t);

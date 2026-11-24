@@ -1,8 +1,10 @@
 import type { ModelConfig } from "../config.js";
 import { onesProfile, validateOnesActivation, type onesConnection, type OnesOptions } from "../ones-agent/config.js";
 import { ONES_DELEGATION_TOOL, ONES_FINISH_TOOL, ONES_GUIDANCE } from "../ones-agent/tool.js";
+import { readyWindowsWorkspace, WINDOWS_READ_TOOLS, windowsToolsPrompt, windowsWorkspace } from "../windows-tools/config.js";
+import { WINDOWS_DELEGATION_TOOL, WINDOWS_FINISH_TOOL, WINDOWS_TOOLS_GUIDANCE } from "../windows-tools/tool.js";
 
-export const SUB_AGENT_IDS = ["ones"] as const;
+export const SUB_AGENT_IDS = ["ones", "windows-tools"] as const;
 export type SubAgentId = typeof SUB_AGENT_IDS[number];
 export type SubAgentSwitches = Partial<Record<SubAgentId, boolean>>;
 
@@ -50,4 +52,31 @@ export function onesCatalogEntry(resourcesDir: string, model: ModelConfig, optio
   } catch (error) {
     return { ...entry, prompt: profile.prompt, mcpTools: profile.tools, unavailable: (error as Error).message };
   }
+}
+
+export function windowsToolsCatalogEntry(resourcesDir: string, dataDir: string): SubAgentCatalogEntry {
+  const entry: SubAgentCatalogEntry = {
+    id: "windows-tools",
+    name: "Windows Tools Agent",
+    description: "Read-only diagnosis of the PCTool and SNTool Windows utilities.",
+    supervisorTool: { ...WINDOWS_DELEGATION_TOOL, guidance: WINDOWS_TOOLS_GUIDANCE },
+    internalTools: [
+      ...WINDOWS_READ_TOOLS.map(name => ({ name, label: name, description: "Read-only access within the Windows Tools workspace." })),
+      WINDOWS_FINISH_TOOL,
+    ],
+    mcpTools: [],
+    prompt: "",
+  };
+  try {
+    entry.prompt = windowsToolsPrompt(resourcesDir);
+  } catch {
+    entry.unavailable = "The Windows Tools system prompt is missing.";
+    return entry;
+  }
+  try {
+    readyWindowsWorkspace(windowsWorkspace(dataDir));
+  } catch {
+    entry.unavailable = "Upload the PCTool and SNTool snapshots to .data/windows-tools/workspace and restart the service.";
+  }
+  return entry;
 }

@@ -18,5 +18,6 @@ export function wecomRunDetail(manager: SessionManager, runId: string, activeId?
   let answer = run.id === activeId && activeText !== undefined ? activeText : answers.join("\n\n");
   if (run.onesTasks?.length) answer += "\n\nONES 查询：\n" + run.onesTasks.map(t => `${t.taskId} · ${t.status} · ${(t.elapsedMs / 1000).toFixed(1)} 秒 · ${t.toolCalls} 次查询 · ${t.usage.input + t.usage.output} tokens`).join("\n");
   if (run.memoryTasks?.length) answer += "\n\n记忆召回：\n" + run.memoryTasks.map(t => `${t.status} · ${(t.elapsedMs / 1000).toFixed(1)} 秒 · ${t.usage.input + t.usage.output} tokens`).join("\n");
+  if (run.windowsToolsTasks?.length) answer += "\n\nWindows Tools 排障：\n" + run.windowsToolsTasks.map(t => `${t.status} · ${(t.elapsedMs / 1000).toFixed(1)} 秒 · ${t.toolCalls} 次查阅 · ${t.usage.input + t.usage.output} tokens`).join("\n");
   return { status: run.status, answer };
 }

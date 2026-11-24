@@ -30,6 +30,7 @@ export interface RunMetric {
   usage?: TokenUsage;
   onesTasks?: TaskReceipt[];
   memoryTasks?: TaskReceipt[];
+  windowsToolsTasks?: TaskReceipt[];
 }
 
 /** Custom entries persist in the SDK log but are excluded from model context. */

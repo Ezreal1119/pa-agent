@@ -1,6 +1,7 @@
 import { memoryRecallConfig, type MemoryRecallOptions } from "./memory-recall/config.js";
 import "dotenv/config";
 import { onesConfig, type OnesConfig, type OnesOptions } from "./ones-agent/config.js";
+import { windowsToolsConfig } from "./windows-tools/config.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileToolConfig, type FileToolConfig, type FileToolOptions } from "./file-tools/config.js";
@@ -35,6 +36,7 @@ export interface AgentConfig {
   webTools: WebToolConfig;
   compaction: ChatCompactionConfig;
   ones: OnesConfig;
+  windowsTools: ReturnType<typeof windowsToolsConfig>;
   memoryRecall: ReturnType<typeof memoryRecallConfig>;
 }
 
@@ -50,6 +52,7 @@ export interface AgentConfigOptions {
   webTools?: WebToolOptions;
   compaction?: Partial<ChatCompactionConfig>;
   ones?: OnesOptions;
+  windowsTools?: { enabled?: boolean };
   memoryRecall?: MemoryRecallOptions;
 }
 
@@ -108,5 +111,6 @@ export function resolveConfig(options: AgentConfigOptions = {}): AgentConfig {
     compaction: chatCompactionConfig(options.compaction, process.env, model),
     memoryRecall: memoryRecallConfig(options.memoryRecall),
     ones: onesConfig(path.resolve(options.resourcesDir ?? path.join(packageRoot, "resources")), model, options.ones),
+    windowsTools: windowsToolsConfig(path.resolve(options.resourcesDir ?? path.join(packageRoot, "resources")), dataDir, options.windowsTools?.enabled),
   };
 }

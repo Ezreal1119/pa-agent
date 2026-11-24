@@ -38,7 +38,7 @@ export class McpService {
     if (!usage || usage.requests < old.usage.requests || usage.input < old.usage.input || usage.output < old.usage.output || usage.reportedRequests < old.usage.reportedRequests) return;
     const status = metric.status === "running" ? "running" : metric.status === "stopped" ? "cancelled" : metric.status;
     // getRunMetrics treats unfinished logs as interrupted after restart, even if an answer was atomically saved.
-    const changes = { usage, ...(metric.onesTasks?.length ? {onesTasks: metric.onesTasks} : {}), ...(metric.memoryTasks?.length ? {memoryTasks: metric.memoryTasks} : {}), modelId: metric.modelId, started: Date.parse(metric.startedAt), toolCalls: Math.max(old.toolCalls, metric.toolCalls?.length ?? 0), elapsedMs: recovering && terminal(old.status) ? old.elapsedMs : metric.elapsedMs, ...(metric.finishedAt && !(recovering && terminal(old.status)) ? { finished: Date.parse(metric.finishedAt) } : {}), ...(!terminal(old.status) && status === "running" ? { status: "running" as const } : {}) };
+    const changes = { usage, ...(metric.onesTasks?.length ? {onesTasks: metric.onesTasks} : {}), ...(metric.memoryTasks?.length ? {memoryTasks: metric.memoryTasks} : {}), ...(metric.windowsToolsTasks?.length ? {windowsToolsTasks: metric.windowsToolsTasks} : {}), modelId: metric.modelId, started: Date.parse(metric.startedAt), toolCalls: Math.max(old.toolCalls, metric.toolCalls?.length ?? 0), elapsedMs: recovering && terminal(old.status) ? old.elapsedMs : metric.elapsedMs, ...(metric.finishedAt && !(recovering && terminal(old.status)) ? { finished: Date.parse(metric.finishedAt) } : {}), ...(!terminal(old.status) && status === "running" ? { status: "running" as const } : {}) };
     if (Object.entries(changes).every(([key, value]) => JSON.stringify(old[key as keyof McpTask]) === JSON.stringify(value))) return;
     await this.store.update(id, changes);
   }
@@ -77,6 +77,7 @@ export class McpService {
     if (!uuid(id)) throw new TaskRequestError(400, "Invalid task_id.");
     const task = await this.store.get(id); const answer = terminal(task.status) ? await this.store.answer(id) : undefined;
     const u = task.usage;
+    const agentUsage = splitAgentUsage(task);
     return {
       task_id: task.id, conversation_id: task.conversationId, status: task.status,
       answer: answer?.answer ?? null, ...(answer?.error_code ? { error_code: answer.error_code } : {}), ...(answer?.error ? { error: answer.error } : {}), ...(answer?.truncated ? { truncated: true } : {}),
@@ -84,7 +85,8 @@ export class McpService {
       elapsed_ms: task.elapsedMs, tool_calls: task.toolCalls,
       ...(task.onesTasks?.length ? {ones_tasks: task.onesTasks} : {}),
       ...(task.memoryTasks?.length ? {memory_tasks: task.memoryTasks} : {}),
-      ...(task.onesTasks?.length || task.memoryTasks?.length ? {agent_usage: splitAgentUsage(task)} : {}),
+      ...(task.windowsToolsTasks?.length ? {windows_tools_tasks: task.windowsToolsTasks} : {}),
+      ...(agentUsage ? {agent_usage: agentUsage} : {}),
       usage: { input_tokens: u.input, output_tokens: u.output, total_tokens: u.input + u.output, model_requests: u.requests, reported_requests: u.reportedRequests, missing_requests: u.requests - u.reportedRequests, coverage: !u.requests ? "not_started" : !u.reportedRequests ? "unavailable" : u.requests === u.reportedRequests ? "complete" : "partial" },
       ...(!terminal(task.status) ? { poll_after_ms: 2000 } : {}),
     };

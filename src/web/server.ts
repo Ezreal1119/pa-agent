@@ -44,7 +44,7 @@ import { wecomRunDetail } from "./run-detail.js";
 import { chatHistory, ChatHistoryError, CHAT_HISTORY_PAGE_SIZE, historyPageSize } from "./chat-history.js";
 import type { AgentConfigOptions } from "../config.js";
 import { AgentSettingsStore, validateAgentSettings } from "./agent-settings.js";
-import { onesCatalogEntry, subAgentId } from "./sub-agents.js";
+import { onesCatalogEntry, subAgentId, windowsToolsCatalogEntry } from "./sub-agents.js";
 import { WebAuth } from "./auth.js";
 import { WecomContacts, observation } from "./wecom-contacts.js";
 import { WebOriginPolicy, RequestOriginError } from "./origin.js";
@@ -100,7 +100,7 @@ const MONTH = 30 * 86400000;
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 type ModelSettings = { apiKey: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number };
 type RecordState = { userRoleStyle?: string; channel?: "mcp" | "http-api"; id: string; persistedFile?: string; session?: AgentSession; running: boolean; title: string; updated: string; context?: unknown; opening?: Promise<AgentSession>; cancelled?: boolean; activeRunId?: string; activeRunText?: string; mutating?: boolean; cancelQueued?: () => void };
-export interface WebOptions { memoryRecall?: AgentConfigOptions["memoryRecall"]; ones?: AgentConfigOptions["ones"]; compaction?: AgentConfigOptions["compaction"]; httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
+export interface WebOptions extends Pick<AgentConfigOptions, "windowsTools"> { memoryRecall?: AgentConfigOptions["memoryRecall"]; ones?: AgentConfigOptions["ones"]; compaction?: AgentConfigOptions["compaction"]; httpApi?: HttpApiOptions; knowledgeExport?: { tokens?: ExportToken[] }; firmware?: { client?: FirmwareClient; extractor?: FirmwareExtractor; pollMs?: number; publicBase?: string }; research?: { engine?: () => ResearchEngine; settings?: ResearchConfig }; wecomImport?: { reader: WecomReader; disk?: (bytes: number) => Promise<void> }; autoSyncSchedule?: Pick<SftpScheduleClient, "status" | "save">; wecomSchedule?: Pick<SftpScheduleClient, "status" | "save">; librarySchedule?: Pick<SftpScheduleClient, "status" | "save">; sftpSchedule?: Pick<SftpScheduleClient, "status" | "save">; memoryInjection?: { planner: () => MemoryPlanner }; sync?: { planner?: () => Planner; converter?: () => Converter; timeoutMs?: number }; cwd?: string; dataDir?: string; resourcesDir?: string; model?: Partial<ModelSettings>; admin?: { account: string; password: string }; fileTools?: FileToolOptions; webTools?: WebToolOptions; mcp?: McpOptions; bridgeToken?: string; publicUrl?: string; maxConcurrentRuns?: number; runQueueLimit?: number; }
 
 export async function createWebServer(options: WebOptions = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -132,9 +132,14 @@ export async function createWebServer(options: WebOptions = {}) {
     maxTokens: options.model?.maxTokens ?? Number(process.env.MAX_TOKENS ?? diskEnv.MAX_TOKENS ?? 16384),
   };
   const ones = onesConnection(options.ones, { ...diskEnv, ...process.env });
-  const subAgents = { ones: onesCatalogEntry(resourcesDir, settings, options.ones, ones) };
-  const subAgentRequested = (id: keyof typeof subAgents) => agentSettings.subAgents?.[id] ?? (id === "ones" && options.ones?.enabled === true);
+  const subAgents = {
+    ones: onesCatalogEntry(resourcesDir, settings, options.ones, ones),
+    "windows-tools": windowsToolsCatalogEntry(resourcesDir, dataDir),
+  };
+  const defaultSubAgents = { ones: options.ones?.enabled ?? false, "windows-tools": options.windowsTools?.enabled ?? false };
+  const subAgentRequested = (id: keyof typeof subAgents) => agentSettings.subAgents?.[id] ?? defaultSubAgents[id];
   const onesOptions = () => ({ ...options.ones, ...ones, enabled: subAgentRequested("ones") && !subAgents.ones.unavailable });
+  const windowsToolsOptions = () => ({ enabled: subAgentRequested("windows-tools") && !subAgents["windows-tools"].unavailable });
   const recallDefaults = memoryRecallConfig(options.memoryRecall, { ...diskEnv, ...process.env });
   const recallConfig = () => ({ ...recallDefaults, enabled: agentSettings.memoryRecall?.enabled ?? recallDefaults.enabled });
   const compactionConfig = chatCompactionConfig(options.compaction, { ...diskEnv, ...process.env }, settings);
@@ -260,7 +265,7 @@ export async function createWebServer(options: WebOptions = {}) {
   const getRuntime = async () => {
     if (!configured()) throw new HttpError(409, "Set BASE_URL, MODEL_ID, and API_KEY in .env, then restart the service.");
     if (!initializing) {
-      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, ones: onesOptions(), memoryRecall: recallConfig(), compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
+      const config: AgentConfigOptions = { cwd, dataDir, resourcesDir, model: settings, ones: onesOptions(), windowsTools: windowsToolsOptions(), memoryRecall: recallConfig(), compaction: compactionConfig, fileTools: fileConfig, libraryLinksEnabled: agentSettings.libraryLinks.enabled, firmwareEnabled: agentSettings.firmware?.enabled ?? false, webTools: webConfig };
       initializing = AgentRuntime.create(config).then(value => runtime = value).catch(error => { initializing = undefined; throw error; });
     }
     return initializing;
@@ -626,7 +631,7 @@ export async function createWebServer(options: WebOptions = {}) {
         if (url.pathname === "/api/prompt/preview" && method === "POST") {
           const body = await readBody(req, 262144);
           if (Object.keys(body).some(k => !["instructions", "mode"].includes(k)) || !["standard", "mcp"].includes(body.mode)) throw new HttpError(400, "Provide instructions and standard or mcp mode.");
-          const config = resolveConfig({cwd,dataDir,resourcesDir,ones:onesOptions(),memoryRecall:recallConfig(),model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
+          const config = resolveConfig({cwd,dataDir,resourcesDir,ones:onesOptions(),windowsTools:windowsToolsOptions(),memoryRecall:recallConfig(),model:{...settings,apiKey:settings.apiKey || "preview-only",baseUrl:settings.baseUrl || "https://preview.invalid",modelId:settings.modelId || "not-configured"},fileTools:fileConfig,webTools:webConfig,libraryLinksEnabled:agentSettings.libraryLinks.enabled,firmwareEnabled:agentSettings.firmware?.enabled ?? false});
           const release = await knowledgeLock(path.join(dataDir,"urovo-product-expert")).read();
           try { return json(res, 200, {...await previewPrompt(config,body.mode === "mcp",body.instructions), reasoning: isDeepSeekModel(settings) ? agentSettings.effort : "provider-default"}); }
           finally { release(); }
@@ -1174,7 +1179,7 @@ export async function createWebServer(options: WebOptions = {}) {
               }
               if (event.type === "tool_execution_end") {
                 recordSubAgentResult(metric, event.result);
-                const result = event.result as { details?: { metrics?: { vision?: { cached?: boolean; usage?: unknown }[] }; onesTask?: {status?: string}; memoryTask?: {status?: string} } };
+                const result = event.result as { details?: { metrics?: { vision?: { cached?: boolean; usage?: unknown }[] }; onesTask?: {status?: string}; memoryTask?: {status?: string}; windowsToolsTask?: {status?: string} } };
                 for (const vision of result?.details?.metrics?.vision ?? []) {
                   if (vision.cached) continue;
                   metric.usage!.requests++;
@@ -1191,7 +1196,7 @@ export async function createWebServer(options: WebOptions = {}) {
                 const start = toolStarts.get(event.toolCallId);
                 if (timing && start !== undefined) { timing.finishedAt = new Date().toISOString(); timing.elapsedMs = Math.round(performance.now() - start); }
                 saveRunMetric(session, metric);
-                const subTaskStatus = result?.details?.onesTask?.status ?? result?.details?.memoryTask?.status;
+                const subTaskStatus = result?.details?.onesTask?.status ?? result?.details?.memoryTask?.status ?? result?.details?.windowsToolsTask?.status;
                 const childFailed = machine && /^(failed|cancelled|interrupted)$/.test(subTaskStatus ?? "");
                 send("tool", { id: event.toolCallId, name: event.toolName, state: event.isError || childFailed ? "error" : "done", elapsedMs: timing?.elapsedMs });
               }

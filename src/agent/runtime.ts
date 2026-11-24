@@ -1,11 +1,13 @@
 import { MemoryRecallService, type RecallResult } from "../memory-recall/service.js";
 import { createRecallTool, recallQueryKey } from "../memory-recall/tool.js";
 import { memorySnapshot, type MemorySnapshot } from "../memory-recall/retrieve.js";
-import { MEMORY_RECEIPT } from "../sub-agents/metrics.js";
+import { MEMORY_RECEIPT, WINDOWS_TOOLS_RECEIPT } from "../sub-agents/metrics.js";
 import { ONES_RECEIPT } from "../ones-agent/store.js";
 import { historyRounds } from "./session-history.js";
 import { OnesAgentService, removeOnesParent } from "../ones-agent/service.js";
 import { createOnesTool } from "../ones-agent/tool.js";
+import { WindowsToolsService } from "../windows-tools/service.js";
+import { createWindowsToolsDelegationTool } from "../windows-tools/tool.js";
 import { meterSession } from "../usage/ledger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -47,6 +49,7 @@ export class AgentRuntime {
   private readonly retention: SessionRetention;
   readonly files?: FileTools;
   readonly ones?: OnesAgentService;
+  readonly windowsTools?: WindowsToolsService;
   readonly memoryRecall?: MemoryRecallService;
   private fileCleanupTimer?: NodeJS.Timeout;
   // The constructor is private so callers must finish async setup through create().
@@ -76,6 +79,7 @@ export class AgentRuntime {
     }
     if (config.memoryRecall.enabled) this.memoryRecall = new MemoryRecallService(config);
     if (config.ones.enabled) this.ones = new OnesAgentService(config.ones, config, modelRuntime);
+    if (config.windowsTools.enabled) this.windowsTools = new WindowsToolsService(config, modelRuntime);
     this.retention = new SessionRetention(config.sessionsDir, console.error, async id => { await this.removeSubAgentSessions(id); await new FileStore(config.fileTools).remove(id); });
     this.retention.start();
   }
@@ -233,7 +237,7 @@ export class AgentRuntime {
 
     let boundSession: AgentSession | undefined;
     let parentRun: {
-      question: string; onesCalls: number; recallCalls: number; memory?: MemorySnapshot; extraRevision?: string;
+      question: string; onesCalls: number; windowsToolsCalls: number; recallCalls: number; memory?: MemorySnapshot; extraRevision?: string;
       recalledExtra: Set<string>; recallResults: Map<string, Promise<RecallResult>>;
     } | undefined;
     const recallTool = this.memoryRecall ? createRecallTool(async (toolCallId, args, signal, notice) => {
@@ -271,6 +275,18 @@ export class AgentRuntime {
       sessionManager.appendCustomEntry(ONES_RECEIPT, {round: historyRounds(boundSession!), toolCallId, result});
       return result;
     }) : undefined;
+    const windowsToolsService = this.windowsTools;
+    const windowsToolsTool = windowsToolsService ? createWindowsToolsDelegationTool(async (input, toolCallId, signal) => {
+      const run = parentRun;
+      if (!run || !boundSession) throw new Error("Windows Tools delegation requires an active parent question.");
+      if (run.windowsToolsCalls >= this.config.windowsTools.maxDelegations) throw new Error("本轮 Windows Tools 委派次数已用尽。");
+      run.windowsToolsCalls++;
+      const binding = {round: historyRounds(boundSession), toolCallId};
+      const result = await windowsToolsService.run(sessionManager.getSessionId(), run.question, input, binding, signal, boundSession.thinkingLevel);
+      const {taskId, status, elapsedMs, toolCalls, usage} = result;
+      sessionManager.appendCustomEntry(WINDOWS_TOOLS_RECEIPT, {...binding, result: {taskId, status, elapsedMs, toolCalls, usage}});
+      return result;
+    }) : undefined;
     const preparedTools = promptTools(this.config, !!options.textOnly, files, sessionManager.getSessionId(), () => {
       const message = boundSession?.messages.findLast(message => message.role === "user");
       if (!message) return undefined;
@@ -279,7 +295,7 @@ export class AgentRuntime {
       hasEntry: id => parentRun?.recalledExtra.has(id) ?? false,
       revision: () => parentRun?.extraRevision,
       updateRevision: revision => { if (parentRun) parentRun.extraRevision = revision; },
-    } : undefined, () => parentRun?.memory);
+    } : undefined, () => parentRun?.memory, windowsToolsTool);
 
     // Gives the model, resources, and session manager to Agent Core to create the session.
     // Composition of the Prompts: System + User&Assistant... + Tools
@@ -336,16 +352,17 @@ export class AgentRuntime {
           controller.signal.throwIfAborted();
           const memory = this.memoryRecall ? await memorySnapshot(this.config.dataDir) : undefined;
           controller.signal.throwIfAborted();
-          parentRun = {question: text, onesCalls: 0, recallCalls: 0, memory, extraRevision: memory?.extra.revision, recalledExtra: new Set(), recallResults: new Map()};
+          parentRun = {question: text, onesCalls: 0, windowsToolsCalls: 0, recallCalls: 0, memory, extraRevision: memory?.extra.revision, recalledExtra: new Set(), recallResults: new Map()};
           return await prompt(text, options);
         } finally { parentRun = undefined; release?.(); waitingOrRunning = undefined; }
       };
-      if (!files && !options.textOnly) guardNativeReads(session, [], this.config.cwd, false);
+      const excludedReads = [this.config.windowsTools.workspace];
+      if (!files && !options.textOnly) guardNativeReads(session, [], this.config.cwd, false, excludedReads);
       installMessageAttachments(session, files?.store.directory(session.sessionId));
-      if (options.textOnly) guardNativeReads(session, [path.join(this.config.dataDir, "urovo-product-expert"), path.join(this.config.dataDir, "ums-expert"), path.join(this.config.resourcesDir, "skills")], this.config.cwd);
+      if (options.textOnly) guardNativeReads(session, [path.join(this.config.dataDir, "urovo-product-expert"), path.join(this.config.dataDir, "ums-expert"), path.join(this.config.resourcesDir, "skills")], this.config.cwd, true, excludedReads);
       if (files) {
         const sessionId = session.sessionId;
-        guardNativeReads(session, [...this.config.fileTools.readRoots, files.store.directory(sessionId), path.join(this.config.resourcesDir, "skills"), path.join(this.config.resourcesDir, "file-skills")], this.config.cwd);
+        guardNativeReads(session, [...this.config.fileTools.readRoots, files.store.directory(sessionId), path.join(this.config.resourcesDir, "skills"), path.join(this.config.resourcesDir, "file-skills")], this.config.cwd, true, excludedReads);
       }
     } catch (error) {
       session.dispose();
@@ -369,15 +386,17 @@ export class AgentRuntime {
 
   async removeSubAgentSessions(id: string) {
     await this.memoryRecall?.deleteParent(id);
+    await this.windowsTools?.deleteParent(id);
     if (this.ones) await this.ones.deleteParent(id);
     else await removeOnesParent(this.config.dataDir, id);
   }
-  async close() { await Promise.all([this.ones?.close(), this.memoryRecall?.close()]); this.dispose(); }
+  async close() { await Promise.all([this.ones?.close(), this.memoryRecall?.close(), this.windowsTools?.close()]); this.dispose(); }
 
   /** Stop the housekeeping timer after disposing all sessions. */
   dispose(): void {
     this.ones?.dispose();
     this.memoryRecall?.dispose();
+    this.windowsTools?.dispose();
     this.retention.dispose();
     if (this.fileCleanupTimer) clearInterval(this.fileCleanupTimer);
   }
