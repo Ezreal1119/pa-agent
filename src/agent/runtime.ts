@@ -30,6 +30,7 @@ import { capabilityGuidance, promptSkillPaths, promptTools, staticPromptSections
 import { loadRunKnowledge } from "./knowledge.js";
 import { SessionRetention } from "./retention.js";
 import { installSessionPolicy } from "./session-policy.js";
+import { installToolBudget } from "./tool-budget.js";
 import { isDeepSeekModel } from "./reasoning.js";
 import { registerGeneratedFile } from "../file-tools/outputs.js";
 import { FileTools } from "../file-tools/index.js";
@@ -328,6 +329,7 @@ export class AgentRuntime {
     meterSession(session, this.config.dataDir, "chat", this.config.model);
     boundSession = session;
     try {
+      const resetToolBudget = installToolBudget(session);
       await installSessionPolicy(session, this.config.dataDir, this.retention, {
         sections: await staticPromptSections(this.config, !!options.textOnly),
         userRoleStyle: options.textOnly ? undefined : options.userRoleStyle,
@@ -346,6 +348,7 @@ export class AgentRuntime {
       session.prompt = async (text, options) => {
         if (waitingOrRunning) throw new Error("A prompt is already running in this session.");
         const controller = new AbortController(); waitingOrRunning = controller;
+        resetToolBudget();
         let release: (() => void) | undefined;
         try {
           release = await knowledgeLock(path.join(this.config.dataDir, "urovo-product-expert")).read(controller.signal);

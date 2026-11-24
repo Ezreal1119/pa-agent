@@ -25,7 +25,7 @@ export function windowsToolsConfig(resourcesDir: string, dataDir: string, enable
   return {
     enabled, workspace: windowsWorkspace(dataDir),
     prompt: enabled ? windowsToolsPrompt(resourcesDir) : "",
-    timeoutMs: 120000, concurrency: 2, queueLimit: 8,
-    maxModelRequests: 15, maxToolCalls: 30, maxDelegations: 2, maxContextChars: 32000,
+    timeoutMs: 180000, concurrency: 2, queueLimit: 8,
+    maxModelRequests: 50, maxDelegations: 2, maxContextChars: 32000,
   };
 }

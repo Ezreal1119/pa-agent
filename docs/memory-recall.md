@@ -14,7 +14,7 @@ Supervisor 默认把同一道题里的型号、版本和疑点合在一次召回
 
 `memory` 也处理用户明确授权的额外记忆修改。编辑和删除前须在本轮召回准确的额外记忆条目，写入检查 Revision。MCP 只开放 `get`。管理员编辑和 Memory Injection 沿用现有入口。
 
-ONES 与 Memory 复用任务调度及用量账本。默认 Memory 并发 2，等待上限 8，每次调用总时间 30 秒，每个用户问题至多 3 次召回。程序化测试可通过 `memoryRecall` 覆盖队列设置和输入模式。普通问答用量包含 Memory，`memoryTasks` 和 `agentUsage.memory` 单独显示召回任务。HTTP API 和 MCP 对应字段为 `memory_tasks` 和 `agent_usage.memory`。账本来源为 `memory-recall`。
+ONES 与 Memory 复用任务调度及用量账本。默认 Memory 并发 2，等待上限 8，每次调用总时间 180 秒，每个用户问题至多 3 次召回。程序化测试可通过 `memoryRecall` 覆盖队列设置和输入模式。普通问答用量包含 Memory，`memoryTasks` 和 `agentUsage.memory` 单独显示召回任务。HTTP API 和 MCP 对应字段为 `memory_tasks` 和 `agent_usage.memory`。账本来源为 `memory-recall`。
 
 本地验证使用隔离的模拟模型和 MCP 服务。
 

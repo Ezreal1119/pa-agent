@@ -12,8 +12,8 @@
     "get_manhour_list_in_summary_mode", "read_attachment_content"
   ],
   "timeoutMs": 180000,
-  "maxModelRequests": 24,
-  "maxToolCalls": 48,
+  "maxModelRequests": 50,
+  "maxToolCalls": 49,
   "maxDelegations": 3,
   "maxContextChars": 32000,
   "maxResultBytes": 1048576,

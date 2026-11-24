@@ -30,7 +30,7 @@ export interface OnesSettings {
 export interface OnesOptions { enabled?: boolean; url?: string; token?: string; settings?: Partial<Omit<OnesSettings, "compaction">> & { compaction?: Partial<ChatCompactionConfig> }; }
 export interface OnesConfig extends OnesSettings { enabled: boolean; url: string; token: string; prompt: string; }
 const defaults: OnesSettings = {
-  tools: [...ONES_READ_TOOLS], timeoutMs: 180000, maxModelRequests: 24, maxToolCalls: 48,
+  tools: [...ONES_READ_TOOLS], timeoutMs: 180000, maxModelRequests: 50, maxToolCalls: 49,
   maxDelegations: 3, maxContextChars: 32000, maxResultBytes: 1024 * 1024, concurrency: 2, queueLimit: 8,
   compaction: { enabled: true, triggerTokens: 384000, keepRecentRounds: 5 },
 };

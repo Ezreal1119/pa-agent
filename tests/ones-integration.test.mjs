@@ -105,6 +105,56 @@ test('Windows Tools starts from the Sub-Agents switch and diagnoses from its own
  assert.doesNotMatch(await preview.text(), /ask_windows_tools_agent/);
 });
 
+test('Supervisor caps a batched call at 50 and Windows Tools reserves its 50th call to submit', async t => {
+ const f = await fixture(t);
+ const workspace = path.join(f.dataDir, 'windows-tools/workspace');
+ for (const name of ['PCTool', 'SNTool']) {
+  await fs.mkdir(path.join(workspace, name), {recursive:true});
+  await fs.writeFile(path.join(workspace, name, 'README.md'), 'Snapshot evidence\n');
+ }
+ await f.restart();
+ assert.equal((await f.admin('/api/sub-agents/windows-tools', 'PUT', {enabled:true})).status, 200);
+ const issue = 'Explain the PCTool fixture error';
+ const delegation = {task:issue, background:'', confirmedFacts:[], corrections:[], constraints:[], unresolvedQuestions:[]};
+ const read = {name:'read', args:{path:path.join(f.dataDir, 'urovo-product-expert/SKILL.md')}};
+ const childRead = {name:'read', args:{path:'PCTool/README.md'}};
+ const submission = {name:'finish_windows_tools_task', args:{status:'partial', answer:'The snapshot specifies the affected step.', sources:[{path:'PCTool/README.md', startLine:1, endLine:1}], unknowns:['Firmware revision'], questions:[]}};
+ let childFinal, mainFinal, followupFirst;
+ f.setModel((body, res) => {
+  const results = currentTools(body);
+  if (system(body).includes('你是 Windows Tools Agent')) {
+   if (results.length < 49) return streamReply(res, {tool:childRead});
+   childFinal = body;
+   return streamReply(res, {tool:submission});
+  }
+  if (lastUser(body).content.includes('Follow up')) {
+   if (!results.length) { followupFirst = body; return streamReply(res, {tool:read}); }
+   return streamReply(res, {text:'Follow-up answer'});
+  }
+  if (!results.length) return streamReply(res, {tool:{name:'ask_windows_tools_agent', args:delegation}});
+  if (results.length === 1) return streamReply(res, {tools:Array.from({length:51}, () => read)});
+  mainFinal = body;
+  return streamReply(res, {text:'Answer using available results'});
+ });
+ const api = f.api();
+ const {id} = await api.json('/sessions','POST',{});
+ const sender = {botId:'bot', userId:'customer', chatType:'single', at:Date.now()};
+ const result = await api.run(id, issue, [], () => {}, undefined, sender);
+ assert.equal(result.failed, false);
+ assert.equal(result.run.windowsToolsTasks[0].status, 'partial');
+ assert.equal(result.run.windowsToolsTasks[0].usage.requests, 50);
+ assert.equal(result.run.windowsToolsTasks[0].toolCalls, 49);
+ assert.deepEqual(childFinal.tools.map(tool => tool.function.name), [submission.name]);
+ assert.match(system(childFinal), /Submit a partial result/);
+ assert.equal(mainFinal.tools?.length ?? 0, 0);
+ assert.match(system(mainFinal), /Answer now using the available results/);
+ const reads = currentTools(mainFinal).slice(1);
+ assert.equal(reads.filter(result => result.content.includes('BUSINESS_PRIVATE_KNOWLEDGE')).length, 49);
+ assert.equal(reads.filter(result => result.content.includes('Tool call limit reached')).length, 2);
+ assert.equal((await api.run(id, 'Follow up', [], () => {}, undefined, sender)).failed, false);
+ assert.ok(followupFirst.tools.some(tool => tool.function.name === 'read'));
+});
+
 test('Sub-Agents lists the read-only ONES profile and persists its switch across requests and restarts', async t => {
  const f = await fixture(t);
  const onRoute = '/api/sub-agents/ones';

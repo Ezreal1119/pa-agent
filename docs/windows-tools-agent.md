@@ -2,6 +2,8 @@
 
 Supervisor 通过 `ask_windows_tools_agent` 委派 PCTool 和 SNTool 的静态排障。子 Agent 使用独立的只读工具 `read`、`grep`、`find` 和 `ls`。每次委派从独立会话开始，接收当前问题和 Supervisor 提取的相关背景。它可以引用本轮读到的 workspace 相对路径和行号。
 
+Supervisor 每轮最多调用 50 次工具，达到上限后根据已有结果回答。Windows Tools 每次委派的总时间上限为 180 秒，最多 50 次模型请求和 50 次工具调用，其中预留一次调用提交结论。
+
 ## 上传 workspace
 
 在 Mac 执行下面的命令。源码通过 Git 部署，完整快照存放在 VPS 的应用数据目录。

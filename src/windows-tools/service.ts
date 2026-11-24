@@ -6,6 +6,7 @@ import type { AgentConfig } from "../config.js";
 import type { Delegation } from "../sub-agents/delegation.js";
 import { SubAgentTasks, type ParentBinding } from "../sub-agents/tasks.js";
 import { runChildModel } from "../sub-agents/model.js";
+import { installToolBudget } from "../agent/tool-budget.js";
 import { readyWindowsWorkspace } from "./config.js";
 import { WINDOWS_FINISH_TOOL, windowsAnswerSchema, type WindowsAnswer, type WindowsToolsResult } from "./tool.js";
 import { windowsReadTools } from "./read-tools.js";
@@ -36,7 +37,6 @@ export class WindowsToolsService {
         const evidence: WindowsAnswer["sources"] = [];
         const tools = windowsReadTools(root, task.signal, source => evidence.push(source), () => {
           task.signal.throwIfAborted();
-          if (result.toolCalls >= settings.maxToolCalls) throw new Error("Windows Tools read budget reached. Submit the evidence collected so far.");
           result.toolCalls++;
         });
         let answer: WindowsAnswer | undefined;
@@ -61,6 +61,9 @@ export class WindowsToolsService {
         }));
         session.agent.toolExecution = "sequential";
         session.agent.shouldStopAfterTurn = () => Boolean(answer) || task.signal.aborted;
+        installToolBudget(session, {
+          finish: { tool: WINDOWS_FINISH_TOOL.name, lastRequest: () => result.usage.requests >= settings.maxModelRequests - 1 },
+        });
         await runChildModel({
           session, task, source: "windows-tools", dataDir: this.config.dataDir, model: this.config.model,
           effort, maxRequests: settings.maxModelRequests, prompt: JSON.stringify({ question, delegation: input }),

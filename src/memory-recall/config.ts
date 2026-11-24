@@ -23,7 +23,7 @@ export function memoryRecallConfig(options: MemoryRecallOptions = {}, env: NodeJ
     inputMode,
     concurrency: limit("concurrency", 2, 1, 8),
     queueLimit: limit("queueLimit", 8, 0, 100),
-    timeoutMs: limit("timeoutMs", 30000, 100, 180000),
+    timeoutMs: limit("timeoutMs", 180000, 100, 180000),
     maxDelegations: limit("maxDelegations", 3, 1, 10),
   };
 }
